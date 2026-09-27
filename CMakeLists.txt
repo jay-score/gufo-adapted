@@ -340,6 +340,9 @@ include(CTest)
 if (BUILD_TESTING)
   add_compile_options(-UNDEBUG)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME logit_eval_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/logit_eval_test.py)
+  set_tests_properties(logit_eval_test PROPERTIES LABELS "cpu;quality;tools")
 
   add_subdirectory(tests/models/qwen)
   add_subdirectory(tests/models/qwen27b)

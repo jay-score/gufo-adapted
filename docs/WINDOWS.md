@@ -1,9 +1,9 @@
 # Windows (native, gfx1151)
 
 Gufo builds and runs natively on Windows 11 x64 against AMD's TheRock ROCm
-distribution for gfx1151 (Ryzen AI Max+ 395 / Radeon 8060S). No WSL. Linux
-builds are unaffected: the port lives in `compat/win32`, Windows-only files and
-`_WIN32` branches.
+distribution for gfx1151 (Ryzen AI Max+ 395 / Radeon 8060S). No WSL. Platform
+adaptations live in `compat/win32`, Windows-only files and `_WIN32` branches.
+The fork also changes shared engine code; Linux CI remains necessary.
 
 ## Prerequisites
 
@@ -98,7 +98,7 @@ lists any set in the calling shell.
 
 Some behaviour changes were developed and measured on Windows only. They live
 in `src/core/platform/tuning.hpp`: each is on by default on Windows and off
-elsewhere, so Linux runs exactly the code it ran before. The decode switches
+elsewhere; these defaults do not qualify every shared change on Linux. The decode switches
 change timing and memory placement only. `GUFO_PLATFORM_TUNING` overrides the
 defaults on any platform, for
 example `GUFO_PLATFORM_TUNING=+prompt_checkpoint` to try one on Linux, or
@@ -117,14 +117,33 @@ example `GUFO_PLATFORM_TUNING=+prompt_checkpoint` to try one on Linux, or
 | `fused_hc_down` | The HC mixer down projection fuses its SiLU scale into the GEMV write and prefetches deeper for 2-8 tokens | One launch fewer per mixer; part of the 3-6% above |
 | `hot_first_upload` | Weights read on every token are uploaded before the routed experts | GEMVs on memory allocated late run 6-22% slower on Windows; placement only |
 
-Checked on Windows, all decode switches on against all off (the Linux path):
-`gufo bench --logit-eval` dumps are bit-identical at all 4418 positions, and a
-fixed-seed sampled decode produces byte-identical text. All off decodes
+The port author's Windows checks compared all decode switches on against all
+off: the original `gufo bench --logit-eval` dumps matched at 4418 positions,
+and one fixed-seed sampled decode produced byte-identical text. Those dumps
+contain target/top-64 log probabilities and a normalization value, not every
+raw logit. This does not establish full-row equality or rejection/rollback
+correctness. In those measurements, all off decodes
 7.6-9.5% slower on Windows (sampled probe, prose / code / reasoning 32.0 /
 34.3 / 44.1 against 34.5 / 37.2 / 48.3 tok/s). `prompt_checkpoint` is the
 exception to identical text: splitting prefill at the generation suffix
 changes rounding the way a different prefill chunk size does, so sampled texts
 differ from an unsplit prefill, as equally valid samples.
+
+`--logit-eval` now also writes `PREFIX-sN.bin.sha256`, hashing every raw float
+in each recorded vocabulary row. Compare two runs or schedules with:
+
+```powershell
+python tools/bench/logit-eval.py left-s0.bin.sha256 right-s0.bin.sha256
+```
+
+The comparison rejects incomplete files and mismatched targets; exit 0 means
+all recorded rows match, 1 means differing rows, and 2 means invalid inputs.
+These teacher-forced schedules fully accept each batch. They do not cover
+rejection prefixes, snapshot interleaving, or output quality. Keep those checks
+separate. Changing speculative policies can also consume random draws
+differently, so distribution preservation does not promise identical text for
+the same seed. IQ4 targets that re-quantize Q6_K tensors at load remain
+unqualified and are not covered by lossless quantization claims.
 
 ## Memory
 
@@ -151,7 +170,11 @@ carve-out works, but the load takes ~2 minutes and decode is slower.
 
 ## Test status
 
-- All Flash-Next operator tests pass, plus 86/92 CPU-labelled tests.
+- The original port author reported all Flash-Next operator tests passing,
+  plus 86/92 CPU-labelled tests. These are not results for every later commit.
+- CI on `main` and `windows-port` includes a bounded Windows CPU suite and
+  launcher checks, alongside the Linux checks. Hosted Windows CI does not
+  validate GPU kernels or real-model quality.
 - Not ported: Linux-only Python dev tools (`h3_profile*`, `qwen27b.tools`,
   TTS reference verification needs numpy), and `video_jobs_test` needs
   symlink privileges (Developer Mode).

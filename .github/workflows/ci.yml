@@ -42,7 +42,7 @@ jobs:
           cmake --build --preset cpu-test --parallel 2 --target logit_sampler_test platform_tuning_test openai_chat_test http_server_test continuation_disk_store_test qwen38_flash_next_mtp_sampling_test qwen38_flash_next_prompt_lookup_test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item build/cpu-test/vcpkg_installed/x64-windows/bin/*.dll build/cpu-test -Force
-          ctest --test-dir build/cpu-test --output-on-failure --no-tests=error --timeout 120 -R '^(logit_sampler_test|platform_tuning_test|openai_chat_test|http_server_test|continuation_disk_store_test|qwen38_flash_next\.(mtp_sampling|prompt_lookup))$'
+          ctest --test-dir build/cpu-test --output-on-failure --no-tests=error --timeout 120 -R '^(logit_eval_test|logit_sampler_test|platform_tuning_test|openai_chat_test|http_server_test|continuation_disk_store_test|qwen38_flash_next\.(mtp_sampling|prompt_lookup))$'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/tools/windows_launcher_test.py
 

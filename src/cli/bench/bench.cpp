@@ -890,8 +890,9 @@ bool IsQwen38FlashNext(const core::GgufReader& reader) {
 // Teacher-forced logit dump through the decode arithmetic: every schedule
 // feeds the same tokens in chunks of its cycling widths (1 = decode step,
 // 2+ = fully accepted verify pass) and records, per position, the target
-// token's log-probability and the top-64 log-probabilities. Two dumps are
-// compared by logit-eval.py (perplexity, KL, top-1 agreement).
+// token's log-probability and the top-64 log-probabilities. A companion
+// .sha256 file hashes each complete raw float row; tools/bench/logit-eval.py
+// compares those hashes. Fully accepted passes do not test rejection rollback.
 int RunFlashNextLogitEval(models::qwen38_flash_next::Model& model,
                           const BenchOptions& options, std::uint32_t context) {
   constexpr std::uint32_t kTop = 64;
@@ -903,9 +904,9 @@ int RunFlashNextLogitEval(models::qwen38_flash_next::Model& model,
   const std::string text((std::istreambuf_iterator<char>(in)),
                          std::istreambuf_iterator<char>());
   const auto tokens = model.Tokenize(text);
-  if (tokens.size() < 2 || tokens.size() >= context) {
+  if (tokens.size() < 3 || tokens.size() >= context) {
     std::cerr << "Error: logit-eval text is " << tokens.size()
-              << " tokens; it needs 2.." << context - 1 << '\n';
+              << " tokens; it needs 3.." << context - 1 << '\n';
     return 1;
   }
   // A schedule prefixed with 'p' uses the prompt (prefill) arithmetic.
@@ -956,6 +957,13 @@ int RunFlashNextLogitEval(models::qwen38_flash_next::Model& model,
     }
     const std::string path = prefix + "-s" + std::to_string(s) + ".bin";
     std::ofstream out(path, std::ios::binary);
+    std::ofstream hashes(path + ".sha256");
+    if (!out || !hashes) {
+      std::cerr << "Error: cannot create logit-eval outputs for " << path
+                << '\n';
+      return 1;
+    }
+    hashes << "GFLE-SHA256 1 " << vocab << ' ' << tokens.size() - 2 << '\n';
     const auto put = [&out](const auto& value) {
       out.write(reinterpret_cast<const char*>(&value), sizeof(value));
     };
@@ -989,6 +997,11 @@ int RunFlashNextLogitEval(models::qwen38_flash_next::Model& model,
                                    (row[a] == row[b] && a < b);
                           });
         const std::int32_t target = tokens[p + j + 1];
+        hashes << p + j << ' ' << target << ' '
+               << crypto::Sha256Hex(
+                      std::span(reinterpret_cast<const std::uint8_t*>(row),
+                                vocab * sizeof(float)))
+               << '\n';
         const float target_lp = static_cast<float>(row[target] - lse);
         put(static_cast<std::int32_t>(p + j));
         put(static_cast<std::int32_t>(width));
@@ -1004,6 +1017,13 @@ int RunFlashNextLogitEval(models::qwen38_flash_next::Model& model,
         ++count;
       }
       p += width;
+    }
+    out.flush();
+    hashes.flush();
+    if (!out || !hashes) {
+      std::cerr << "Error: cannot write logit-eval outputs for " << path
+                << '\n';
+      return 1;
     }
     const double seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
