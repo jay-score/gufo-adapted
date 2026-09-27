@@ -5,7 +5,7 @@
 #   powershell -ExecutionPolicy Bypass -File tools\windows\run-flash-next.ps1 -Draft mtp3    # MTP capped at 3 drafts
 #   powershell -ExecutionPolicy Bypass -File tools\windows\run-flash-next.ps1 -Draft off     # autoregressive baseline
 #   powershell -ExecutionPolicy Bypass -File tools\windows\run-flash-next.ps1 -Mode bench    # pp/tg at depths 0..128K
-#   ... -DraftVocab -Survival -Lookup   the opt-in MTP options (docs\models\qwen3.8-flash-next)
+#   ... -DraftVocab -Survival -Lookup   serve-only MTP options; require -Draft mtp or mtp3
 #
 # Files come from the Hugging Face cache (see docs\WINDOWS.md for the
 # download); -Snapshot points at another copy of unsloth/Qwen3.8-Flash-Next-GGUF.
@@ -24,6 +24,9 @@ param(
   [string]$MtpModel = ""
 )
 $ErrorActionPreference = "Stop"
+if (($DraftVocab -or $Survival -or $Lookup) -and ($Mode -ne "serve" -or $Draft -eq "off")) {
+  throw "-DraftVocab, -Survival and -Lookup require -Mode serve and -Draft mtp or mtp3."
+}
 $bin = Join-Path $PSScriptRoot "..\..\build\release"
 if (-not (Test-Path "$bin\gufo.exe")) {
   throw "gufo.exe not found in $bin; build first: powershell -ExecutionPolicy Bypass -File tools\windows\build.ps1"
