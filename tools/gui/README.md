@@ -48,6 +48,13 @@ does not overwrite the saved configuration. Reopening the launcher restores
 the form without automatically loading a model. Choosing or entering a different
 model clears the previous sidecar selections.
 
+The button at the top right of the bar switches between the light paper palette
+and a dark navy one; cards, fields, the status pill, metrics and the file picker
+all follow it. Until you press it, the launcher follows your operating-system
+theme. The choice is remembered in that browser's local storage, not in
+`launcher.json`, so it is not part of **Save settings** and never reaches the
+engine.
+
 **Stop** releases the launched Gufo process. Closing a browser tab keeps it
 running; **Exit launcher** or Ctrl+C in the launcher terminal stops both. On
 Windows, Stop terminates the owned child process; it does not flush Gufo's

@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="/static/theme.js"></script>
   <meta name="gufo-token" content="{{ token }}">
   <title>Gufo · Local launcher</title>
   <link rel="icon" href="/logo.jpg">
@@ -12,7 +13,13 @@
 <body>
   <header class="topbar">
     <a class="brand" href="/"><img src="/logo.jpg" alt="Gufo owl"><span>gufo <small>LOCAL LAUNCHER</small></span></a>
-    <button type="button" id="exit-button" class="quiet">Exit launcher</button>
+    <div class="topbar-actions">
+      <button type="button" id="theme-toggle" class="quiet theme-toggle" aria-pressed="false" aria-label="Switch to the dark theme">
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20.3 15.6A8.9 8.9 0 0 1 8.4 3.7a8.9 8.9 0 1 0 11.9 11.9Z"/></svg>
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4.4"/><path d="M11 1.3a1 1 0 0 1 2 0v2.2a1 1 0 0 1-2 0Zm0 17a1 1 0 0 1 2 0v2.2a1 1 0 0 1-2 0ZM2.3 11a1 1 0 0 1 2.2 0v.1a1 1 0 0 1-2.2 0Zm17.2 0a1 1 0 0 1 2.2 0v.1a1 1 0 0 1-2.2 0ZM4.9 3.5a1 1 0 0 1 1.4 1.4l-1.5 1.5a1 1 0 0 1-1.4-1.4Zm13.3 13.3a1 1 0 0 1 1.4 1.4l-1.5 1.5a1 1 0 0 1-1.4-1.4ZM20.5 3.5a1 1 0 0 1 0 1.4l-1.5 1.5a1 1 0 1 1-1.4-1.4l1.5-1.5a1 1 0 0 1 1.4 0ZM7.2 16.8a1 1 0 0 1 0 1.4l-1.5 1.5a1 1 0 0 1-1.4-1.4l1.5-1.5a1 1 0 0 1 1.4 0Z"/></svg>
+      </button>
+      <button type="button" id="exit-button" class="quiet">Exit launcher</button>
+    </div>
   </header>
   <main>
     <div class="intro"><div><p class="eyebrow">YOUR STRIX HALO, READY TO SERVE</p><h1>Launch your model.</h1>
