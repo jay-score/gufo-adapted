@@ -85,7 +85,7 @@ if ($KeepGoing) { $buildArgs += @("--", "-k", "0") }
 cmake @buildArgs
 if ($LASTEXITCODE -ne 0) { throw "build failed" }
 
-# Runtime DLLs next to gufo.exe: ROCm (amdhip64, hipblas, hipblaslt, rocblas
+# Runtime DLLs next to all executables: ROCm (amdhip64, hipblas, hipblaslt, rocblas
 # and their kernel libraries) and vcpkg's (icu, curl, ssl, png, jpeg, zlib).
 $bin = $build
 $rocmDlls = @("amdhip64_7.dll", "amd_comgr*.dll", "hipblas.dll", "libhipblaslt.dll", "origami.dll", "rocblas.dll", "rocsolver.dll", "rocsparse.dll", "rocm_kpack.dll", "rocm-openblas*.dll", "hiprtc*.dll")

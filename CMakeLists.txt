@@ -18,6 +18,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(GUFO_VERSION "development" CACHE STRING "Gufo build revision")
 include_directories(${CMAKE_SOURCE_DIR})
 if (WIN32)
+  # Keep every executable beside the runtime DLLs staged by build.ps1.
+  # PATH alone can select an incompatible HIP runtime from System32.
+  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
   # Windows: POSIX shadow headers (compat/win32/include) plus their Win32
   # implementation, linked into every target. The UCRT's own deprecated POSIX
   # aliases are disabled so they cannot collide with the shim.
