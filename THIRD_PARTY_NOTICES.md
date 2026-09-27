@@ -59,6 +59,17 @@ The official 0731 DeepSeek continuations in
 `6289c516273979173abbc062209a81dd3706b804`; the fixture retains source hashes and
 its upstream MIT notice. External model files are never part of the binary package.
 
+## Optional local GUI
+
+These Python packages are installed separately by the optional
+[web launcher](tools/gui/README.md); they are not linked into Gufo.
+Their dependencies and license notices remain in the Python environment.
+
+| Component Name | Relationship | License (SPDX) | Pinned Revision / Version | Upstream Source / Location |
+| --- | --- | --- | --- | --- |
+| Flask | Optional GUI HTTP routing and templates | `BSD-3-Clause` | 3.1.3; tools/gui/requirements.txt | [pallets/flask](https://github.com/pallets/flask) |
+| Waitress | Optional GUI HTTP server | `ZPL-2.1` | 3.0.2; tools/gui/requirements.txt | [Pylons/waitress](https://github.com/Pylons/waitress) |
+
 ## Optimization inspiration
 
 The following projects informed Gufo's Strix Halo optimization work:
