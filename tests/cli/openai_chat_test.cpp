@@ -1564,6 +1564,223 @@ void TestResponsesOutput() {
   }
 }
 
+gufo::server::ChatRequest ResponseChat(const gufo::json::Value& body) {
+  gufo::server::ChatRequest chat;
+  std::string error;
+  Expect(gufo::server::ParseOpenAiResponseChat(body, &chat, &error), error);
+  return chat;
+}
+
+std::vector<gufo::json::Value> ResponseEvents(
+    const gufo::server::HttpResponse& response) {
+  std::vector<gufo::json::Value> events;
+  response.streaming_body([&](std::string_view chunk) {
+    const auto begin = chunk.find("\ndata: ");
+    Expect(begin != std::string::npos, "Responses events contain data");
+    auto event = gufo::json::parse(chunk.substr(begin + 7));
+    Expect(event.member_size("sequence_number") == events.size(),
+           "Consecutive tool event sequence numbers");
+    events.push_back(std::move(event));
+    return true;
+  });
+  return events;
+}
+
+void TestResponsesFunctionTools() {
+  using gufo::json::parse;
+  auto body = parse(R"({"input":"Check Rome and Paris","tools":[
+    {"type":"function","name":"get_weather","strict":false,
+     "parameters":{"type":"object","properties":{"city":{"type":"string"}}}}],
+    "tool_choice":"required"})");
+  auto chat = ResponseChat(body);
+  chat.reasoning.enabled = true;
+  for (const bool stream : {false, true}) {
+    FakeBackend backend;
+    backend.pieces = {"Checking.</think>\nI'll check.", "<tool_",
+                      "call><function=get_weather>",
+                      "<parameter=city>Rome</parameter></function></tool_call>",
+                      "<tool_call><function=get_weather><parameter=city>Paris</"
+                      "parameter></function></tool_call>"};
+    const auto response = gufo::server::CreateOpenAiResponse(
+        Request("{}"), backend, chat, 96, {}, stream);
+    const auto events =
+        stream ? ResponseEvents(response) : std::vector<gufo::json::Value>{};
+    const auto result =
+        stream ? *events.back().find("response") : parse(response.body);
+    Expect(result.member_str("status") == "completed" &&
+               result.member_str("tool_choice") == "required" &&
+               result.find("parallel_tool_calls")->as_bool(),
+           "Responses exposes its tool policy");
+    Expect(
+        result.find("tools")->items()[0].member_str("name") == "get_weather" &&
+            result.find("tools")->items()[0].find("strict") != nullptr,
+        "Responses echoes flat function definitions");
+    const auto& output = result.find("output")->items();
+    Expect(output.size() == 4 && output[0].member_str("type") == "reasoning" &&
+               output[1].member_str("type") == "message",
+           "Reasoning, text and calls retain their order");
+    for (std::size_t index = 2; index < 4; ++index) {
+      const auto& call = output[index];
+      Expect(call.member_str("type") == "function_call" &&
+                 call.member_str("status") == "completed" &&
+                 call.member_str("id").starts_with("fc_") &&
+                 call.member_str("call_id").starts_with("call_"),
+             "Function items have distinct item and call identities");
+      Expect(parse(call.member_str("arguments")).member_str("city") ==
+                 (index == 2 ? "Rome" : "Paris"),
+             "Function arguments are JSON");
+      if (stream) {
+        std::vector<std::string> types;
+        for (const auto& event : events) {
+          if (!event.contains("output_index") ||
+              event.member_size("output_index") != index)
+            continue;
+          types.push_back(event.member_str("type"));
+          Expect(event.member_str("response_id") == result.member_str("id"),
+                 "Tool events identify the response");
+          if (const auto* item = event.find("item")) {
+            Expect(
+                item->member_str("id") == call.member_str("id") &&
+                    item->member_str("call_id") == call.member_str("call_id"),
+                "Tool item identity is stable");
+            Expect(item->member_str("arguments") ==
+                       (types.size() == 1 ? "" : call.member_str("arguments")),
+                   "Added items start empty and done items contain complete "
+                   "arguments");
+          } else {
+            Expect(event.member_str("item_id") == call.member_str("id"),
+                   "Argument events identify their item");
+            Expect(event.member_str(event.member_str("type").ends_with("delta")
+                                        ? "delta"
+                                        : "arguments") ==
+                       call.member_str("arguments"),
+                   "Argument events reconstruct the completed call");
+          }
+        }
+        Expect(types ==
+                   std::vector<std::string>{
+                       "response.output_item.added",
+                       "response.function_call_arguments.delta",
+                       "response.function_call_arguments.done",
+                       "response.output_item.done"},
+               "Tool stream event ordering");
+      }
+    }
+    Expect(output[2].member_str("call_id") != output[3].member_str("call_id"),
+           "Multiple calls have unique identities");
+    Expect(output[1].find("content")->items()[0].member_str("text") ==
+               "I'll check.",
+           "Tool markup is not ordinary text");
+
+    // Replay the actual output, with results, as an agent would on its next
+    // turn.
+    auto followup = body;
+    followup["tool_choice"] = "auto";
+    followup["input"] =
+        parse(R"([{"role":"user","content":"Check Rome and Paris"}])");
+    for (const auto& item : output)
+      followup["input"].push_back(item);
+    for (std::size_t index = 2; index < 4; ++index) {
+      auto item = parse(
+          R"({"type":"function_call_output","output":[{"type":"input_text","text":"Sunny"}]})");
+      item["call_id"] = output[index].member_str("call_id");
+      followup["input"].push_back(std::move(item));
+    }
+    auto continued = ResponseChat(followup);
+    Expect(
+        continued.messages.size() == 4 &&
+            continued.messages[1].thought == "Checking." &&
+            continued.messages[1].content == "I'll check." &&
+            continued.messages[1].tool_calls.size() == 2,
+        "Assistant reasoning, text and calls share a single template message");
+    Expect(continued.messages[2].role == gufo::tokenization::ChatRole::kTool &&
+               continued.messages[2].content == "Sunny" &&
+               continued.messages[2].name == "get_weather" &&
+               continued.messages[2].tool_call_id ==
+                   output[2].member_str("call_id"),
+           "Tool results preserve identity and text");
+    backend.pieces = {"Both cities are sunny."};
+    const auto answer = gufo::server::CreateOpenAiResponse(
+        Request("{}"), backend, continued, 96, {}, false);
+    Expect(parse(answer.body)
+                   .find("output")
+                   ->items()[0]
+                   .find("content")
+                   ->items()[0]
+                   .member_str("text") == "Both cities are sunny.",
+           "Tool results can be followed by a normal answer");
+  }
+}
+
+void TestResponsesToolValidationAndFailure() {
+  for (
+      const auto* invalid :
+      {R"({"input":"x","tools":true})",
+       R"({"input":"x","tools":[{"type":"web_search"}]})",
+       R"({"input":"x","tools":[{"type":"function","name":"f","parameters":[]}]})",
+       R"({"input":"x","tool_choice":"required"})",
+       R"({"input":"x","tool_choice":{"type":"function","name":"f"}})",
+       R"({"input":"x","parallel_tool_calls":"true"})",
+       R"({"input":[{"type":"function_call","call_id":"c","name":"f","arguments":"[]"}]})",
+       R"({"input":[{"type":"function_call","name":"f","arguments":"{}"}]})",
+       R"({"input":[{"type":"function_call_output","call_id":"missing","output":"ok"}]})",
+       R"({"input":[{"type":"function_call","call_id":"c","name":"f","arguments":"{}"},
+         {"type":"function_call_output","call_id":"c","output":{"value":1}}]})",
+       R"({"input":[{"role":"user","content":[{"type":"input_image","image_url":"x"}]}]})",
+       R"({"input":[{"type":"reasoning","summary":[],"encrypted_content":"opaque"}]})"}) {
+    gufo::server::ChatRequest chat;
+    std::string error;
+    Expect(!gufo::server::ParseOpenAiResponseChat(gufo::json::parse(invalid),
+                                                  &chat, &error) &&
+               !error.empty(),
+           "Unsupported or malformed Responses tools and history are rejected");
+  }
+  auto chat = ResponseChat(gufo::json::parse(
+      R"({"input":"call f","tools":[{"type":"function","name":"f"}],"tool_choice":"required"})"));
+  for (const bool stream : {false, true}) {
+    for (const bool multiple : {false, true}) {
+      FakeBackend backend;
+      backend.pieces = multiple ? std::vector<std::string>{"<tool_call><function=f></function></tool_call>",
+          "<tool_call><function=f></function></tool_call>"} : std::vector<std::string>{"No call."};
+      bool failed = false;
+      try {
+        const auto response = gufo::server::CreateOpenAiResponse(
+            Request("{}"), backend, chat, 96, {}, stream, false);
+        if (stream) {
+          const auto events = ResponseEvents(response);
+          failed = events.back().member_str("type") == "response.failed" &&
+                   response.stream_log->error_code == "tool_choice_unsatisfied";
+        }
+      } catch (const gufo::server::TextGenerationError& error) {
+        failed = error.http_status() == 502;
+      }
+      Expect(failed,
+             "Required choice and single-call policy are enforced for both "
+             "transports");
+    }
+  }
+  chat.tool_choice = gufo::server::ChatRequest::ToolChoice::kNone;
+  FakeBackend backend;
+  backend.pieces = {"<tool_call><function=f></function></tool_call>"};
+  const auto suppressed = gufo::server::CreateOpenAiResponse(
+      Request("{}"), backend, chat, 96, {}, false);
+  Expect(gufo::json::parse(suppressed.body)
+                 .find("output")
+                 ->items()[0]
+                 .member_str("type") == "message",
+         "tool_choice none never emits a function call");
+  chat.tool_choice = gufo::server::ChatRequest::ToolChoice::kAuto;
+  const auto cancelled = gufo::server::CreateOpenAiResponse(
+      Request("{}"), backend, chat, 96, {}, true);
+  bool terminal = false;
+  cancelled.streaming_body([&](std::string_view chunk) {
+    terminal |= chunk.find("response.completed") != std::string::npos;
+    return chunk.find("response.function_call_arguments.delta") ==
+           std::string::npos;
+  });
+  Expect(!terminal, "Disconnect during tool events stops the stream");
+}
+
 void TestResponsesLiveAndCancellation() {
   FakeBackend backend;
   backend.pieces = {"first", "second"};
@@ -1603,6 +1820,8 @@ int main() {
   TestExplicitStopOutputFraming();
   TestStopInsideToolArguments();
   TestResponsesOutput();
+  TestResponsesFunctionTools();
+  TestResponsesToolValidationAndFailure();
   TestResponsesLiveAndCancellation();
   TestCachePromptOption();
   TestToolChoiceEnforcement();

@@ -502,6 +502,47 @@ void TestCompatibilityRequests() {
          replay_messages[1].thought == "Thoughts" &&
          replay_messages[1].content == "Answer");
 
+  const auto tools =
+      parse(R"([{"type":"function","name":"status","parameters":{}}])");
+  auto tool_request = parse(
+      R"({"input":"Check status","tool_choice":"required","parallel_tool_calls":false})");
+  tool_request["tools"] = tools;
+  server.backend->SetOutput(
+      "<tool_call><function=status></function></tool_call>");
+  const auto tool_response =
+      response_body(server.Post("/v1/responses", tool_request.dump()));
+  const auto& call = tool_response.find("output")->items()[0];
+  assert(call.member_str("type") == "function_call" &&
+         call.member_str("name") == "status");
+  assert(server.backend->LastCall().chat.tools[0].name == "status");
+  tool_request["stream"] = true;
+  const auto tool_stream = server.Post("/v1/responses", tool_request.dump());
+  ExpectStatus(tool_stream, 200);
+  assert(tool_stream.find("response.function_call_arguments.delta") !=
+         std::string::npos);
+  tool_request["stream"] = false;
+  tool_request["tool_choice"] = "auto";
+  tool_request["input"] =
+      parse(R"([{"role":"user","content":"Check status"}])");
+  tool_request["input"].push_back(call);
+  auto result = parse(R"({"type":"function_call_output","output":"ready"})");
+  result["call_id"] = call.member_str("call_id");
+  tool_request["input"].push_back(result);
+  server.backend->SetOutput("Ready.");
+  ExpectStatus(server.Post("/v1/responses", tool_request.dump()), 200);
+  const auto tool_messages = server.backend->LastCall().chat.messages;
+  assert(tool_messages.size() == 3 &&
+         tool_messages[2].tool_call_id == call.member_str("call_id") &&
+         tool_messages[2].content == "ready");
+  tool_request["tool_choice"] = "required";
+  ExpectStatus(server.Post("/v1/responses", tool_request.dump()), 502);
+  const int tool_calls = server.backend->calls;
+  result["call_id"] = "unknown";
+  tool_request["input"].push_back(result);
+  ExpectStatus(server.Post("/v1/responses", tool_request.dump()), 400);
+  assert(server.backend->calls == tool_calls);
+  server.backend->SetOutput("ok");
+
   const auto anthropic = response_body(
       server.Post("/v1/messages",
                   R"({"system":[{"type":"text","text":"Be concise."}],

@@ -260,7 +260,7 @@ cache snapshots. HTTP handlers do not implement model kernels.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/v1/models` | List loaded model aliases and capabilities |
-| `POST` | `/v1/responses` | Text, optional SSE streaming |
+| `POST` | `/v1/responses` | Text and function tools, optional SSE streaming |
 | `POST` | `/v1/chat/completions` | Main chat, streaming, image and tool API |
 | `POST` | `/v1/completions` | Optional legacy text completion adapter |
 | `GET` | `/health` | Process liveness (aliases: `/v1/health`, `/healthz`) |
@@ -433,13 +433,39 @@ request limits, cancellation, cache accounting and completion state.
 
 ## Responses API Subset
 
-`POST /v1/responses` accepts `model`, `input` as text or text-message arrays,
-`instructions`, `max_output_tokens`, `stream`, and the shared sampling controls.
+`POST /v1/responses` accepts `model`, `input` as text or conversation-item arrays,
+`instructions`, `max_output_tokens`, `stream`, `tools`, `tool_choice`,
+`parallel_tool_calls`, and the shared sampling controls.
 Clients supply the complete conversation, including prior Gufo `output` items
 when retaining reasoning. `store` and `background` must be false
-when present. Images, tools, structured output, server-side conversations and
-`previous_response_id` are rejected on this route. Use Chat Completions for images
-and tools.
+when present. Images, built-in tools, structured output, server-side conversations
+and `previous_response_id` are rejected on this route. Use Chat Completions for
+image input.
+
+Function tools accept the flat Responses definition (`type`, `name`,
+`description`, `parameters`) or the nested Chat Completions definition.
+`tool_choice` supports `auto` (default), `none`, and `required`; named-function
+and allowed-tools choices are not supported. `parallel_tool_calls` defaults to
+true when tools are present. Setting it to false requires at most one call;
+multiple generated calls fail instead of silently discarding calls.
+
+Calls are returned as `function_call` output items with a JSON `arguments`
+string, a unique item `id`, and a `call_id`. On the next request, append the
+response's output items to the conversation and then append one
+`function_call_output` item per result, using the corresponding `call_id`.
+Its `output` accepts a string or text content parts. Each result must match an
+earlier call in the supplied `input`; no server-side response history is stored.
+For example, a result item is
+`{"type":"function_call_output","call_id":"call_...","output":"Sunny"}`.
+
+Streams emit `response.output_item.added`,
+`response.function_call_arguments.delta`,
+`response.function_call_arguments.done`, and `response.output_item.done` for
+each call. Arguments are sent together after the complete call is parsed, as
+with Chat Completions. Reasoning and ordinary text continue to stream live.
+Tool-choice failures return HTTP 502, or `response.failed` after streaming
+headers have been sent. Function tools use the same parser and inference path
+as Chat Completions; clients execute the tools.
 
 Responses report `incomplete` with reason `max_output_tokens` when generation
 hits its limit. Otherwise they report `completed`. `stream: true` sends typed
