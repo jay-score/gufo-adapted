@@ -1510,6 +1510,8 @@ public:
       item_["id"] = RandomId(reasoning ? "rs_" : "msg_");
       item_["type"] = reasoning ? "reasoning" : "message";
       item_["status"] = "in_progress";
+      if (reasoning)
+        item_["encrypted_content"] = json::Value();
       item_[reasoning ? "summary" : "content"] = json::Value::array();
       if (!reasoning)
         item_["role"] = "assistant";
@@ -1878,6 +1880,48 @@ HttpResponse StreamingResponse(
 
 bool ParseOpenAiResponseChat(const json::Value& body, ChatRequest* chat,
                              std::string* error) {
+  if (const auto* reasoning = body.find("reasoning");
+      reasoning != nullptr && !reasoning->is_null()) {
+    if (!reasoning->is_object()) {
+      *error = "'reasoning' must be an object";
+      return false;
+    }
+    for (const auto& [field, value] : reasoning->members()) {
+      if (field == "effort") {
+        if (!value.is_null() &&
+            (!value.is_string() ||
+             !AssignReasoningEffort(&chat->reasoning, value.str(), error))) {
+          if (error->empty())
+            *error = "'reasoning.effort' must be a string";
+          return false;
+        }
+      } else if (field == "summary") {
+        // Gufo exposes local reasoning in summary_text items; it has no
+        // separate concise/detailed summarizer.
+        if (!value.is_null() && (!value.is_string() || value.str() != "auto")) {
+          *error = "'reasoning.summary' supports only auto or null";
+          return false;
+        }
+      } else {
+        *error = "unsupported reasoning field: " + field;
+        return false;
+      }
+    }
+  }
+  if (const auto* include = body.find("include");
+      include != nullptr && !include->is_null()) {
+    if (!include->is_array() ||
+        std::ranges::any_of(include->items(), [](const auto& value) {
+          return !value.is_string() ||
+                 value.str() != "reasoning.encrypted_content";
+        })) {
+      *error = "'include' supports only reasoning.encrypted_content";
+      return false;
+    }
+    // This optional-data hint is sent by Responses clients such as Oh My Pi.
+    // Local reasoning is already replayable plaintext; encrypted_content is
+    // null.
+  }
   if (!ParseTools(body.find("tools"), &chat->tools, error) ||
       !ParseToolChoice(body.find("tool_choice"), chat, error))
     return false;

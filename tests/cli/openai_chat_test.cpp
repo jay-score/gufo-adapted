@@ -1586,6 +1586,55 @@ std::vector<gufo::json::Value> ResponseEvents(
   return events;
 }
 
+void TestResponsesReasoningRequests() {
+  using gufo::json::parse;
+  const auto body = parse(R"({"input":"hello",
+    "reasoning":{"effort":"low","summary":"auto"},
+    "include":["reasoning.encrypted_content"]})");
+  const auto chat = ResponseChat(body);
+  Expect(chat.reasoning.enabled == true &&
+             chat.reasoning.effort == gufo::ReasoningEffort::kLow,
+         "Responses effort enables reasoning and selects the requested level");
+  for (const bool stream : {false, true}) {
+    FakeBackend backend;
+    backend.pieces = {"Consider", " this.</think>", "Answer"};
+    backend.reasoning_tokens = 2;
+    const auto response = gufo::server::CreateOpenAiResponse(
+        Request("{}"), backend, chat, 96, {}, stream);
+    const auto events =
+        stream ? ResponseEvents(response) : std::vector<gufo::json::Value>{};
+    const auto result =
+        stream ? *events.back().find("response") : parse(response.body);
+    const auto& items = result.find("output")->items();
+    Expect(
+        items.size() == 2 && items[0].member_str("type") == "reasoning" &&
+            items[0].find("encrypted_content")->is_null() &&
+            items[0].find("summary")->items()[0].member_str("text") ==
+                "Consider this." &&
+            items[1].find("content")->items()[0].member_str("text") == "Answer",
+        "Explicit Responses thinking returns replayable plaintext reasoning "
+        "and the answer");
+    auto continued = body;
+    continued["input"] = *result.find("output");
+    continued["input"].push_back(
+        parse(R"({"role":"user","content":"Next question"})"));
+    continued["reasoning"]["effort"] = "none";
+    const auto next = ResponseChat(continued);
+    Expect(next.reasoning.enabled == false &&
+               next.messages[0].thought == "Consider this." &&
+               next.messages[0].content == "Answer",
+           "Disabling the next turn preserves prior reasoning history");
+  }
+  for (const auto* empty :
+       {"{}", R"({"effort":null})", R"({"summary":null})", "null"}) {
+    auto defaults = body;
+    defaults["reasoning"] = parse(empty);
+    const auto options = ResponseChat(defaults).reasoning;
+    Expect(!options.enabled.has_value() && !options.effort.has_value(),
+           "Omitted or null effort keeps server/model defaults");
+  }
+}
+
 void TestResponsesFunctionTools() {
   using gufo::json::parse;
   auto body = parse(R"({"input":"Check Rome and Paris","tools":[
@@ -1820,6 +1869,7 @@ int main() {
   TestExplicitStopOutputFraming();
   TestStopInsideToolArguments();
   TestResponsesOutput();
+  TestResponsesReasoningRequests();
   TestResponsesFunctionTools();
   TestResponsesToolValidationAndFailure();
   TestResponsesLiveAndCancellation();

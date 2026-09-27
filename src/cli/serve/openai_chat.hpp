@@ -11,7 +11,8 @@ namespace gufo::server {
 HttpResponse HandleOpenAiChat(const HttpRequest& request,
                               TextGenerationBackend& backend);
 
-/// Translate stateless Responses input and function tools into a chat request.
+/// Translate stateless Responses input, reasoning controls and function tools
+/// into a chat request. The caller supplies defaults for omitted controls.
 bool ParseOpenAiResponseChat(const json::Value& body, ChatRequest* chat,
                              std::string* error);
 

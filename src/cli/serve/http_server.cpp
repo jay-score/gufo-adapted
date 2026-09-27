@@ -515,7 +515,8 @@ std::optional<HttpResponse> ReadCompatibilityOptions(
                                   "modalities",
                                   "audio"}) {
     if (responses && (field == "tools" || field == "tool_choice" ||
-                      field == "parallel_tool_calls"))
+                      field == "parallel_tool_calls" || field == "reasoning" ||
+                      field == "include"))
       continue;
     if (field != stop_field && body.contains(field)) {
       return InvalidCompatibilityRequest("request field '" + field +
@@ -700,7 +701,12 @@ HttpResponse OpenAiResponses(const HttpRequest& req,
   if (!ParseOpenAiResponseChat(body, &chat, &error))
     return InvalidCompatibilityRequest(error);
   chat.client_id = req.client_id;
-  chat.reasoning = b.reasoning_defaults();
+  const auto defaults = b.reasoning_defaults();
+  if (!chat.reasoning.enabled.has_value())
+    chat.reasoning.enabled = defaults.enabled;
+  if (!chat.reasoning.effort.has_value())
+    chat.reasoning.effort = defaults.effort;
+  chat.reasoning.preserve_thinking = defaults.preserve_thinking;
   return CreateOpenAiResponse(
       req, b, chat, max_tokens, sampling_config,
       body.find("stream") != nullptr && body.find("stream")->as_bool(),

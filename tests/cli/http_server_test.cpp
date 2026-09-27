@@ -710,6 +710,57 @@ void TestCompatibilityThinkingDefaults() {
       assert(reasoning.preserve_thinking == true);
     }
   }
+
+  for (const bool stream : {false, true}) {
+    for (const auto& [effort, expected] :
+         {std::pair{"low", gufo::ReasoningEffort::kLow},
+          std::pair{"medium", gufo::ReasoningEffort::kMedium},
+          std::pair{"xhigh", gufo::ReasoningEffort::kXHigh}}) {
+      server.backend->reasoning.enabled = false;
+      auto body =
+          gufo::json::parse(R"({"input":"hello","reasoning":{"summary":"auto"},
+        "include":["reasoning.encrypted_content"]})");
+      body["reasoning"]["effort"] = effort;
+      body["stream"] = stream;
+      ExpectStatus(server.Post("/v1/responses", body.dump()), 200);
+      const auto reasoning = server.backend->LastCall().chat.reasoning;
+      assert(reasoning.enabled == true && reasoning.effort == expected &&
+             reasoning.preserve_thinking == true);
+    }
+    server.backend->reasoning.enabled = true;
+    auto disabled =
+        gufo::json::parse(R"({"input":"hello","reasoning":{"effort":"none"}})");
+    disabled["stream"] = stream;
+    ExpectStatus(server.Post("/v1/responses", disabled.dump()), 200);
+    assert(server.backend->LastCall().chat.reasoning.enabled == false);
+  }
+  server.backend->reasoning = {};
+  for (
+      const auto* body :
+      {R"({"input":"hello"})", R"({"input":"hello","reasoning":null})",
+       R"({"input":"hello","reasoning":{"effort":null,"summary":"auto"},"include":[]})"}) {
+    ExpectStatus(server.Post("/v1/responses", body), 200);
+    const auto reasoning = server.backend->LastCall().chat.reasoning;
+    const auto options = gufo::tokenization::ResolveQwenChatOptions(reasoning);
+    assert(!reasoning.enabled.has_value() && !reasoning.effort.has_value());
+    assert(options.enable_thinking &&
+           options.reasoning_effort ==
+               gufo::tokenization::QwenReasoningEffort::kXHigh);
+  }
+  const auto calls = server.backend->calls.load();
+  for (const auto* body :
+       {R"({"input":"hello","reasoning":true})",
+        R"({"input":"hello","reasoning":{"effort":1}})",
+        R"({"input":"hello","reasoning":{"effort":"invalid"}})",
+        R"({"input":"hello","reasoning":{"mode":"pro"}})",
+        R"({"input":"hello","reasoning":{"summary":"concise"}})",
+        R"({"input":"hello","reasoning":{"summary":true}})",
+        R"({"input":"hello","reasoning_effort":"low"})",
+        R"({"input":"hello","include":"reasoning.encrypted_content"})",
+        R"({"input":"hello","include":["unsupported"]})"}) {
+    ExpectStatus(server.Post("/v1/responses", body), 400);
+  }
+  assert(server.backend->calls == calls);
 }
 
 void TestStreamingFraming() {
