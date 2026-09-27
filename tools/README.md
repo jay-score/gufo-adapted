@@ -17,6 +17,7 @@ benchmark/tuning executables; Python tools run from this source tree.
 | `h3/` | MiniMax inventory and quality-artifact commands |
 | `audio/` | Audio reference and quality tools |
 | `ci/` | Repository, dependency, and documentation checks |
+| [`gui/`](gui/README.md) | Optional local web launcher: model files, saved settings, process controls and logs |
 | `gufo/` | Shared Python helpers and model-specific reference implementations |
 
 `gufo/gguf.py` reads metadata and decodes existing GGUF tensors for independent

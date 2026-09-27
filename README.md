@@ -85,6 +85,17 @@ The launcher enables MTP and thinking by default. See the
 [Windows guide](docs/WINDOWS.md#running-qwen38-flash-next) for existing model
 directories, context settings and optional decode switches.
 
+Prefer a small GUI? After building Gufo, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\windows\gui.ps1
+```
+
+The [local web launcher](tools/gui/README.md) opens at `http://127.0.0.1:8090`.
+Choose your model, MTP and projector files, adjust sampler settings, and save
+the configuration for later launches. It requires Python 3.10+ and installs
+its small Python environment on first run.
+
 ## Linux quickstart
 
 ```sh
