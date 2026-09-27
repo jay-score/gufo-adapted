@@ -459,13 +459,24 @@ void TestCompatibilityRequests() {
     ExpectStatus(server.Post(endpoint.path, "{"), 400);
     assert(server.backend->calls == calls);
   }
+  for (const bool stream : {false, true}) {
+    auto image = gufo::json::parse(R"({"input":[{"role":"user","content":[
+      {"type":"input_text","text":"describe"},
+      {"type":"input_image","image_url":"data:image/png;base64,AQID"}]}]})");
+    image["stream"] = stream;
+    ExpectStatus(server.Post("/v1/responses", image.dump()), 200);
+    const auto message = server.backend->LastCall().chat.messages.front();
+    assert(message.content == "describe" && message.images.size() == 1 &&
+           message.images[0].offset == 8 &&
+           *message.images[0].bytes == std::vector<std::uint8_t>({1, 2, 3}));
+  }
   const int calls = server.backend->calls;
   ExpectStatus(server.Post("/v1/completions", R"({"prompt":["one","two"]})"),
                400);
   ExpectStatus(server.Post("/v1/responses",
                            R"({"input":[{"role":"user","content":[
                            {"type":"input_text","text":"describe"},
-                           {"type":"input_image","image_url":"data:image/png;base64,AA=="}]}]})"),
+                           {"type":"input_image","file_id":"file_123"}]}]})"),
                400);
   ExpectStatus(server.Post("/v1/messages",
                            R"({"messages":[{"role":"tool","content":"hi"}]})"),

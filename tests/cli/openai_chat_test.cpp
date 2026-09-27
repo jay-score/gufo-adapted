@@ -1586,6 +1586,92 @@ std::vector<gufo::json::Value> ResponseEvents(
   return events;
 }
 
+void TestResponsesImages() {
+  using gufo::json::parse;
+  const auto body = parse(R"({"input":[
+    {"role":"user","content":[{"type":"input_text","text":"left"},
+      {"type":"input_image","image_url":"data:image/png;base64,AQID","detail":"auto"},
+      {"type":"input_text","text":"right"},
+      {"type":"input_image","image_url":"data:image/jpeg;base64,BAUG"}]},
+    {"type":"function_call","name":"read","call_id":"read1","arguments":"{}"},
+    {"type":"function_call_output","call_id":"read1","output":[
+      {"type":"input_text","text":"tool"},
+      {"type":"input_image","image_url":"data:image/png;base64,BwgJ"}]}]})");
+  const auto chat = ResponseChat(body);
+  const auto& user = chat.messages[0];
+  const auto& tool = chat.messages[2];
+  Expect(user.content == "leftright" && user.images.size() == 2 &&
+             user.images[0].offset == 4 && user.images[1].offset == 9 &&
+             *user.images[0].bytes == std::vector<std::uint8_t>({1, 2, 3}) &&
+             *user.images[1].bytes == std::vector<std::uint8_t>({4, 5, 6}),
+         "Responses user images preserve order and transport bytes");
+  Expect(tool.role == gufo::tokenization::ChatRole::kTool &&
+             tool.name == "read" && tool.content == "tool" &&
+             tool.images.size() == 1 && tool.images[0].offset == 4 &&
+             *tool.images[0].bytes == std::vector<std::uint8_t>({7, 8, 9}),
+         "Responses function results retain image bytes and matching call "
+         "identity");
+  for (const bool stream : {false, true}) {
+    FakeBackend backend;
+    backend.pieces = {"ok"};
+    const auto response = gufo::server::CreateOpenAiResponse(
+        Request("{}"), backend, chat, 96, {}, stream);
+    if (stream)
+      (void)ResponseEvents(response);
+    Expect(response.status == 200 &&
+               backend.last_request.messages[2].images.size() == 1,
+           "Buffered and streamed Responses send image tool results to the "
+           "backend");
+  }
+  for (
+      const auto* content :
+      {R"([{"type":"input_image","image_url":"file:///tmp/image.png"}])",
+       R"([{"type":"input_image","image_url":"http://127.0.0.1/image.png"}])",
+       R"([{"type":"input_image","image_url":"data:image/png;base64,!!!!"}])",
+       R"([{"type":"input_image","file_id":"file_123"}])",
+       R"([{"type":"input_image","image_url":"data:image/png;base64,AQID","file_id":"file_123"}])",
+       R"([{"type":"input_image","image_url":7}])",
+       R"([{"type":"input_image","image_url":"data:image/png;base64,AQID","detail":"high"}])",
+       R"([{"text":"missing type"}])", "null"}) {
+    for (const auto* role : {"user", "tool"}) {
+      auto invalid = body;
+      const bool is_tool = std::string_view(role) == "tool";
+      invalid["input"] = gufo::json::Value::array();
+      for (std::size_t i = 0; i < body.find("input")->size(); ++i) {
+        auto item = body.find("input")->items()[i];
+        if (i == (is_tool ? 2 : 0))
+          item[is_tool ? "output" : "content"] = parse(content);
+        invalid["input"].push_back(std::move(item));
+      }
+      gufo::server::ChatRequest request;
+      std::string error;
+      Expect(!gufo::server::ParseOpenAiResponseChat(invalid, &request, &error),
+             "Invalid image sources and content fail before inference");
+    }
+  }
+  for (const auto* role : {"assistant", "system", "developer"}) {
+    auto invalid = body;
+    auto message = body.find("input")->items()[0];
+    message["role"] = role;
+    invalid["input"] = gufo::json::Value::array();
+    invalid["input"].push_back(std::move(message));
+    gufo::server::ChatRequest request;
+    std::string error;
+    Expect(
+        !gufo::server::ParseOpenAiResponseChat(invalid, &request, &error),
+        "Responses images are restricted to user input and function results");
+  }
+  auto oversized = body;
+  const auto result = body.find("input")->items()[2];
+  for (int i = 0; i < 14; ++i)
+    oversized["input"].push_back(result);
+  gufo::server::ChatRequest request;
+  std::string error;
+  Expect(!gufo::server::ParseOpenAiResponseChat(oversized, &request, &error) &&
+             error.find("image") != std::string::npos,
+         "Responses image budget spans user messages and tool results");
+}
+
 void TestResponsesReasoningRequests() {
   using gufo::json::parse;
   const auto body = parse(R"({"input":"hello",
@@ -1869,6 +1955,7 @@ int main() {
   TestExplicitStopOutputFraming();
   TestStopInsideToolArguments();
   TestResponsesOutput();
+  TestResponsesImages();
   TestResponsesReasoningRequests();
   TestResponsesFunctionTools();
   TestResponsesToolValidationAndFailure();

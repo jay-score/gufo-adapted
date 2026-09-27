@@ -146,7 +146,8 @@ tokenization::ChatRole ParseRole(std::string_view role) {
 
 bool ParseContent(const json::Value* content,
                   tokenization::ChatMessage* message,
-                  core::ImageReadBudget& budget, std::string* error) {
+                  core::ImageReadBudget& budget, std::string* error,
+                  bool responses = false) {
   auto* output = &message->content;
   if (content == nullptr || content->is_null()) {
     return true;
@@ -165,16 +166,29 @@ bool ParseContent(const json::Value* content,
       *error = "message content parts must be objects";
       return false;
     }
-    const std::string type = part.member_str("type", "text");
-    if (type == "image_url") {
-      const auto* image = part.find("image_url");
-      const auto* url =
-          image != nullptr && image->is_object() ? image->find("url") : nullptr;
-      if (message->role != tokenization::ChatRole::kUser || url == nullptr ||
-          !url->is_string() || message->images.size() >= 16) {
-        *error =
-            "image_url requires a user message and a string URL (at most 16 "
-            "images)";
+    const std::string type = part.member_str("type", responses ? "" : "text");
+    if (type == (responses ? "input_image" : "image_url")) {
+      const auto* image = responses ? &part : part.find("image_url");
+      const auto* url = image != nullptr && image->is_object()
+                            ? image->find(responses ? "image_url" : "url")
+                            : nullptr;
+      if (responses) {
+        if (const auto* file = part.find("file_id");
+            file != nullptr && !file->is_null()) {
+          *error = "input_image.file_id is not supported; use image_url";
+          return false;
+        }
+      }
+      const bool image_role =
+          message->role == tokenization::ChatRole::kUser ||
+          (responses && message->role == tokenization::ChatRole::kTool);
+      if (!image_role || url == nullptr || !url->is_string() ||
+          message->images.size() >= 16) {
+        *error = responses ? "input_image requires a user message or function "
+                             "result and a string image_url (at most 16 images)"
+                           : "image_url requires a user message and a string "
+                             "URL (at most 16 "
+                             "images)";
         return false;
       }
       // Resolution is model-owned; accept only the automatic policy rather
@@ -182,7 +196,7 @@ bool ParseContent(const json::Value* content,
       const auto* detail = image->find("detail");
       if (detail != nullptr &&
           (!detail->is_string() || detail->get_str() != "auto")) {
-        *error = "image_url.detail supports only 'auto'";
+        *error = "image detail supports only 'auto'";
         return false;
       }
       try {
@@ -195,8 +209,11 @@ bool ParseContent(const json::Value* content,
       }
       continue;
     }
-    if (type != "text" && type != "input_text") {
-      *error = "message content parts must use text or image_url";
+    if (type != "text" && type != "input_text" &&
+        !(responses && type == "output_text")) {
+      *error = responses ? "content parts must use input_text, output_text, "
+                           "text or input_image"
+                         : "message content parts must use text or image_url";
       return false;
     }
     const json::Value* text = part.find("text");
@@ -1943,24 +1960,11 @@ bool ParseOpenAiResponseChat(const json::Value& body, ChatRequest* chat,
     chat->messages.push_back(
         {tokenization::ChatRole::kSystem, instructions->str(), "", ""});
   }
-  const auto read_text = [](const json::Value* value, std::string* text) {
-    if (value == nullptr)
-      return false;
-    if (value->is_string()) {
-      *text = value->str();
-      return true;
-    }
-    if (!value->is_array())
-      return false;
-    for (const auto& part : value->items()) {
-      const auto type = part.member_str("type");
-      const auto* content = part.find("text");
-      if ((type != "input_text" && type != "output_text" && type != "text") ||
-          content == nullptr || !content->is_string())
-        return false;
-      *text += content->str();
-    }
-    return true;
+  core::ImageReadBudget image_budget;
+  const auto read_content = [&](const json::Value* value,
+                                tokenization::ChatMessage* message) {
+    return value != nullptr && !value->is_null() &&
+           ParseContent(value, message, image_budget, error, true);
   };
   const auto* input = body.find("input");
   if (input != nullptr && input->is_string() && !input->str().empty()) {
@@ -1969,8 +1973,8 @@ bool ParseOpenAiResponseChat(const json::Value& body, ChatRequest* chat,
     return true;
   }
   *error =
-      "'input' must contain text messages, Gufo reasoning items, function "
-      "calls or text function results; use /v1/chat/completions for images";
+      "'input' must contain messages, Gufo reasoning items, function "
+      "calls or function results with text/image content";
   if (input == nullptr || !input->is_array() || input->empty())
     return false;
   for (const auto& item : input->items()) {
@@ -2007,7 +2011,7 @@ bool ParseOpenAiResponseChat(const json::Value& body, ChatRequest* chat,
       message.role = tokenization::ChatRole::kTool;
       message.tool_call_id = item.member_str("call_id");
       if (message.tool_call_id.empty() ||
-          !read_text(item.find("output"), &message.content))
+          !read_content(item.find("output"), &message))
         return false;
       // Responses is stateless: resolve the result against a call in input.
       for (const auto& previous : chat->messages) {
@@ -2024,10 +2028,11 @@ bool ParseOpenAiResponseChat(const json::Value& body, ChatRequest* chat,
       }
     } else if (type == "message") {
       const auto role = item.member_str("role");
-      if (!IsKnownRole(role) || role == "tool" || item.contains("tool_calls") ||
-          !read_text(item.find("content"), &message.content))
+      if (!IsKnownRole(role) || role == "tool" || item.contains("tool_calls"))
         return false;
       message.role = ParseRole(role);
+      if (!read_content(item.find("content"), &message))
+        return false;
     } else {
       return false;
     }

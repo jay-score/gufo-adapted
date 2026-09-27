@@ -347,10 +347,11 @@ std::optional<std::string> QwenChatTemplate::Render(
         msg.content.size() + msg.thought.size() + 32 + msg.images.size() * 64;
     std::size_t previous = 0;
     for (const auto& image : msg.images) {
-      if (msg.role != ChatRole::kUser || image.bytes == nullptr ||
-          image.offset < previous || image.offset > msg.content.size()) {
+      if ((msg.role != ChatRole::kUser && msg.role != ChatRole::kTool) ||
+          image.bytes == nullptr || image.offset < previous ||
+          image.offset > msg.content.size()) {
         if (error_msg != nullptr)
-          *error_msg = "invalid user image content";
+          *error_msg = "invalid user or tool image content";
         return std::nullopt;
       }
       previous = image.offset;
@@ -432,37 +433,7 @@ std::optional<std::string> QwenChatTemplate::Render(
   }
 
   std::size_t image_count = 0;
-  for (; message_index < messages.size(); ++message_index) {
-    const auto& msg = messages[message_index];
-    if (msg.role == ChatRole::kSystem || msg.role == ChatRole::kDeveloper) {
-      if (error_msg != nullptr)
-        *error_msg = "System message must be at the beginning.";
-      return std::nullopt;
-    }
-    const bool tool_result = msg.role == ChatRole::kTool;
-    if (tool_result) {
-      output.append("<|im_start|>user\n");
-      while (message_index < messages.size() &&
-             messages[message_index].role == ChatRole::kTool) {
-        const auto& tool_message = messages[message_index];
-        output.append("<tool_response>\n");
-        output.append(Trim(tool_message.content));
-        output.append("\n</tool_response>");
-        ++message_index;
-        if (message_index < messages.size() &&
-            messages[message_index].role == ChatRole::kTool) {
-          output.push_back('\n');
-        }
-      }
-      --message_index;
-      output.append("<|im_end|>\n");
-      continue;
-    }
-    const auto role_name = ToString(msg.role);
-    output.append("<|im_start|>");
-    output.append(role_name);
-    output.push_back('\n');
-
+  const auto append_content = [&](const ChatMessage& msg) {
     std::string image_content;
     std::vector<std::size_t> local_image_offsets;
     if (!msg.images.empty()) {
@@ -480,13 +451,51 @@ std::optional<std::string> QwenChatTemplate::Render(
       }
       image_content.append(std::string_view(msg.content).substr(cursor));
     }
-    // Trim the fully rendered content, including image markers. Whitespace
-    // between text and images remains significant; image offsets follow the
-    // trim.
+    // Trim rendered content so image placement retains adjacent whitespace.
     const std::string_view untrimmed = msg.images.empty()
                                            ? std::string_view(msg.content)
                                            : std::string_view(image_content);
     const std::string_view content = Trim(untrimmed);
+    if (image_offsets != nullptr && !local_image_offsets.empty()) {
+      const auto removed =
+          static_cast<std::size_t>(content.data() - untrimmed.data());
+      for (const auto offset : local_image_offsets)
+        image_offsets->push_back(output.size() + offset - removed);
+    }
+    output.append(content);
+    return !content.empty();
+  };
+  for (; message_index < messages.size(); ++message_index) {
+    const auto& msg = messages[message_index];
+    if (msg.role == ChatRole::kSystem || msg.role == ChatRole::kDeveloper) {
+      if (error_msg != nullptr)
+        *error_msg = "System message must be at the beginning.";
+      return std::nullopt;
+    }
+    const bool tool_result = msg.role == ChatRole::kTool;
+    if (tool_result) {
+      output.append("<|im_start|>user\n");
+      while (message_index < messages.size() &&
+             messages[message_index].role == ChatRole::kTool) {
+        const auto& tool_message = messages[message_index];
+        output.append("<tool_response>\n");
+        append_content(tool_message);
+        output.append("\n</tool_response>");
+        ++message_index;
+        if (message_index < messages.size() &&
+            messages[message_index].role == ChatRole::kTool) {
+          output.push_back('\n');
+        }
+      }
+      --message_index;
+      output.append("<|im_end|>\n");
+      continue;
+    }
+    const auto role_name = ToString(msg.role);
+    output.append("<|im_start|>");
+    output.append(role_name);
+    output.push_back('\n');
+
     const std::string_view thought = Trim(msg.thought);
     if (msg.role == ChatRole::kAssistant &&
         (options.preserve_thinking || message_index > last_user_index)) {
@@ -495,15 +504,9 @@ std::optional<std::string> QwenChatTemplate::Render(
       output.append("\n</think>\n\n");
     }
 
-    if (image_offsets != nullptr && !local_image_offsets.empty()) {
-      const auto removed =
-          static_cast<std::size_t>(content.data() - untrimmed.data());
-      for (const auto offset : local_image_offsets)
-        image_offsets->push_back(output.size() + offset - removed);
-    }
-    output.append(content);
+    const bool has_content = append_content(msg);
     if (msg.role == ChatRole::kAssistant && !msg.tool_calls.empty()) {
-      if (!content.empty()) {
+      if (has_content) {
         output.append("\n\n");
       }
       AppendToolCalls(output, msg.tool_calls);

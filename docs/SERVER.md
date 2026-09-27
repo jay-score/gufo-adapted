@@ -10,8 +10,8 @@ versioned contract: supported fields behave as documented, and unsupported
 fields return explicit errors.
 
 Chat Completions is the main API, including streaming, images and tools.
-Responses supports text with optional streaming; Anthropic Messages exposes a
-synchronous text subset.
+Responses supports text, images and function tools with optional streaming;
+Anthropic Messages exposes a synchronous text subset.
 The reference protocols are:
 
 - https://developers.openai.com/api/reference/resources/responses/methods/create/
@@ -455,9 +455,18 @@ vision role does not itself enable image input; load a compatible projector.
 `parallel_tool_calls`, `reasoning`, `include`, and the shared sampling controls.
 Clients supply the complete conversation, including prior Gufo `output` items
 when retaining reasoning. `store` and `background` must be false
-when present. Images, built-in tools, structured output, server-side conversations
-and `previous_response_id` are rejected on this route. Use Chat Completions for
-image input.
+when present. Built-in tools, structured output, server-side conversations
+and `previous_response_id` are rejected on this route.
+
+User message content and `function_call_output.output` arrays accept
+`{"type":"input_image","image_url":"data:image/png;base64,...","detail":"auto"}`
+alongside text parts. Image placement relative to text is preserved, including
+inside tool results. Images use the same model-owned vision pipeline and
+request-wide limits as Chat Completions: at most 16 images and 20 MiB of encoded
+image data, with PNG/JPEG data URLs or public HTTPS URLs. Omitted detail means
+`auto`; other detail policies, uploaded `file_id` references, and images in
+assistant/system messages are rejected. Load a compatible BF16 projector for
+Qwen image input. Clients must resend the image content in stateless history.
 
 Function tools accept the flat Responses definition (`type`, `name`,
 `description`, `parameters`) or the nested Chat Completions definition.
@@ -470,8 +479,8 @@ Calls are returned as `function_call` output items with a JSON `arguments`
 string, a unique item `id`, and a `call_id`. On the next request, append the
 response's output items to the conversation and then append one
 `function_call_output` item per result, using the corresponding `call_id`.
-Its `output` accepts a string or text content parts. Each result must match an
-earlier call in the supplied `input`; no server-side response history is stored.
+Its `output` accepts a string or text/image content parts. Each result must match
+an earlier call in the supplied `input`; no server-side response history is stored.
 For example, a result item is
 `{"type":"function_call_output","call_id":"call_...","output":"Sunny"}`.
 
