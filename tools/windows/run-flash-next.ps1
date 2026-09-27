@@ -97,3 +97,4 @@ Get-ChildItem Env: | Where-Object { $_.Name -like "GUFO_*" } | ForEach-Object {
 }
 Write-Host "gufo $($arguments -join ' ')"
 & "$bin\gufo.exe" @arguments
+exit $LASTEXITCODE
