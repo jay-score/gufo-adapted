@@ -42,7 +42,7 @@ Download the qualified files with the Hugging Face CLI
 (`pip install -U huggingface_hub`):
 
 ```powershell
-hf download unsloth/Qwen3.8-Flash-Next-GGUF --include "UD-Q4_K_XL/*" "MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf" "mmproj-BF16.gguf"
+hf download unsloth/Qwen3.8-Flash-Next-GGUF --revision 38bb39ee97821de2c9009abb7e93950eec396e66 --include "UD-Q4_K_XL/*" "MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf" "mmproj-BF16.gguf"
 powershell -ExecutionPolicy Bypass -File tools\windows\run-flash-next.ps1
 ```
 
@@ -52,8 +52,10 @@ the model's own sampler). `-Think off`, `-Draft mtp3|off`, `-Context N` and
 `-Mode bench` (pp2048/tg128 at depths 0..128K) are the common variations. The
 server is ready when the log shows `event=load_completed`.
 
-The script picks the newest Hugging Face snapshot that holds each file, so
-files downloaded at different revisions are found. `GUFO_*` environment
+The script uses the pinned revision above and takes the target and MTP sidecar
+from the same snapshot. Use `-Snapshot PATH` to select another model directory,
+or `-MtpModel PATH` to explicitly select a separate sidecar. The printed command
+records the selected paths. `GUFO_*` environment
 variables (`GUFO_PLATFORM_TUNING`, diagnostics) reach the server; the script
 lists any set in the calling shell.
 

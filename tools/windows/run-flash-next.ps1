@@ -34,27 +34,18 @@ if (-not (Test-Path "$bin\gufo.exe")) {
 
 $modelFile = "UD-Q4_K_XL\Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf"
 $mtpFile = "MTP\mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf"
-# Each Hugging Face revision is its own snapshot folder, holding only the files
-# downloaded at that revision: pick the newest one that has each file.
-$snapshots = @()
+# Match the qualified revision in docs/models/qwen3.8-flash-next/README.md.
+$revision = "38bb39ee97821de2c9009abb7e93950eec396e66"
 if (-not $Snapshot) {
   $cache = if ($env:HF_HUB_CACHE) { $env:HF_HUB_CACHE }
            elseif ($env:HF_HOME) { Join-Path $env:HF_HOME "hub" }
            else { Join-Path $env:USERPROFILE ".cache\huggingface\hub" }
-  $snapshots = @(Get-ChildItem (Join-Path $cache "models--unsloth--Qwen3.8-Flash-Next-GGUF\snapshots") `
-    -Directory -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending |
-    Select-Object -ExpandProperty FullName)
-  $Snapshot = $snapshots | Where-Object { Test-Path (Join-Path $_ $modelFile) } | Select-Object -First 1
-  if (-not $Snapshot) {
-    throw "$modelFile not found in unsloth/Qwen3.8-Flash-Next-GGUF under $cache; see docs\WINDOWS.md or pass -Snapshot"
-  }
+  $Snapshot = Join-Path $cache "models--unsloth--Qwen3.8-Flash-Next-GGUF\snapshots\$revision"
 }
 $model = Join-Path $Snapshot $modelFile
-if (-not (Test-Path $model)) { throw "model not found: $model" }
+if (-not (Test-Path $model)) { throw "model not found: $model; see docs\WINDOWS.md or pass -Snapshot" }
 if (-not $MtpModel) {
-  $MtpModel = @($Snapshot) + $snapshots | ForEach-Object { Join-Path $_ $mtpFile } |
-    Where-Object { Test-Path $_ } | Select-Object -First 1
-  if (-not $MtpModel) { $MtpModel = Join-Path $Snapshot $mtpFile }
+  $MtpModel = Join-Path $Snapshot $mtpFile
 }
 if ($Draft -ne "off" -and -not (Test-Path $MtpModel)) { throw "MTP model not found: $MtpModel (or use -Draft off)" }
 

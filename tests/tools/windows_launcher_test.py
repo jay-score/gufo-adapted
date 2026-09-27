@@ -46,12 +46,15 @@ class Stub {
             path.parent.mkdir(parents=True)
             path.touch()
 
-        def run(shell, mode, draft, flags=(), exit_code=0):
+        def run(shell, mode, draft, flags=(), exit_code=0, snapshot=model, cache=None):
             environment = os.environ.copy()
             environment["EXIT_STUB_STATUS"] = str(exit_code)
+            if cache is not None:
+                environment["HF_HUB_CACHE"] = str(cache)
+            selection = ["-Snapshot", str(snapshot)] if snapshot is not None else []
             return subprocess.run(
                 [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(launcher),
-                 "-Snapshot", str(model), "-Mode", mode, "-Draft", draft, *flags],
+                 *selection, "-Mode", mode, "-Draft", draft, *flags],
                 env=environment, capture_output=True, text=True, timeout=30,
             )
 
@@ -79,6 +82,28 @@ class Stub {
                     result = run(shell, mode, "mtp", exit_code=code)
                     assert result.returncode == code, result.stderr
                     count += 1
+
+            # A newer, complete snapshot must not supply the pinned target's MTP.
+            cache = root / Path(shell).stem
+            snapshots = cache / "models--unsloth--Qwen3.8-Flash-Next-GGUF/snapshots"
+            pinned = snapshots / "38bb39ee97821de2c9009abb7e93950eec396e66"
+            shutil.copytree(model, snapshots / "newer-unqualified")
+            shutil.copytree(model, pinned)
+            mtp = pinned / "MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf"
+            mtp.unlink()
+            result = run(shell, "serve", "mtp", snapshot=None, cache=cache)
+            assert result.returncode != 0 and "MTP model not found" in result.stderr, result.stderr
+            assert "[serve]" not in result.stdout, result.stdout
+            result = run(shell, "serve", "off", snapshot=None, cache=cache)
+            assert result.returncode == 0 and str(pinned) in result.stdout, result.stderr
+            mtp.touch()
+            result = run(shell, "serve", "mtp", snapshot=None, cache=cache)
+            assert result.returncode == 0 and f"[{mtp}]" in result.stdout, result.stderr
+            assert "newer-unqualified" not in result.stdout, result.stdout
+            explicit = model / "MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf"
+            result = run(shell, "serve", "mtp", ["-MtpModel", str(explicit)], snapshot=None, cache=cache)
+            assert result.returncode == 0 and f"[{explicit}]" in result.stdout, result.stderr
+            count += 4
     print(f"PASS: {count} Windows launcher checks")
 
 
