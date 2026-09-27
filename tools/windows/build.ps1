@@ -5,7 +5,7 @@
 #   - TheRock 10.0.0 for Windows gfx1151, extracted to C:\TheRock\build:
 #     https://stable.repo.amd.com/rocm/core/tarball/therock-dist-windows-gfx1151-10.0.0.tar.gz
 #     (SHA-256 1293927b06b3b8d4bd7e0265823fb998bc9e0d83c68f33dcfa5d32663b30ce38)
-#   - vcpkg at C:\vcpkg with: icu curl openssl libpng libjpeg-turbo (x64-windows)
+#   - bootstrapped vcpkg at C:\vcpkg (dependencies are pinned in vcpkg.json)
 #   - Visual Studio Build Tools (MSVC STL + Windows SDK; the compiler is TheRock clang)
 #   - CMake 3.21+, and ninja on PATH or at C:\tools\ninja\ninja.exe
 #
@@ -61,22 +61,26 @@ $clang = "$Rocm\lib\llvm\bin\clang.exe".Replace('\', '/')
 $clangxx = "$Rocm\lib\llvm\bin\clang++.exe".Replace('\', '/')
 
 $build = Join-Path $root "build\$Preset"
-if ($Reconfigure -and (Test-Path "$build\CMakeCache.txt")) {
+# Clear cached global-library paths when upgrading a classic-mode build.
+if ((Test-Path "$build\CMakeCache.txt") -and ($Reconfigure -or
+    (Select-String -LiteralPath "$build\CMakeCache.txt" -Pattern '^VCPKG_MANIFEST_MODE:BOOL=OFF$' -Quiet))) {
   Remove-Item "$build\CMakeCache.txt"
 }
-if (-not (Test-Path "$build\CMakeCache.txt")) {
-  cmake -S $root --preset $Preset `
-    "-DCMAKE_MAKE_PROGRAM=$($Ninja.Replace('\', '/'))" `
-    "-DCMAKE_C_COMPILER=$clang" `
-    "-DCMAKE_CXX_COMPILER=$clangxx" `
-    "-DCMAKE_HIP_COMPILER=$clangxx" `
-    "-DCMAKE_TOOLCHAIN_FILE=$($Vcpkg.Replace('\', '/'))/scripts/buildsystems/vcpkg.cmake" `
-    "-DVCPKG_TARGET_TRIPLET=x64-windows" `
-    "-DCMAKE_PREFIX_PATH=$($Rocm.Replace('\', '/'))" `
-    "-DCMAKE_LINKER_TYPE=LLD" `
-    @CMakeArgs
-  if ($LASTEXITCODE -ne 0) { throw "configure failed" }
-}
+# Reconfigure so the manifest, tool paths and CMakeArgs take effect on updates.
+cmake -S $root --preset $Preset `
+  "-DCMAKE_MAKE_PROGRAM=$($Ninja.Replace('\', '/'))" `
+  "-DCMAKE_C_COMPILER=$clang" `
+  "-DCMAKE_CXX_COMPILER=$clangxx" `
+  "-DCMAKE_HIP_COMPILER=$clangxx" `
+  "-DCMAKE_TOOLCHAIN_FILE=$($Vcpkg.Replace('\', '/'))/scripts/buildsystems/vcpkg.cmake" `
+  "-DVCPKG_TARGET_TRIPLET=x64-windows" `
+  "-DVCPKG_MANIFEST_MODE=ON" `
+  "-DVCPKG_MANIFEST_DIR=$($root.Replace('\', '/'))" `
+  "-DVCPKG_INSTALLED_DIR=$($root.Replace('\', '/'))/build/vcpkg_installed" `
+  "-DCMAKE_PREFIX_PATH=$($Rocm.Replace('\', '/'))" `
+  "-DCMAKE_LINKER_TYPE=LLD" `
+  @CMakeArgs
+if ($LASTEXITCODE -ne 0) { throw "configure failed" }
 
 $buildArgs = @("--build", $build)
 if ($Target) { $buildArgs += @("--target", $Target) }
@@ -98,5 +102,5 @@ foreach ($dir in @("hipblaslt", "rocblas")) {
     Copy-Item $libraryDir -Destination $bin -Recurse -Force
   }
 }
-Get-ChildItem "$Vcpkg\installed\x64-windows\bin\*.dll" | Copy-Item -Destination $bin -Force
+Get-ChildItem "$root\build\vcpkg_installed\x64-windows\bin\*.dll" | Copy-Item -Destination $bin -Force
 Write-Host "gufo: built $build"

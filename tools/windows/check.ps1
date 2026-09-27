@@ -66,14 +66,10 @@ $ninjaExe = if (Test-Path $Ninja) { $Ninja } else { (Get-Command ninja -ErrorAct
 Report "Ninja" ([bool]$ninjaExe) ($(if ($ninjaExe) { $ninjaExe } else { "not found" })) `
   "put ninja.exe on PATH or at $Ninja"
 
-# vcpkg and the libraries Gufo links.
+# The build installs the libraries from the pinned manifest automatically.
 if (Test-Path "$Vcpkg\vcpkg.exe") {
   Report "vcpkg" $true $Vcpkg
-  $missing = @("icu", "curl", "openssl", "libpng", "libjpeg-turbo") |
-    Where-Object { -not (Test-Path "$Vcpkg\installed\x64-windows\share\$_") }
-  Report "vcpkg packages" ($missing.Count -eq 0) `
-    ($(if ($missing.Count) { "missing: $($missing -join ', ')" } else { "icu curl openssl libpng libjpeg-turbo" })) `
-    "$Vcpkg\vcpkg.exe install icu curl openssl libpng libjpeg-turbo --triplet x64-windows"
+  Note "vcpkg packages" "build.ps1 installs the pinned vcpkg.json dependencies under build\vcpkg_installed"
 } else {
   Report "vcpkg" $false "not found at $Vcpkg" "clone https://github.com/microsoft/vcpkg to $Vcpkg and run bootstrap-vcpkg.bat"
 }

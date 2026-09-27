@@ -10,7 +10,7 @@ builds are unaffected: the port lives in `compat/win32`, Windows-only files and
 | Piece | Default location | Notes |
 | --- | --- | --- |
 | TheRock ROCm 10.0.0 (Windows, gfx1151) | `C:\TheRock\build` | [`therock-dist-windows-gfx1151-10.0.0.tar.gz`](https://stable.repo.amd.com/rocm/core/tarball/therock-dist-windows-gfx1151-10.0.0.tar.gz), SHA-256 `1293927b06b3b8d4bd7e0265823fb998bc9e0d83c68f33dcfa5d32663b30ce38`; extract so that `C:\TheRock\build\bin` exists. Its clang compiles C, C++ and HIP |
-| vcpkg | `C:\vcpkg` | `vcpkg install icu curl openssl libpng libjpeg-turbo --triplet x64-windows` |
+| vcpkg | `C:\vcpkg` | Run `bootstrap-vcpkg.bat`; CMake installs the dependencies pinned by `vcpkg.json` |
 | Visual Studio Build Tools | any | "Desktop development with C++": MSVC STL + Windows SDK only; tested with VS 18 (MSVC 14.51) |
 | CMake 3.21+ and Ninja | `PATH`, or Ninja at `C:\tools\ninja` | |
 | Dedicated GPU memory | AMD Software > Performance > Tuning > Variable Graphics Memory | 96 GB for Qwen3.8-Flash-Next at 256K context; see [Memory](#memory) |
@@ -28,6 +28,13 @@ powershell -ExecutionPolicy Bypass -File tools\windows\build.ps1 -Preset gpu-tes
 vcpkg toolchain, builds, and copies the ROCm and vcpkg runtime DLLs plus the
 hipBLASLt/rocBLAS kernel libraries next to `gufo.exe`, so `build\release` runs
 as it is.
+
+The manifest records the vcpkg baseline used for the Windows dependencies.
+`build.ps1` installs them under `build\vcpkg_installed`, independently of other
+projects' packages, and reconfigures on each invocation. The first build needs
+network access and can take several minutes to build the dependencies.
+Existing classic-mode CMake caches are cleared once during migration so they
+cannot retain paths to the old global dependencies.
 
 ## Running Qwen3.8-Flash-Next
 

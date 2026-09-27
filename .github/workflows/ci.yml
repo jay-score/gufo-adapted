@@ -23,12 +23,10 @@ jobs:
           repository: microsoft/vcpkg
           ref: 9e2895bf6afb246396d85232ba70fcfa1fa67ba1
           path: .vcpkg
-      - name: Install CPU dependencies
+      - name: Bootstrap vcpkg
         shell: pwsh
         run: |
           & .\.vcpkg\bootstrap-vcpkg.bat -disableMetrics
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & .\.vcpkg\vcpkg.exe install icu curl openssl libpng libjpeg-turbo --triplet x64-windows --disable-metrics
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build and test without a GPU
         shell: pwsh
@@ -43,7 +41,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build --preset cpu-test --parallel 2 --target platform_tuning_test openai_chat_test http_server_test continuation_disk_store_test qwen38_flash_next_mtp_sampling_test qwen38_flash_next_prompt_lookup_test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item .vcpkg/installed/x64-windows/bin/*.dll build/cpu-test -Force
+          Copy-Item build/cpu-test/vcpkg_installed/x64-windows/bin/*.dll build/cpu-test -Force
           ctest --test-dir build/cpu-test --output-on-failure --no-tests=error --timeout 120 -R '^(platform_tuning_test|openai_chat_test|http_server_test|continuation_disk_store_test|qwen38_flash_next\.(mtp_sampling|prompt_lookup))$'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/tools/windows_launcher_test.py
