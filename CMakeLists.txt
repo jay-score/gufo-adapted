@@ -66,7 +66,7 @@ if (ENGINE_ENABLE_HIP)
     # Before enable_language so CMake's compiler probe gets it too; see the
     # header for the MSVC 14.5x <cmath> conflict it works around.
     set(CMAKE_HIP_FLAGS
-      "${CMAKE_HIP_FLAGS} -I${CMAKE_SOURCE_DIR}/compat/win32/hip_include"
+      "${CMAKE_HIP_FLAGS} -I\"${CMAKE_SOURCE_DIR}/compat/win32/hip_include\""
       CACHE STRING "HIP flags" FORCE)
   endif()
   enable_language(HIP)
