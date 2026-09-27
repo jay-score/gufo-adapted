@@ -53,9 +53,11 @@
               <div><label for="context">Context tokens</label><input id="context" name="context" type="number" min="0" max="4294967295" step="1" required><p class="hint">0 uses the model's native context.</p></div>
               <div><label for="max_tokens">Max output tokens</label><input id="max_tokens" name="max_tokens" type="number" min="-1" max="4294967295" step="1" required><p class="hint">-1 continues until EOS or context full.</p></div>
               <div><label for="think">Thinking</label><select id="think" name="think"><option value="on">On</option><option value="off">Off</option><option value="auto">Model default</option></select></div>
+              <div><label for="reasoning_effort">Default thinking level</label><select id="reasoning_effort" name="reasoning_effort" aria-describedby="thinking-hint"><option value="auto">Auto (model default)</option><option value="low">Low</option><option value="medium">Medium</option><option value="xhigh">Xhigh</option></select></div>
               <div><label for="port">API port</label><input id="port" name="port" type="number" min="1" max="65535" step="1" required></div>
+              <div><label for="served_model_name">API model name</label><input id="served_model_name" name="served_model_name" type="text" required></div>
             </div>
-            <label for="served_model_name">API model name</label><input id="served_model_name" name="served_model_name" type="text" required>
+            <p id="thinking-hint" class="hint">Auto uses the model default (Qwen: xhigh). Clients can override the level per request. The level is ignored while Thinking is Off.</p>
             <p class="hint">Use this name in your chat client. The API listens on localhost.</p>
           </section>
           <section class="card" aria-labelledby="sampling-heading">

@@ -5,7 +5,7 @@ button, input, select { font: inherit; }
 button, summary { cursor: pointer; }
 button { border: 1px solid #ccd7cc; border-radius: 8px; padding: 9px 15px; background: var(--surface); color: var(--ink); font-weight: 600; white-space: nowrap; }
 button:hover:not(:disabled) { background: #eaf0e6; border-color: #93ad96; }
-button:disabled { opacity: .45; cursor: default; }
+button:disabled, select:disabled { opacity: .45; cursor: default; }
 button.primary { background: var(--green); border-color: var(--green); color: white; }
 button.primary:hover:not(:disabled) { background: #143d30; }
 button.quiet { background: transparent; border-color: transparent; color: var(--muted); }

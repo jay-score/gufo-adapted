@@ -35,7 +35,11 @@ launcher opens at **http://127.0.0.1:8090**. Keep its terminal open.
 The launcher starts with 32K context, one session, a 2,048-token output limit,
 and Flash-Next thinking sampler values (temperature 1, top-p 0.95, top-k 20,
 min-p 0). These are editable launcher defaults, not universal model settings.
-Changing the thinking control does not rewrite your sampler settings. API
+**Default thinking level** offers Auto, Low, Medium, and Xhigh. Auto omits
+`--reasoning-effort`, leaving Qwen's default of xhigh. The other levels set a
+server default that clients can override per request. The selection is saved;
+when Thinking is Off, the level is disabled and its flag is omitted.
+Changing the thinking controls does not rewrite your sampler settings. API
 clients can override the server's generation defaults per request.
 
 Settings live in `%LOCALAPPDATA%\Gufo\launcher.json`. Saving is explicit and

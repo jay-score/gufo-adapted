@@ -20,6 +20,7 @@ DEFAULTS = {
     "context": 32768,
     "max_tokens": 2048,
     "think": "on",
+    "reasoning_effort": "auto",
     "port": 8080,
     "served_model_name": "gufo",
     "sessions": 1,
@@ -49,7 +50,8 @@ FLOAT_LIMITS = {
     "repeat_penalty": (0, 100), "frequency_penalty": (-2, 2),
     "presence_penalty": (-2, 2),
 }
-ENUMS = {"think": ("auto", "on", "off"), "mtp_policy": ("length", "survival"),
+ENUMS = {"think": ("auto", "on", "off"), "reasoning_effort": ("auto", "low", "medium", "xhigh"),
+         "mtp_policy": ("length", "survival"),
          "mtp_draft_vocab": ("full", "latin")}
 CLI_FIELDS = (
     "context", "max_tokens", "think", "served_model_name", "temperature",
@@ -165,6 +167,8 @@ def build_command(values, *, check_files=False):
                "llm", "--model", settings["model"]]
     for key in CLI_FIELDS:
         command.extend(["--" + key.replace("_", "-"), str(settings[key])])
+    if settings["think"] != "off" and settings["reasoning_effort"] != "auto":
+        command.extend(["--reasoning-effort", settings["reasoning_effort"]])
     if settings["mmproj"]:
         command.extend(["--mmproj", settings["mmproj"]])
     command.extend(["--speculative", "mtp" if settings["mtp"] else "off"])

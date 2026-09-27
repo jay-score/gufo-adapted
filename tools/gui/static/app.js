@@ -39,6 +39,7 @@ function updateControls() {
   $("save-button").disabled = !loaded || busy || closed;
   $("exit-button").disabled = busy || closed;
   $("mtp-options").disabled = !$("mtp").checked;
+  $("reasoning_effort").disabled = $("think").value === "off";
   $("mtp-files").hidden = !$("mtp").checked;
   for (const key of ["model", "mtp_model", "mmproj"]) {
     $(key).title = $(key).value;
