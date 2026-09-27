@@ -24,6 +24,12 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
+$revision = "development"
+if ((Test-Path "$root\.git") -and (Get-Command git -ErrorAction SilentlyContinue)) {
+  $revision = & git -C $root describe --always --long --dirty --abbrev=12
+  if ($LASTEXITCODE -ne 0) { throw "cannot identify the source revision" }
+}
+Write-Host "Gufo revision: $revision"
 
 # The port is validated on one TheRock release; a newer clang can round the
 # fused kernels differently (see docs\WINDOWS.md).
@@ -79,6 +85,7 @@ cmake -S $root --preset $Preset `
   "-DVCPKG_INSTALLED_DIR=$($root.Replace('\', '/'))/build/vcpkg_installed" `
   "-DCMAKE_PREFIX_PATH=$($Rocm.Replace('\', '/'))" `
   "-DCMAKE_LINKER_TYPE=LLD" `
+  "-DGUFO_VERSION=$revision" `
   @CMakeArgs
 if ($LASTEXITCODE -ne 0) { throw "configure failed" }
 

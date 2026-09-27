@@ -35,6 +35,9 @@ projects' packages, and reconfigures on each invocation. The first build needs
 network access and can take several minutes to build the dependencies.
 Existing classic-mode CMake caches are cleared once during migration so they
 cannot retain paths to the old global dependencies.
+Git checkouts also embed the source revision in `gufo --version`, including a
+`-dirty` suffix for modified tracked files. Record this output with benchmark
+results. Source archives without Git metadata keep the `development` fallback.
 
 ## Running Qwen3.8-Flash-Next
 
