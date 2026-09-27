@@ -39,7 +39,53 @@ Each model guide lists the required files and complete benchmark settings.
 - Treat concurrent requests, cancellation and conversation caching as first-class workloads.
 - Keep production dependencies small and development tools separate.
 
-## Quickstart
+## Windows quickstart
+
+Run Qwen3.8-Flash-Next natively on **Windows 11, Strix Halo / gfx1151, 128 GB RAM**.
+Set **96 GB dedicated GPU memory** in AMD Software → Performance → Tuning →
+Variable Graphics Memory. Install Git and Python, then use PowerShell:
+
+1. Clone this fork and check the build requirements:
+
+   ```powershell
+   git clone --branch windows-port https://github.com/thomas9120/gufo.git
+   cd gufo
+   powershell -ExecutionPolicy Bypass -File tools\windows\check.ps1
+   ```
+
+   Follow the check's instructions to install anything missing: TheRock ROCm
+   10.0.0, Visual Studio C++ Build Tools, CMake, Ninja and vcpkg. See the
+   [Windows prerequisites](docs/WINDOWS.md#prerequisites) for download links
+   and installation paths. Rerun the check until it passes.
+
+2. Build Gufo. The first build also downloads and builds the pinned dependencies:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File tools\windows\build.ps1
+   ```
+
+3. Download the pinned Q4 model and Q8 MTP sidecar into the Hugging Face cache:
+
+   ```powershell
+   python -m pip install -U huggingface_hub
+   hf download unsloth/Qwen3.8-Flash-Next-GGUF --revision 38bb39ee97821de2c9009abb7e93950eec396e66 --include "UD-Q4_K_XL/*" "MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf"
+   ```
+
+4. Start the server:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File tools\windows\run-flash-next.ps1
+   ```
+
+   Wait for `event=load_completed`, then connect your OpenAI-compatible chat
+   client to **`http://127.0.0.1:8080/v1`** with model **`flash-next`**.
+   Keep the terminal open while using Gufo; press **Ctrl+C** to stop it.
+
+The launcher enables MTP and thinking by default. See the
+[Windows guide](docs/WINDOWS.md#running-qwen38-flash-next) for existing model
+directories, context settings and optional decode switches.
+
+## Linux quickstart
 
 ```sh
 hf download unsloth/Qwen3.8-27B-GGUF \
