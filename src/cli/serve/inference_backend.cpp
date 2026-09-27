@@ -543,6 +543,10 @@ public:
     rollback_position_ = position_;
     rollback_tokens_.assign(1, *frontier_);
     rollback_logits_ = std::move(frontier_logits_);
+    // Verification keeps its own EOS handling: the tokenizer stop set already
+    // covers EOS, so a sentinel id here would change nothing. An ignore-EOS
+    // request instead publishes the stop token in AppendSpeculativeSelection
+    // and continues, at the cost of a window clipped on every EOS crossing.
     return {*verifier_,
             sequence_,
             static_cast<std::uint32_t>(position_),
@@ -705,7 +709,7 @@ private:
   bool AppendSpeculativeSelection(TextRunnerToken token,
                                   sampling::SamplerState& sampler,
                                   TextDecodeStep& result) {
-    if (model_->GetTokenizer().IsStopToken(token)) {
+    if (stop_at_eos() && model_->GetTokenizer().IsStopToken(token)) {
       result.stop = true;
       return false;
     }
@@ -1000,7 +1004,7 @@ public:
       TextRunnerState& state, sampling::SamplerState& sampler) const override {
     auto& qwen = RequireQwenState(state);
     const TextRunnerToken token = qwen.SelectFrontier(sampler);
-    if (model_->GetTokenizer().IsStopToken(token)) {
+    if (qwen.stop_at_eos() && model_->GetTokenizer().IsStopToken(token)) {
       return {
           .stop = true,
           .token = 0,
@@ -1777,7 +1781,7 @@ public:
       }
       token = static_cast<int>(sampler.Sample(logits));
     }
-    if (model_->IsStopToken(token)) {
+    if (deepseek.stop_at_eos() && model_->IsStopToken(token)) {
       return {
           .stop = true,
           .token = 0,
@@ -1814,7 +1818,8 @@ public:
       throw std::runtime_error("DeepSeek token preview failed: " + error);
     const auto token = sampler.Sample(logits);
     return TextDecodeSelection{
-        .stop = model_->IsStopToken(static_cast<int>(token)),
+        .stop = deepseek.stop_at_eos() &&
+                model_->IsStopToken(static_cast<int>(token)),
         .token = token,
         .piece = model_->DecodeToken(static_cast<int>(token)),
     };
@@ -1843,7 +1848,7 @@ public:
     std::string error;
     if (!deepseek.session().DsparkStep(
             max_tokens, max_draft_tokens_, &emitted, &error,
-            bridge ? bridge->hook() : nullptr, true)) {
+            bridge ? bridge->hook() : nullptr, deepseek.stop_at_eos())) {
       throw std::runtime_error("DeepSeek DSpark decode failed: " + error);
     }
     if (emitted.empty()) {
@@ -1857,7 +1862,7 @@ public:
     deepseek.set_position(deepseek.session().Position());
     step.selections.reserve(emitted.size());
     for (const int token : emitted) {
-      if (model_->IsStopToken(token)) {
+      if (deepseek.stop_at_eos() && model_->IsStopToken(token)) {
         step.stop = true;
         break;
       }
@@ -1926,7 +1931,7 @@ public:
           .max_draft_tokens = max_draft_tokens_,
           .emitted = &emitted[index],
           .sampler = bridges[index] ? bridges[index]->hook() : nullptr,
-          .stop_at_eos = true,
+          .stop_at_eos = states[index]->stop_at_eos(),
       };
     }
 
@@ -1954,7 +1959,7 @@ public:
       states[index]->set_position(states[index]->session().Position());
       step.selections.reserve(emitted[index].size());
       for (const int token : emitted[index]) {
-        if (model_->IsStopToken(token)) {
+        if (states[index]->stop_at_eos() && model_->IsStopToken(token)) {
           step.stop = true;
           break;
         }
@@ -2441,7 +2446,7 @@ public:
           "Qwen3.8-Flash-Next token selection has no logits");
     }
     const auto token = static_cast<std::int32_t>(sampler.Sample(logits));
-    if (model_->IsStopToken(token)) {
+    if (qfn.stop_at_eos() && model_->IsStopToken(token)) {
       return {.stop = true, .token = 0, .piece = {}};
     }
     return {
@@ -2490,7 +2495,8 @@ public:
     std::string error;
     const auto budget =
         std::min<std::size_t>(max_tokens, std::uint64_t{max_draft_tokens_} + 1);
-    if (!qfn.session().DecodeStep(budget, working_sampler, &decoded, &error)) {
+    if (!qfn.session().DecodeStep(budget, working_sampler, &decoded, &error,
+                                  qfn.stop_at_eos())) {
       throw std::runtime_error("Qwen3.8-Flash-Next MTP decode failed: " +
                                error);
     }
@@ -2563,15 +2569,15 @@ public:
     before.reserve(count);
     requests.reserve(count);
     for (std::size_t i = 0; i < count; ++i) {
-      auto& session =
-          RequireQwenFlashNextState(decodes[i].state.get()).session();
+      auto& state = RequireQwenFlashNextState(decodes[i].state.get());
+      auto& session = state.session();
       auto& sampler = samplers.emplace_back(decodes[i].sampler.get());
       before.push_back(session.Statistics());
       requests.push_back(
           {&session,
            std::min<std::size_t>(decodes[i].max_tokens,
                                  std::uint64_t{max_draft_tokens_} + 1),
-           &sampler, &results[i], true, &outcomes[i]});
+           &sampler, &results[i], state.stop_at_eos(), &outcomes[i]});
     }
     std::string error;
     (void)QwenFlashNextSession::DecodeBatch(requests, &error);
@@ -3483,6 +3489,44 @@ InferenceBackend::Result InferenceBackend::chat(
   (void)is_cancelled;
   (void)on_token;
   return {};
+#endif
+}
+
+std::shared_ptr<InferenceBackend::GenerationRequest>
+InferenceBackend::start_complete(
+    std::string_view prompt, std::size_t max_tokens,
+    const sampling::SamplingConfig& sampling_config,
+    const CancellationCheck& is_cancelled, bool stream_output, bool ignore_eos,
+    std::string_view client_id,
+    const std::vector<std::string>& stop_sequences) {
+#if defined(ENGINE_ENABLE_HIP)
+  const auto request_start = Clock::now();
+  const auto state = impl_->Snapshot();
+  if (state == nullptr) {
+    return TextGenerationBackend::start_complete(
+        prompt, max_tokens, sampling_config, is_cancelled, stream_output,
+        ignore_eos, client_id, stop_sequences);
+  }
+  auto prompt_tokens = state->scheduler->runner().Tokenize(prompt);
+  auto scheduled_request = state->scheduler->Submit(
+      std::move(prompt_tokens), max_tokens, sampling_config, is_cancelled,
+      stream_output,
+      TextRequestMetadata{
+          .client_id = client_id.empty() ? "anonymous" : std::string(client_id),
+          .deadline = std::nullopt,
+          .request_start = request_start,
+          .prompt_context = {},
+          .cache_prompt = true,
+          .cache_prefix_tokens = 0,
+          .stop_at_eos = !ignore_eos,
+          .stop_sequences = stop_sequences,
+      });
+  return std::make_shared<Impl::ScheduledGenerationRequest>(
+      state, std::move(scheduled_request));
+#else
+  return TextGenerationBackend::start_complete(
+      prompt, max_tokens, sampling_config, is_cancelled, stream_output,
+      ignore_eos, client_id, stop_sequences);
 #endif
 }
 
