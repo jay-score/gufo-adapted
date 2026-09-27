@@ -2,15 +2,52 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, windows-port ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, windows-port ]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  windows-cpu:
+    name: Windows CPU and launcher checks
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout pinned vcpkg
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: microsoft/vcpkg
+          ref: 9e2895bf6afb246396d85232ba70fcfa1fa67ba1
+          path: .vcpkg
+      - name: Install CPU dependencies
+        shell: pwsh
+        run: |
+          & .\.vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.vcpkg\vcpkg.exe install icu curl openssl libpng libjpeg-turbo --triplet x64-windows --disable-metrics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and test without a GPU
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          cmd /c "`"$vcvars`" >nul && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
+          }
+          cmake --preset cpu-test -DCMAKE_C_COMPILER="C:/Program Files/LLVM/bin/clang.exe" -DCMAKE_CXX_COMPILER="C:/Program Files/LLVM/bin/clang++.exe" "-DCMAKE_TOOLCHAIN_FILE=$pwd/.vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset cpu-test --parallel 2 --target platform_tuning_test openai_chat_test http_server_test continuation_disk_store_test qwen38_flash_next_mtp_sampling_test qwen38_flash_next_prompt_lookup_test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item .vcpkg/installed/x64-windows/bin/*.dll build/cpu-test -Force
+          ctest --test-dir build/cpu-test --output-on-failure --no-tests=error --timeout 120 -R '^(platform_tuning_test|openai_chat_test|http_server_test|continuation_disk_store_test|qwen38_flash_next\.(mtp_sampling|prompt_lookup))$'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/tools/windows_launcher_test.py
+
   build-and-test:
     name: CPU contracts & repository checks
     runs-on: ubuntu-latest
