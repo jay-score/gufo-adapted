@@ -2,6 +2,7 @@
 
 from collections import deque
 import json
+import math
 import os
 from pathlib import Path
 import socket
@@ -10,6 +11,29 @@ import threading
 import time
 import urllib.error
 import urllib.request
+
+
+def parse_metrics(text):
+    fields = {
+        "llamacpp:prompt_tokens_seconds": "prefill_tps",
+        "llamacpp:predicted_tokens_seconds": "generation_tps",
+        "llamacpp:prompt_tokens_total": "prompt_tokens_total",
+        "llamacpp:tokens_predicted_total": "generated_tokens_total",
+    }
+    metrics = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if not parts or parts[0] not in fields:
+            continue
+        if len(parts) < 2:
+            raise ValueError("Missing metric value")
+        value = float(parts[1])
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("Invalid metric value")
+        metrics[fields[parts[0]]] = value
+    if len(metrics) != len(fields):
+        raise ValueError("Incomplete Gufo metrics")
+    return metrics
 
 
 class ProcessManager:
@@ -24,10 +48,12 @@ class ProcessManager:
         self.base_url = ""
         self.model_name = ""
         self.started_at = None
+        self.metrics = None
 
     def snapshot(self):
         with self.lock:
             return {"state": self.state, "error": self.error, "exit_code": self.exit_code,
+                    "metrics": self.metrics if self.state == "ready" else None,
                     "logs": list(self.logs), "command": list(self.command),
                     "base_url": self.base_url, "model_name": self.model_name,
                     "pid": self.process.pid if self.process and self.process.poll() is None else None,
@@ -54,6 +80,7 @@ class ProcessManager:
                 connection.close()
                 raise ValueError(f"Port {port} is already in use. Choose another port.")
             self.logs.clear()
+            self.metrics = None
             self.command = list(command)
             self.base_url = f"http://127.0.0.1:{port}/v1"
             self.model_name = model_name
@@ -88,11 +115,13 @@ class ProcessManager:
     def _watch(self, child, port, model_name):
         # Local probes must not inherit HTTP proxy settings from the user's shell.
         client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        next_metrics_poll = 0.0
         while child.poll() is None:
             with self.lock:
                 if self.process is not child:
                     return
                 loading = self.state == "loading"
+                ready = self.state == "ready"
             if loading:
                 try:
                     with client.open(f"http://127.0.0.1:{port}/ready", timeout=0.5) as response:
@@ -103,6 +132,19 @@ class ProcessManager:
                             self.state = "ready"
                 except (OSError, ValueError, urllib.error.URLError):
                     pass  # The model loads before Gufo starts listening.
+            elif ready and time.monotonic() >= next_metrics_poll:
+                try:
+                    with client.open(f"http://127.0.0.1:{port}/metrics", timeout=0.5) as response:
+                        metrics = parse_metrics(response.read(16384).decode("utf-8"))
+                except urllib.error.HTTPError as error:
+                    error.close()
+                    metrics = None
+                except (OSError, ValueError, urllib.error.URLError):
+                    metrics = None
+                with self.lock:
+                    if self.process is child and self.state == "ready":
+                        self.metrics = metrics
+                next_metrics_poll = time.monotonic() + 1.0
             time.sleep(0.25)
         with self.lock:
             if self.process is child:

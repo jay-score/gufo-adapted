@@ -64,8 +64,29 @@ function edited() {
   previewTimer = setTimeout(preview, 250);
 }
 
+function renderMetrics(state) {
+  const metrics = state.state === "ready" ? state.metrics : null;
+  for (const [id, key, speed] of [
+    ["prefill-speed", "prefill_tps", true], ["generation-speed", "generation_tps", true],
+    ["prompt-total", "prompt_tokens_total", false], ["generated-total", "generated_tokens_total", false],
+  ]) {
+    const value = metrics?.[key];
+    $(id).textContent = Number.isFinite(value) && (!speed || value > 0)
+      ? value.toLocaleString(undefined, { minimumFractionDigits: speed ? 1 : 0, maximumFractionDigits: speed ? 1 : 0 }) : "—";
+  }
+  $("metrics-note").textContent = state.state === "ready"
+    ? !metrics ? "Performance unavailable. Retrying…"
+      : metrics.prompt_tokens_total === 0 && metrics.generated_tokens_total === 0
+        ? "Waiting for the first completed request."
+        : "Updates about once per second after requests finish."
+    : ({ loading: "Performance will appear when the model is ready.",
+         stopping: "Stopping Gufo…", failed: "Performance unavailable while Gufo is stopped.",
+         disconnected: "Performance unavailable. Launcher disconnected." }[state.state] || "Start Gufo to see performance.");
+}
+
 function renderStatus(state) {
   runtime = state;
+  renderMetrics(state);
   const title = state.state[0].toUpperCase() + state.state.slice(1);
   $("status").textContent = state.state === "loading" ? `${title} · ${state.elapsed_seconds}s` : title;
   $("status").className = `status ${state.state}`;
@@ -117,6 +138,7 @@ $("stop-button").addEventListener("click", () => action(async () => renderStatus
 $("exit-button").addEventListener("click", () => action(async () => {
   await api("exit", {});
   closed = true;
+  renderMetrics({ state: "stopped" });
   $("status").textContent = "Launcher closed";
   $("status").className = "status stopped";
   $("runtime-note").textContent = "Gufo has stopped. You can close this tab.";
@@ -213,6 +235,7 @@ async function poll() {
   catch (error) {
     if (closed) return;
     $("status").textContent = "Disconnected";
+    renderMetrics({ state: "disconnected" });
     $("status").className = "status failed";
     $("runtime-note").textContent = `Cannot reach the launcher. ${error.message}`;
   }

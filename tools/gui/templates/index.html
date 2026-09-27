@@ -100,6 +100,17 @@
       <div class="runtime-heading"><h2 id="runtime-heading">Server</h2><span id="status" class="status stopped" role="status">Stopped</span></div>
       <div class="connection"><span>API base URL</span><code id="api-url">http://127.0.0.1:8080/v1</code><button type="button" id="copy-url" class="quiet">Copy</button><span id="active-model"></span></div>
       <p class="hint" id="runtime-note">Start Gufo to connect your OpenAI-compatible client.</p>
+      <section class="performance" aria-labelledby="performance-heading">
+        <h3 id="performance-heading">Performance</h3>
+        <dl class="metrics-grid">
+          <div><dt>Prefill speed <span>tok/s</span></dt><dd id="prefill-speed">—</dd></div>
+          <div><dt>Generation speed <span>tok/s</span></dt><dd id="generation-speed">—</dd></div>
+          <div><dt>Prompt tokens <span>total</span></dt><dd id="prompt-total">—</dd></div>
+          <div><dt>Generated tokens <span>total</span></dt><dd id="generated-total">—</dd></div>
+        </dl>
+        <p class="hint" id="metrics-note">Start Gufo to see performance.</p>
+        <p class="hint">Speeds are the last completed nonzero measurements, not live rates. Fully cached prompts retain the previous prefill speed. Token totals cover this server run and include cached prompt tokens.</p>
+      </section>
       <details id="logs-details"><summary>Process log <span>Last 300 lines</span></summary><pre id="logs">No process output yet.</pre></details>
       <details><summary>Command preview <span>Next launch</span></summary><pre id="command">Choose a model to get started.</pre></details>
     </section>

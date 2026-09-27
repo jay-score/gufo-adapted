@@ -55,6 +55,16 @@ optional disk continuation cache. The GUI does not enable that cache.
 
 ## Options and checks
 
+The **Performance** section polls Gufo's `/metrics` endpoint about once per
+second while the server is ready, including when requests come from another
+chat client. It shows prefill and generation tokens/second plus cumulative
+prompt and generated token counts for the current server run. Speeds are the
+last completed nonzero measurements, not live rates during generation; a fully
+cached prompt retains the previous prefill speed. Prefill speed excludes cached
+tokens, while the prompt total includes them. Missing measurements appear as
+dashes, and unavailable metrics are retried without adding process-log entries.
+Restart the launcher after updating its code to load the new panel.
+
 - The control panel and Gufo both bind to localhost. Their ports must differ.
   `gui.ps1 -Port 8091` changes the control panel's port; the form sets Gufo's port.
 - `gui.ps1 -Config C:\path\launcher.json` uses another settings file.
