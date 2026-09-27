@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <numeric>
+#include <random>
 #include <stdexcept>
 #include <string_view>
 #include <vector>
@@ -30,6 +32,59 @@ void TestGreedySelectsFiniteArgmaxWithoutAdvancingRng() {
 
   Expect(token == 1, "greedy sampling selects the finite argmax");
   Expect(rng_state == 1234, "greedy sampling does not consume RNG state");
+}
+
+void TestTopCandidateDistributionMatchesFullRows() {
+  using namespace gufo::sampling;
+  std::mt19937 random(12345);
+  unsigned fast = 0, fallback = 0;
+  for (unsigned trial = 0; trial < 10000; ++trial) {
+    constexpr unsigned vocab = 128;
+    std::vector<float> logits(vocab);
+    for (auto& value : logits)
+      value = static_cast<float>(static_cast<int>(random() % 101) - 50) / 7;
+    if (trial % 5 == 0) {
+      std::fill(logits.begin() + 12, logits.end(),
+                -std::numeric_limits<float>::infinity());
+    }
+    std::vector<TokenId> ids(vocab);
+    std::iota(ids.begin(), ids.end(), 0);
+    std::sort(ids.begin(), ids.end(), [&](auto a, auto b) {
+      return logits[a] == logits[b] ? a < b : logits[a] > logits[b];
+    });
+    ids.resize(64);
+    std::vector<float> top;
+    for (auto id : ids)
+      top.push_back(logits[id]);
+    SamplingConfig config;
+    config.temperature = 0.2F + static_cast<float>(random() % 20) / 10;
+    config.top_k = static_cast<int>(random() % 80);
+    config.top_p = 0.1F + static_cast<float>(random() % 10) / 10;
+    config.min_p = static_cast<float>(random() % 5) / 10;
+    config.min_keep = random() % 5;
+    config.seed = trial;
+    SamplerState full(config), compact(config);
+    const auto expected = full.Distribution(logits);
+    const auto actual = compact.DistributionFromTop(top, ids, vocab);
+    if (!actual) {
+      ++fallback;
+      continue;
+    }
+    ++fast;
+    for (unsigned id = 0; id < vocab; ++id) {
+      Expect(expected.probability(id) == actual->probability(id),
+             "top candidates must preserve every target probability");
+    }
+    for (unsigned draw = 0; draw < 16; ++draw) {
+      const auto expected_token = full.Sample(logits);
+      const auto actual_token = compact.SampleFromTop(top, ids, vocab);
+      Expect(actual_token && expected_token == *actual_token &&
+                 full.rng_state() == compact.rng_state(),
+             "top candidates must preserve sampled tokens and RNG state");
+    }
+  }
+  Expect(fast > 0 && fallback > 0,
+         "exercise both the fast path and full-row fallback");
 }
 
 void TestDefaultConfigPreservesGreedyDecoding() {
@@ -541,6 +596,7 @@ int main() {
   }
   Expect(sub_float_resolution, "uniform must exceed float resolution");
   TestCanonicalTargetDistribution();
+  TestTopCandidateDistributionMatchesFullRows();
   TestResponsePenaltyScope();
   TestGreedySelectsFiniteArgmaxWithoutAdvancingRng();
   TestDefaultConfigPreservesGreedyDecoding();
