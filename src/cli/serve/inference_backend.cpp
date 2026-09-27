@@ -63,11 +63,15 @@ struct QwenImageContext final : TextPromptContext {
   }
 };
 
-tokenization::ChatTemplateOptions QwenChatOptions(const ChatRequest& request) {
+tokenization::ChatTemplateOptions QwenChatOptions(const ChatRequest& request,
+                                                  std::uint32_t max_context) {
   auto options = tokenization::ResolveQwenChatOptions(request.reasoning,
                                                       request.add_vision_id);
   options.require_tool_call =
       request.tool_choice == ChatRequest::ToolChoice::kRequired;
+  // gufo #285: the rendered prompt may be as long as the context can hold.
+  options.max_output_bytes =
+      tokenization::RenderedPromptBoundBytes(max_context);
   return options;
 }
 
@@ -77,7 +81,7 @@ TextPreparedPrompt PrepareQwenPrompt(
     std::uint32_t max_context) {
   const bool has_images = std::ranges::any_of(
       request.messages, [](const auto& m) { return !m.images.empty(); });
-  const auto options = QwenChatOptions(request);
+  const auto options = QwenChatOptions(request, max_context);
   auto prompt = std::make_shared<models::qwen::vision::Prompt>(
       models::qwen::vision::Prepare(
           tokenizer, request.messages,
@@ -890,7 +894,7 @@ public:
         request.tool_choice == ChatRequest::ToolChoice::kNone
             ? std::span<const tokenization::ChatTool>{}
             : std::span<const tokenization::ChatTool>{request.tools},
-        QwenChatOptions(request));
+        QwenChatOptions(request, max_context_));
   }
 
   [[nodiscard]] std::optional<TextPreparedPrompt> PreparePrompt(
@@ -908,7 +912,7 @@ public:
 
   [[nodiscard]] TextGenerationBackend::InitialOutputState InitialOutputState(
       const ChatRequest& request) const override {
-    return QwenChatOptions(request).enable_thinking
+    return QwenChatOptions(request, max_context_).enable_thinking
                ? TextGenerationBackend::InitialOutputState::kReasoning
                : TextGenerationBackend::InitialOutputState::kContent;
   }
@@ -2355,7 +2359,7 @@ public:
         request.tool_choice == ChatRequest::ToolChoice::kNone
             ? std::span<const tokenization::ChatTool>{}
             : std::span<const tokenization::ChatTool>{request.tools},
-        QwenChatOptions(request));
+        QwenChatOptions(request, max_context_));
   }
 
   [[nodiscard]] std::optional<TextPreparedPrompt> PreparePrompt(
@@ -2373,7 +2377,7 @@ public:
 
   [[nodiscard]] TextGenerationBackend::InitialOutputState InitialOutputState(
       const ChatRequest& request) const override {
-    return QwenChatOptions(request).enable_thinking
+    return QwenChatOptions(request, max_context_).enable_thinking
                ? TextGenerationBackend::InitialOutputState::kReasoning
                : TextGenerationBackend::InitialOutputState::kContent;
   }
