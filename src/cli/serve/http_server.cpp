@@ -562,6 +562,12 @@ HttpResponse ListModels(TextGenerationBackend* backend,
     model["object"] = "model";
     model["created"] = Now();
     model["owned_by"] = "gufo";
+    auto input = json::Value::array();
+    input.push_back("text");
+    if (backend->supports_image_input())
+      input.push_back("image");
+    model["architecture"] = json::Value::object();
+    model["architecture"]["input_modalities"] = std::move(input);
     data.push_back(std::move(model));
   }
   if (video_jobs != nullptr && video_jobs->ready()) {
@@ -856,14 +862,17 @@ HttpResponse LlamaCompletion(const HttpRequest& req,
              "invalid_prompt");
 }
 
-HttpResponse LlamaProps(const HttpRequest& req, TextGenerationBackend&) {
+HttpResponse LlamaProps(const HttpRequest& req,
+                        TextGenerationBackend& backend) {
   const std::string model = req.query_param("model");
-  if (model.empty()) {
-    return Err(400, "Bad Request", "'model' query parameter is required",
-               "invalid_request_error", "missing_model");
+  if (!model.empty() && model != backend.model_id()) {
+    return Err(404, "Not Found", "requested model is not loaded",
+               "invalid_request_error", "model_not_found");
   }
   json::Value resp = json::Value::object();
-  resp["model"] = model;
+  resp["model"] = backend.model_id();
+  resp["modalities"] = json::Value::object();
+  resp["modalities"]["vision"] = backend.supports_image_input();
   resp["template"] = "";
   json::Value model_info = json::Value::object();
   resp["model_info"] = std::move(model_info);

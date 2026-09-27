@@ -46,6 +46,7 @@ public:
   }
   std::string model_id() const override { return "test"; }
   bool ready() const override { return true; }
+  bool supports_image_input() const override { return vision; }
   gufo::ReasoningOptions reasoning_defaults() const override {
     return reasoning;
   }
@@ -116,6 +117,7 @@ public:
     return result;
   }
   std::atomic<int> calls{0};
+  bool vision{false};
   std::atomic<int> failure{0};
   std::string forced_stop_sequence;
   gufo::ReasoningOptions reasoning;
@@ -230,6 +232,35 @@ void ExpectStatus(const std::string& response, int status) {
     std::cerr << response << '\n';
     std::abort();
   }
+}
+
+void TestVisionDiscovery() {
+  RunningServer server;
+  for (const bool vision : {false, true, false}) {
+    server.backend->vision = vision;
+    const auto models = server.Send("GET /v1/models HTTP/1.1\r\n\r\n");
+    ExpectStatus(models, 200);
+    const auto body =
+        gufo::json::parse(models.substr(models.find("\r\n\r\n") + 4));
+    const auto& model = body.find("data")->items().front();
+    const auto& input =
+        model.find("architecture")->find("input_modalities")->items();
+    assert(model.member_str("id") == "test" && input[0].str() == "text");
+    assert(input.size() == (vision ? 2 : 1));
+    if (vision)
+      assert(input[1].str() == "image");
+    for (const auto* path : {"/props", "/props?model=test"}) {
+      const auto response =
+          server.Send("GET " + std::string(path) + " HTTP/1.1\r\n\r\n");
+      ExpectStatus(response, 200);
+      const auto props =
+          gufo::json::parse(response.substr(response.find("\r\n\r\n") + 4));
+      assert(props.member_str("model") == "test");
+      assert(props.find("modalities")->find("vision")->as_bool() == vision);
+    }
+  }
+  ExpectStatus(server.Send("GET /props?model=other HTTP/1.1\r\n\r\n"), 404);
+  assert(server.backend->calls == 0);
 }
 
 void TestAuthorization() {
@@ -844,6 +875,7 @@ int main() {
   TestInvalidBindSettings();
   TestQueryParameters();
   TestAuthorization();
+  TestVisionDiscovery();
   TestFramingAndMetrics();
   TestCompatibilityRequests();
   TestCompatibilityStopSequences();

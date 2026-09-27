@@ -439,6 +439,15 @@ Chat messages retain roles, reasoning, tool calls and image content until the
 model's tokenizer and template turn them into model input. The scheduler owns
 request limits, cancellation, cache accounting and completion state.
 
+## Model Discovery
+
+Model discovery at `/v1/models` reports `architecture.input_modalities` as
+`["text", "image"]` only when the loaded text model has a vision encoder;
+otherwise it reports `["text"]`. `/props` exposes the same capability as
+`modalities.vision` for llama.cpp-compatible clients. Its optional `model`
+query parameter must match the loaded model. Selecting a model for a client's
+vision role does not itself enable image input; load a compatible projector.
+
 ## Responses API Subset
 
 `POST /v1/responses` accepts `model`, `input` as text or conversation-item arrays,
