@@ -7,10 +7,14 @@ and start or stop inference. The engine remains a separate executable.
 ## Start on Windows
 
 Build Gufo using the [Windows instructions](../../docs/WINDOWS.md), and install
-Python 3.10 or newer. From the repository root:
+Python 3.10 or newer. Double-click **[launch-gui.bat](../../launch-gui.bat)**
+in the repository folder, or create a desktop shortcut to it. If startup fails,
+the terminal stays open so you can read the error.
+
+You can still launch from a terminal and pass options:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\windows\gui.ps1
+.\launch-gui.bat -Port 8090
 ```
 
 The first run creates `build/gui-env` and installs Flask and Waitress. Subsequent
