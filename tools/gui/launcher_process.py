@@ -12,6 +12,9 @@ import time
 import urllib.error
 import urllib.request
 
+if os.name == "nt":
+    from windows_job import WindowsJob
+
 
 def parse_metrics(text):
     fields = {
@@ -39,7 +42,9 @@ def parse_metrics(text):
 class ProcessManager:
     def __init__(self):
         self.lock = threading.RLock()
+        self.lifecycle_lock = threading.Lock()
         self.process = None
+        self.job = None
         self.state = "stopped"
         self.error = ""
         self.exit_code = None
@@ -60,7 +65,7 @@ class ProcessManager:
                     "elapsed_seconds": int(time.monotonic() - self.started_at) if self.started_at else 0}
 
     def start(self, command, port, model_name):
-        with self.lock:
+        with self.lifecycle_lock, self.lock:
             if self.state == "stopping" or (self.process and self.process.poll() is None):
                 raise ValueError("Stop the running Gufo server before starting another.")
             # Match Gufo's address reuse so TIME_WAIT does not block a restart.
@@ -88,14 +93,34 @@ class ProcessManager:
             self.exit_code = None
             self.started_at = time.monotonic()
             self.process = None  # Retire any observer from an earlier exited child.
+            if self.job is not None:
+                self.job.close()
+                self.job = None
+            child = None
             try:
+                if os.name == "nt":
+                    self.job = WindowsJob()
                 child = subprocess.Popen(
                     command, cwd=Path(command[0]).parent, shell=False,
                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, encoding="utf-8", errors="replace",
                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
                 )
+                if self.job is not None:
+                    try:
+                        self.job.assign(child)
+                    except OSError:
+                        # An already-exited child needs no lifetime protection.
+                        if child.poll() is None:
+                            raise
             except OSError as exc:
+                if child is not None:
+                    child.kill()
+                    child.wait()
+                    child.stdout.close()
+                if self.job is not None:
+                    self.job.close()
+                    self.job = None
                 self.state = "failed"
                 self.error = f"Could not launch Gufo: {exc}"
                 raise ValueError(self.error) from exc
@@ -146,8 +171,11 @@ class ProcessManager:
                         self.metrics = metrics
                 next_metrics_poll = time.monotonic() + 1.0
             time.sleep(0.25)
-        with self.lock:
+        with self.lifecycle_lock, self.lock:
             if self.process is child:
+                if self.job is not None:
+                    self.job.close()
+                    self.job = None
                 self.exit_code = child.returncode
                 if self.state == "stopping":
                     self.state = "stopped"
@@ -156,28 +184,31 @@ class ProcessManager:
                     self.error = f"Gufo exited with code {child.returncode}. Check the process log below."
 
     def stop(self):
-        with self.lock:
-            child = self.process
-            if child is None or child.poll() is not None:
-                self.state = "stopped"
-                self.error = ""
-                return self.snapshot()
-            self.state = "stopping"
-        try:
-            # On Windows this terminates only our owned child. Gufo currently has
-            # no HTTP shutdown endpoint or handled CTRL_BREAK shutdown path.
-            child.terminate()
-            try:
-                child.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait(timeout=5)
-        except ProcessLookupError:
-            pass
-        finally:
+        # Serialize ownership changes without blocking output draining/status
+        # while waiting for a child to exit.
+        with self.lifecycle_lock:
             with self.lock:
-                if self.process is child:
-                    self.exit_code = child.poll()
-                    self.state = "stopped" if child.poll() is not None else "failed"
-                    self.error = "" if self.state == "stopped" else "Gufo could not be stopped; try Stop again."
-        return self.snapshot()
+                child = self.process
+                self.state = "stopping"
+            error = ""
+            try:
+                if self.job is not None:
+                    self.job.terminate()
+                elif child is not None and child.poll() is None:
+                    child.terminate()
+                if child is not None:
+                    try:
+                        child.wait(timeout=8)
+                    except subprocess.TimeoutExpired:
+                        child.kill()
+                        child.wait(timeout=5)
+                if self.job is not None:
+                    self.job.close()
+                    self.job = None
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                error = f"Gufo could not be stopped; try Stop again. {exc}"
+            with self.lock:
+                self.state = "failed" if error else "stopped"
+                self.error = error
+                self.exit_code = child.poll() if child is not None else None
+            return self.snapshot()

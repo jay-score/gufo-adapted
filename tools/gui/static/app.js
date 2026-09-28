@@ -33,7 +33,7 @@ function notice(message, success = false) {
 }
 
 function updateControls() {
-  const active = ["loading", "ready", "stopping"].includes(runtime.state);
+  const active = runtime.pid != null || ["loading", "ready", "stopping"].includes(runtime.state);
   $("start-button").disabled = !loaded || busy || active || closed;
   $("stop-button").disabled = busy || !active || runtime.state === "stopping" || closed;
   $("save-button").disabled = !loaded || busy || closed;

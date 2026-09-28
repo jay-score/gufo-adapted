@@ -102,6 +102,18 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.client.post("/api/start", json=DEFAULTS, headers=self.headers).status_code, 503)
         self.assertTrue(self.exiting.wait(1))
 
+    def test_exit_failure_leaves_launcher_available_for_retry(self):
+        self.manager.stop.return_value = {"state": "failed", "pid": 123,
+                                          "error": "Gufo could not be stopped; try Stop again."}
+        response = self.client.post("/api/exit", headers=self.headers)
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("try Stop again", response.json["error"])
+        self.assertFalse(self.exiting.is_set())
+        self.assertEqual(self.client.get("/api/status", headers=self.headers).status_code, 200)
+        self.manager.stop.return_value = {"state": "stopped"}
+        self.assertEqual(self.client.post("/api/exit", headers=self.headers).status_code, 200)
+        self.assertTrue(self.exiting.wait(1))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -61,8 +61,12 @@ engine.
 
 **Stop** releases the launched Gufo process. Closing a browser tab keeps it
 running; **Exit launcher** or Ctrl+C in the launcher terminal stops both. On
-Windows, Stop terminates the owned child process; it does not flush Gufo's
-optional disk continuation cache. The GUI does not enable that cache.
+Windows, Stop terminates the owned process tree and waits for it to exit.
+A Windows Job Object also terminates that tree if the launcher crashes or its
+terminal is closed abruptly. Failed shutdowns remain visible and can be retried
+with Stop; Exit launcher does not report success while shutdown has failed.
+Termination does not flush Gufo's optional disk continuation cache. The GUI
+does not enable that cache.
 
 ## Options and checks
 

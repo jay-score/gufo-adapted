@@ -119,7 +119,9 @@ def create_app(config_path, manager, exit_event, ui_port=8090):
     def exit_launcher():
         nonlocal shutting_down
         with action_lock:
-            manager.stop()
+            stopped = manager.stop()
+            if stopped["state"] != "stopped":
+                abort(503, stopped.get("error") or "Gufo is still running; try Stop again.")
             shutting_down = True
             # Allow the acknowledgement to reach the browser before closing HTTP.
             threading.Timer(0.3, exit_event.set).start()

@@ -1,10 +1,15 @@
 """Exercise real child processes without loading a model or requiring a GPU."""
 
 from pathlib import Path
+import json
+import os
 import socket
+import subprocess
 import sys
+import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools/gui"))
 from launcher_process import ProcessManager, parse_metrics
@@ -142,6 +147,109 @@ class ProcessTest(unittest.TestCase):
         self.manager.start([PYTHON, "-c", "import time; time.sleep(30)"], unused_port(), "fixture")
         self.assertEqual(self.manager.stop()["state"], "stopped")
         self.assertIsNotNone(self.manager.process.poll())
+
+    def test_failed_stop_keeps_child_owned_and_can_be_retried(self):
+        self.manager.start([PYTHON, "-c", "import time; time.sleep(30)"], unused_port(), "fixture")
+        child = self.manager.process
+        target = self.manager.job if os.name == "nt" else child
+        with patch.object(target, "terminate", side_effect=OSError("fixture termination failure")):
+            failed = self.manager.stop()
+        self.assertEqual(failed["state"], "failed")
+        self.assertEqual(failed["pid"], child.pid)
+        self.assertIn("try Stop again", failed["error"])
+        self.assertEqual(self.manager.stop()["state"], "stopped")
+        self.assertIsNotNone(child.poll())
+
+    @unittest.skipUnless(os.name == "nt", "Windows Job Object lifetime")
+    def test_failed_job_assignment_does_not_leave_a_child_running(self):
+        from windows_job import WindowsJob
+        children = []
+
+        def fail_assignment(job, child):
+            children.append(child)
+            raise OSError("fixture job assignment failure")
+
+        with patch.object(WindowsJob, "assign", fail_assignment):
+            with self.assertRaisesRegex(ValueError, "Could not launch"):
+                self.manager.start([PYTHON, "-c", "import time; time.sleep(30)"], unused_port(), "fixture")
+        self.assertEqual(len(children), 1)
+        self.assertIsNotNone(children[0].poll())
+        self.assertIsNone(self.manager.job)
+        self.assertEqual(self.manager.snapshot()["state"], "failed")
+
+    @unittest.skipUnless(os.name == "nt", "Windows Job Object lifetime")
+    def test_owned_tree_exits_on_stop_and_abrupt_launcher_exit(self):
+        import ctypes
+        from ctypes import wintypes
+        from windows_job import kernel32
+
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel32.TerminateProcess.restype = wintypes.BOOL
+
+        def close_process(handle):
+            if kernel32.WaitForSingleObject(handle, 0) == 258:
+                kernel32.TerminateProcess(handle, 1)
+                kernel32.WaitForSingleObject(handle, 5000)
+            kernel32.CloseHandle(handle)
+
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "tree.json"
+            # Wait for assignment before creating descendants: simulate Gufo
+            # starting helper processes after its model has begun loading.
+            gate = Path(directory) / "assigned"
+            child_code = (
+                "import json, os, pathlib, subprocess, sys, time\n"
+                f"while not pathlib.Path({str(gate)!r}).exists(): time.sleep(0.02)\n"
+                "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+                f"pathlib.Path({str(marker)!r}).write_text(json.dumps([os.getpid(), child.pid]))\n"
+                "time.sleep(60)\n"
+            )
+            for abrupt in (False, True):
+                with self.subTest(abrupt=abrupt):
+                    marker.unlink(missing_ok=True)
+                    gate.unlink(missing_ok=True)
+                    helper = None
+                    try:
+                        if abrupt:
+                            helper_code = (
+                                f"import pathlib, sys, time; sys.path.insert(0, {str(Path(__file__).resolve().parents[2] / 'tools/gui')!r})\n"
+                                "from launcher_process import ProcessManager\n"
+                                "manager = ProcessManager()\n"
+                                f"manager.start({[PYTHON, '-c', child_code]!r}, {unused_port()}, 'fixture')\n"
+                                f"pathlib.Path({str(gate)!r}).touch()\n"
+                                "time.sleep(60)\n"
+                            )
+                            helper = subprocess.Popen([PYTHON, "-c", helper_code],
+                                                      creationflags=subprocess.CREATE_NO_WINDOW)
+                        else:
+                            self.manager.start([PYTHON, "-c", child_code], unused_port(), "fixture")
+                            gate.touch()
+                        deadline = time.monotonic() + 8
+                        while not marker.exists() and time.monotonic() < deadline:
+                            time.sleep(0.05)
+                        pids = json.loads(marker.read_text())
+                        handles = []
+                        for pid in pids:
+                            handle = kernel32.OpenProcess(0x100001, False, pid)  # SYNCHRONIZE | TERMINATE
+                            self.assertTrue(handle, str(ctypes.WinError()))
+                            self.addCleanup(close_process, handle)
+                            handles.append(handle)
+                        if abrupt:
+                            helper.kill()  # No finally, signal handler or manager.stop().
+                            helper.wait(timeout=5)
+                        else:
+                            self.assertEqual(self.manager.stop()["state"], "stopped")
+                        for handle in handles:
+                            self.assertEqual(kernel32.WaitForSingleObject(handle, 5000), 0,
+                                             "Owned child survived launcher shutdown")
+                    finally:
+                        if helper is not None and helper.poll() is None:
+                            helper.kill()
+                            helper.wait(timeout=5)
 
 
 if __name__ == "__main__":
