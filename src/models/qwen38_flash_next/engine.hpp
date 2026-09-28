@@ -155,11 +155,14 @@ public:
   /// MaxVerifyWidth()). With `prefill`, through the prompt arithmetic
   /// instead (a session without MTP). `rows` receives every token's
   /// next-token logits (tokens.size() * vocab). For numerical A/B of the
-  /// kernels.
+  /// kernels. `keep` tests partial verification rollback (zero keeps all
+  /// tokens); prefill must keep every token.
+  /// The MTP head is not advanced. Before normal decoding, restore a snapshot
+  /// taken before this diagnostic, or reset and resync the session.
   [[nodiscard]] bool TeacherForce(std::span<const std::int32_t> tokens,
                                   std::vector<float>* rows,
                                   std::string* error_msg = nullptr,
-                                  bool prefill = false);
+                                  bool prefill = false, std::size_t keep = 0);
   [[nodiscard]] std::uint32_t MaxVerifyWidth() const noexcept;
   struct DecodeResult {
     std::vector<std::int32_t> tokens;

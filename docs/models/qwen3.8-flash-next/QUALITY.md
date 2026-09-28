@@ -47,6 +47,22 @@ and [SGLang](https://github.com/sgl-project/sglang/blob/993d1fccbaafe3e79d91567d
 formulas supply independent predictor checks; pinned Transformers ignores MTP
 weights. [Vision reproduction](../qwen3.8-27b/QUALITY.md#vision).
 
+For focused Windows rollback validation, build and run the explicit model test:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\windows\build.ps1 -Preset gpu-test -Target qwen38_flash_next_rollback_test
+.\build\gpu-test\qwen38_flash_next_rollback_test.exe --model "$MODEL" --mtp-model "$MTP"
+```
+
+It checks every kept prefix of verification widths 2–8, repeated shapes,
+restoration of the starting snapshot, reset, and subsequent full trunk logits.
+Keeping one row means retaining the target anchor and rejecting all drafts.
+Run once with normal Windows defaults and once with
+`$env:GUFO_PLATFORM_TUNING = "none"`; remove the variable afterward. This uses
+teacher forcing without advancing the MTP head. The separate snapshot test
+checks real speculative snapshots, including deferred rejection replay. Neither
+test establishes quality against an independent model implementation.
+
 ## Benchmark method
 
 September 22–23, 2026; one warmed sample per point, greedy, thinking off.

@@ -46,6 +46,7 @@ public:
   }
   std::string model_id() const override { return "test"; }
   bool ready() const override { return true; }
+  bool supports_image_input() const override { return vision; }
   gufo::ReasoningOptions reasoning_defaults() const override {
     return reasoning;
   }
@@ -116,6 +117,7 @@ public:
     return result;
   }
   std::atomic<int> calls{0};
+  bool vision{false};
   std::atomic<int> failure{0};
   std::string forced_stop_sequence;
   gufo::ReasoningOptions reasoning;
@@ -230,6 +232,35 @@ void ExpectStatus(const std::string& response, int status) {
     std::cerr << response << '\n';
     std::abort();
   }
+}
+
+void TestVisionDiscovery() {
+  RunningServer server;
+  for (const bool vision : {false, true, false}) {
+    server.backend->vision = vision;
+    const auto models = server.Send("GET /v1/models HTTP/1.1\r\n\r\n");
+    ExpectStatus(models, 200);
+    const auto body =
+        gufo::json::parse(models.substr(models.find("\r\n\r\n") + 4));
+    const auto& model = body.find("data")->items().front();
+    const auto& input =
+        model.find("architecture")->find("input_modalities")->items();
+    assert(model.member_str("id") == "test" && input[0].str() == "text");
+    assert(input.size() == (vision ? 2 : 1));
+    if (vision)
+      assert(input[1].str() == "image");
+    for (const auto* path : {"/props", "/props?model=test"}) {
+      const auto response =
+          server.Send("GET " + std::string(path) + " HTTP/1.1\r\n\r\n");
+      ExpectStatus(response, 200);
+      const auto props =
+          gufo::json::parse(response.substr(response.find("\r\n\r\n") + 4));
+      assert(props.member_str("model") == "test");
+      assert(props.find("modalities")->find("vision")->as_bool() == vision);
+    }
+  }
+  ExpectStatus(server.Send("GET /props?model=other HTTP/1.1\r\n\r\n"), 404);
+  assert(server.backend->calls == 0);
 }
 
 void TestAuthorization() {
@@ -428,13 +459,24 @@ void TestCompatibilityRequests() {
     ExpectStatus(server.Post(endpoint.path, "{"), 400);
     assert(server.backend->calls == calls);
   }
+  for (const bool stream : {false, true}) {
+    auto image = gufo::json::parse(R"({"input":[{"role":"user","content":[
+      {"type":"input_text","text":"describe"},
+      {"type":"input_image","image_url":"data:image/png;base64,AQID"}]}]})");
+    image["stream"] = stream;
+    ExpectStatus(server.Post("/v1/responses", image.dump()), 200);
+    const auto message = server.backend->LastCall().chat.messages.front();
+    assert(message.content == "describe" && message.images.size() == 1 &&
+           message.images[0].offset == 8 &&
+           *message.images[0].bytes == std::vector<std::uint8_t>({1, 2, 3}));
+  }
   const int calls = server.backend->calls;
   ExpectStatus(server.Post("/v1/completions", R"({"prompt":["one","two"]})"),
                400);
   ExpectStatus(server.Post("/v1/responses",
                            R"({"input":[{"role":"user","content":[
                            {"type":"input_text","text":"describe"},
-                           {"type":"input_image","image_url":"data:image/png;base64,AA=="}]}]})"),
+                           {"type":"input_image","file_id":"file_123"}]}]})"),
                400);
   ExpectStatus(server.Post("/v1/messages",
                            R"({"messages":[{"role":"tool","content":"hi"}]})"),
@@ -501,6 +543,47 @@ void TestCompatibilityRequests() {
   assert(replay_messages.size() == 3 &&
          replay_messages[1].thought == "Thoughts" &&
          replay_messages[1].content == "Answer");
+
+  const auto tools =
+      parse(R"([{"type":"function","name":"status","parameters":{}}])");
+  auto tool_request = parse(
+      R"({"input":"Check status","tool_choice":"required","parallel_tool_calls":false})");
+  tool_request["tools"] = tools;
+  server.backend->SetOutput(
+      "<tool_call><function=status></function></tool_call>");
+  const auto tool_response =
+      response_body(server.Post("/v1/responses", tool_request.dump()));
+  const auto& call = tool_response.find("output")->items()[0];
+  assert(call.member_str("type") == "function_call" &&
+         call.member_str("name") == "status");
+  assert(server.backend->LastCall().chat.tools[0].name == "status");
+  tool_request["stream"] = true;
+  const auto tool_stream = server.Post("/v1/responses", tool_request.dump());
+  ExpectStatus(tool_stream, 200);
+  assert(tool_stream.find("response.function_call_arguments.delta") !=
+         std::string::npos);
+  tool_request["stream"] = false;
+  tool_request["tool_choice"] = "auto";
+  tool_request["input"] =
+      parse(R"([{"role":"user","content":"Check status"}])");
+  tool_request["input"].push_back(call);
+  auto result = parse(R"({"type":"function_call_output","output":"ready"})");
+  result["call_id"] = call.member_str("call_id");
+  tool_request["input"].push_back(result);
+  server.backend->SetOutput("Ready.");
+  ExpectStatus(server.Post("/v1/responses", tool_request.dump()), 200);
+  const auto tool_messages = server.backend->LastCall().chat.messages;
+  assert(tool_messages.size() == 3 &&
+         tool_messages[2].tool_call_id == call.member_str("call_id") &&
+         tool_messages[2].content == "ready");
+  tool_request["tool_choice"] = "required";
+  ExpectStatus(server.Post("/v1/responses", tool_request.dump()), 502);
+  const int tool_calls = server.backend->calls;
+  result["call_id"] = "unknown";
+  tool_request["input"].push_back(result);
+  ExpectStatus(server.Post("/v1/responses", tool_request.dump()), 400);
+  assert(server.backend->calls == tool_calls);
+  server.backend->SetOutput("ok");
 
   const auto anthropic = response_body(
       server.Post("/v1/messages",
@@ -669,6 +752,57 @@ void TestCompatibilityThinkingDefaults() {
       assert(reasoning.preserve_thinking == true);
     }
   }
+
+  for (const bool stream : {false, true}) {
+    for (const auto& [effort, expected] :
+         {std::pair{"low", gufo::ReasoningEffort::kLow},
+          std::pair{"medium", gufo::ReasoningEffort::kMedium},
+          std::pair{"xhigh", gufo::ReasoningEffort::kXHigh}}) {
+      server.backend->reasoning.enabled = false;
+      auto body =
+          gufo::json::parse(R"({"input":"hello","reasoning":{"summary":"auto"},
+        "include":["reasoning.encrypted_content"]})");
+      body["reasoning"]["effort"] = effort;
+      body["stream"] = stream;
+      ExpectStatus(server.Post("/v1/responses", body.dump()), 200);
+      const auto reasoning = server.backend->LastCall().chat.reasoning;
+      assert(reasoning.enabled == true && reasoning.effort == expected &&
+             reasoning.preserve_thinking == true);
+    }
+    server.backend->reasoning.enabled = true;
+    auto disabled =
+        gufo::json::parse(R"({"input":"hello","reasoning":{"effort":"none"}})");
+    disabled["stream"] = stream;
+    ExpectStatus(server.Post("/v1/responses", disabled.dump()), 200);
+    assert(server.backend->LastCall().chat.reasoning.enabled == false);
+  }
+  server.backend->reasoning = {};
+  for (
+      const auto* body :
+      {R"({"input":"hello"})", R"({"input":"hello","reasoning":null})",
+       R"({"input":"hello","reasoning":{"effort":null,"summary":"auto"},"include":[]})"}) {
+    ExpectStatus(server.Post("/v1/responses", body), 200);
+    const auto reasoning = server.backend->LastCall().chat.reasoning;
+    const auto options = gufo::tokenization::ResolveQwenChatOptions(reasoning);
+    assert(!reasoning.enabled.has_value() && !reasoning.effort.has_value());
+    assert(options.enable_thinking &&
+           options.reasoning_effort ==
+               gufo::tokenization::QwenReasoningEffort::kXHigh);
+  }
+  const auto calls = server.backend->calls.load();
+  for (const auto* body :
+       {R"({"input":"hello","reasoning":true})",
+        R"({"input":"hello","reasoning":{"effort":1}})",
+        R"({"input":"hello","reasoning":{"effort":"invalid"}})",
+        R"({"input":"hello","reasoning":{"mode":"pro"}})",
+        R"({"input":"hello","reasoning":{"summary":"concise"}})",
+        R"({"input":"hello","reasoning":{"summary":true}})",
+        R"({"input":"hello","reasoning_effort":"low"})",
+        R"({"input":"hello","include":"reasoning.encrypted_content"})",
+        R"({"input":"hello","include":["unsupported"]})"}) {
+    ExpectStatus(server.Post("/v1/responses", body), 400);
+  }
+  assert(server.backend->calls == calls);
 }
 
 void TestStreamingFraming() {
@@ -752,6 +886,7 @@ int main() {
   TestInvalidBindSettings();
   TestQueryParameters();
   TestAuthorization();
+  TestVisionDiscovery();
   TestFramingAndMetrics();
   TestCompatibilityRequests();
   TestCompatibilityStopSequences();

@@ -540,6 +540,38 @@ void TestToolRendering() {
          "Required tool choice is included in the model prompt");
 }
 
+void TestToolImages() {
+  using namespace gufo::tokenization;
+  const auto image = std::make_shared<const std::vector<std::uint8_t>>(1, 0);
+  std::vector<ChatMessage> messages{{ChatRole::kUser, "Look at the files."},
+                                    {ChatRole::kTool, "  left right  "},
+                                    {ChatRole::kTool, " \t "}};
+  messages[1].images.push_back({7, image});
+  messages[2].images.push_back({2, image});
+  ChatTemplateOptions options;
+  options.add_vision_id = true;
+  std::vector<std::size_t> offsets;
+  const auto rendered =
+      QwenChatTemplate::Render(messages, {}, options, nullptr, &offsets);
+  Expect(rendered.has_value() && offsets.size() == 2,
+         "Tool images retain placeholder offsets");
+  Expect(
+      rendered->find(
+          "<tool_response>\nleft Picture 1: "
+          "<|vision_start|><|image_pad|><|vision_end|>right\n</tool_response>\n"
+          "<tool_response>\nPicture 2: "
+          "<|vision_start|><|image_pad|><|vision_end|>\n</tool_response>") !=
+          std::string::npos,
+      "Consecutive tool results render images inside their tool response with "
+      "correct whitespace");
+  for (const auto offset : offsets)
+    Expect(rendered->substr(offset, 13) == "<|image_pad|>",
+           "Tool image offsets include wrapper and Picture prefix");
+  messages[1].role = ChatRole::kAssistant;
+  Expect(!QwenChatTemplate::Render(messages, options),
+         "Assistant images remain unsupported");
+}
+
 void TestToolReplayPreservesGeneratedPrefix() {
   auto tpl = gufo::tokenization::QwenChatTemplate::CreateDefault();
 
@@ -598,6 +630,7 @@ int main() {
   TestRenderAndTokenize();
   TestChatCorpusConformance();
   TestToolRendering();
+  TestToolImages();
   TestToolReplayPreservesGeneratedPrefix();
   std::cout << "All QwenChatTemplate tests passed successfully!\n";
   return 0;

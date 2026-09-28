@@ -524,8 +524,14 @@ std::shared_ptr<Encoder> Encoder::Open(const std::filesystem::path& target,
   auto directory = target.parent_path();
   for (unsigned level = 0; level < 2; ++level) {
     const auto path = directory / "mmproj-BF16.gguf";
-    if (std::filesystem::is_regular_file(path))
-      return std::make_shared<Encoder>(path, width);
+    if (std::filesystem::is_regular_file(path)) {
+      try {
+        return std::make_shared<Encoder>(path, width);
+      } catch (const std::invalid_argument&) {
+        // Discovery is optional: an unrelated or unsupported sidecar must not
+        // prevent text-only loading. Explicit sidecars still fail above.
+      }
+    }
     directory = directory.parent_path();
   }
   return {};

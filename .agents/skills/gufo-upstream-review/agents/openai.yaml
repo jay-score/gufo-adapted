@@ -1,0 +1,3 @@
+interface:
+  display_name: "Gufo Upstream Review"
+  short_description: "Review upstream Gufo changes for safe Windows integration"
