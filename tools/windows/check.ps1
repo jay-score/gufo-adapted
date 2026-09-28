@@ -5,7 +5,8 @@
 param(
   [string]$Rocm = "C:\TheRock\build",
   [string]$Vcpkg = "C:\vcpkg",
-  [string]$Ninja = "C:\tools\ninja\ninja.exe"
+  [string]$Ninja = "C:\tools\ninja\ninja.exe",
+  [string]$Python = "python"
 )
 $validatedRock = "10.0.0"
 $tarball = "therock-dist-windows-gfx1151-$validatedRock.tar.gz"
@@ -65,6 +66,18 @@ if ($cmake) {
 $ninjaExe = if (Test-Path $Ninja) { $Ninja } else { (Get-Command ninja -ErrorAction SilentlyContinue).Source }
 Report "Ninja" ([bool]$ninjaExe) ($(if ($ninjaExe) { $ninjaExe } else { "not found" })) `
   "put ninja.exe on PATH or at $Ninja"
+
+# The web launcher needs a working 64-bit Python, not the Windows Store alias.
+$pythonOk = $false
+$pythonVersion = "not found"
+$pythonCommand = Get-Command $Python -CommandType Application -ErrorAction SilentlyContinue
+if ($pythonCommand -and $pythonCommand.Source -notmatch '\\WindowsApps\\python[0-9.]*\.exe$') {
+  try {
+    $pythonVersion = & $pythonCommand.Source -I -c "import struct,sys; print(sys.version.split()[0]); sys.exit(0 if sys.version_info >= (3,10) and struct.calcsize('P') == 8 else 1)"
+    $pythonOk = $LASTEXITCODE -eq 0
+  } catch { $pythonVersion = "could not start" }
+}
+Report "Python for GUI" $pythonOk "$pythonVersion" "run setup-windows.bat or install 64-bit Python 3.10+"
 
 # The build installs the libraries from the pinned manifest automatically.
 if (Test-Path "$Vcpkg\vcpkg.exe") {

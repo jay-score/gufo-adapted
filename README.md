@@ -44,56 +44,35 @@ Each model guide lists the required files and complete benchmark settings.
 ## Windows quickstart
 
 Run Qwen3.8-Flash-Next natively on **Windows 11, Strix Halo / gfx1151, 128 GB RAM**.
-Set **96 GB dedicated GPU memory** in AMD Software → Performance → Tuning →
-Variable Graphics Memory. Install Git and Python, then use PowerShell:
+Install the AMD graphics driver. For Flash-Next at 256K context, set **96 GB
+dedicated GPU memory** in AMD Software → Performance → Tuning → Variable
+Graphics Memory. Setup checks the computer but does not change these settings.
 
-1. Clone this fork and check the build requirements:
+1. Install [Git for Windows](https://git-scm.com/downloads/win), then clone this fork:
 
    ```powershell
    git clone --branch windows-port https://github.com/thomas9120/gufo.git
-   cd gufo
-   powershell -ExecutionPolicy Bypass -File tools\windows\check.ps1
    ```
 
-   Follow the check's instructions to install anything missing: TheRock ROCm
-   10.0.0, Visual Studio C++ Build Tools, CMake, Ninja and vcpkg. See the
-   [Windows prerequisites](docs/WINDOWS.md#prerequisites) for download links
-   and installation paths. Rerun the check until it passes.
+2. Open the cloned `gufo` folder and double-click **[setup-windows.bat](setup-windows.bat)**.
+   Review the plan and enter `y`. Setup reuses existing tools, installs missing
+   prerequisites, builds Gufo, and opens the GUI. Allow the installers to finish;
+   the first setup needs substantial downloads, disk space, and compilation time.
+   If interrupted, run the same file again to resume completed work.
 
-2. Build Gufo. The first build also downloads and builds the pinned dependencies:
+3. In the GUI, choose your model and optional MTP/projector files, adjust settings,
+   click **Save**, then **Start**. For Flash-Next vision, use the compatible
+   **BF16** projector. See [model download instructions](docs/WINDOWS.md#running-qwen38-flash-next)
+   if you do not already have the files. Connect your chat client to
+   **`http://127.0.0.1:8080/v1`** with the model name shown in the GUI (`gufo` by default).
 
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File tools\windows\build.ps1
-   ```
+For subsequent launches, double-click **[launch-gui.bat](launch-gui.bat)** or a
+desktop shortcut to it. The [GUI](tools/gui/README.md) opens at
+`http://127.0.0.1:8090`; opening it does not load a model. Use **Stop** to unload
+Gufo or **Exit** to close both processes.
 
-3. Download the pinned Q4 model and Q8 MTP sidecar into the Hugging Face cache:
-
-   ```powershell
-   python -m pip install -U huggingface_hub
-   hf download unsloth/Qwen3.8-Flash-Next-GGUF --revision 38bb39ee97821de2c9009abb7e93950eec396e66 --include "UD-Q4_K_XL/*" "MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf"
-   ```
-
-4. Start the server:
-
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File tools\windows\run-flash-next.ps1
-   ```
-
-   Wait for `event=load_completed`, then connect your OpenAI-compatible chat
-   client to **`http://127.0.0.1:8080/v1`** with model **`flash-next`**.
-   Keep the terminal open while using Gufo; press **Ctrl+C** to stop it.
-
-The launcher enables MTP and thinking by default. See the
-[Windows guide](docs/WINDOWS.md#running-qwen38-flash-next) for existing model
-directories, context settings and optional decode switches.
-
-Prefer a small GUI? After building Gufo, double-click **[launch-gui.bat](launch-gui.bat)**
-in the repository folder. You can also create a desktop shortcut to it.
-
-The [local web launcher](tools/gui/README.md) opens at `http://127.0.0.1:8090`.
-Choose your model, MTP and projector files, adjust sampler settings, and save
-the configuration for later launches. It requires Python 3.10+ and installs
-its small Python environment on first run.
+See [guided setup details](docs/WINDOWS.md#guided-setup) for logs, preview mode,
+and custom dependency paths, or use the [manual build instructions](docs/WINDOWS.md#prerequisites).
 
 ## Linux quickstart
 

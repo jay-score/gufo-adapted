@@ -110,4 +110,17 @@ foreach ($dir in @("hipblaslt", "rocblas")) {
   }
 }
 Get-ChildItem "$root\build\vcpkg_installed\x64-windows\bin\*.dll" | Copy-Item -Destination $bin -Force
+
+# Source builds must also work outside vcvars64's PATH. These copies are for
+# this developer's local use, NOT a redistributable release: VS's LLVM OpenMP
+# runtime lives in debug_nonredist. Binary packaging needs a different runtime.
+if ($env:VCToolsRedistDir) {
+  Get-ChildItem "$env:VCToolsRedistDir\x64\Microsoft.VC*.CRT\*.dll" | Copy-Item -Destination $bin -Force
+}
+$openmp = Select-String -LiteralPath "$build\CMakeCache.txt" -Pattern '^OpenMP_libomp_LIBRARY:FILEPATH=(.*)$'
+if ($openmp -and $openmp.Matches[0].Groups[1].Value -match '^(.*)/VC/Tools/MSVC/([^/]+)/lib/x64/libomp\.lib$') {
+  $runtime = Get-ChildItem "$($Matches[1])/VC/Redist/MSVC/$($Matches[2])/debug_nonredist/x64/Microsoft.VC*.OpenMP.LLVM/libomp140.x86_64.dll" -ErrorAction SilentlyContinue
+  if (-not $runtime) { throw "Cannot find this build's local Visual Studio OpenMP runtime; repair the C++ Build Tools installation." }
+  $runtime | Copy-Item -Destination $bin -Force
+}
 Write-Host "gufo: built $build"

@@ -25,6 +25,13 @@ compiler/dependency versions when comparing results.
 
 ## Windows build and runtime
 
+For guided source setup, [setup-windows.bat](setup-windows.bat) wraps
+`tools/windows/setup.ps1`. `-CheckOnly` previews without writes or installs.
+Keep installation consent, verified downloads, rerun recovery, and existing GUI
+settings intact. Tool paths and logs live under ignored `build/`; downloaded
+dependencies live under `%LOCALAPPDATA%\Gufo\dependencies`. Follow
+[guided setup](docs/WINDOWS.md#guided-setup) when updating dependency pins.
+
 Use [docs/WINDOWS.md](docs/WINDOWS.md) for prerequisites and port details.
 The validated GPU toolchain is TheRock ROCm 10.0.0 for Windows/gfx1151, VS C++
 Build Tools (MSVC headers/libraries and Windows SDK), CMake, Ninja and vcpkg.
@@ -124,6 +131,8 @@ documentation edits.
 .\build\gui-env\Scripts\python.exe -m unittest discover -s tests/tools -p "gui_*_test.py"
 # Flash-Next PowerShell launcher checks:
 python tests/tools/windows_launcher_test.py
+# Guided setup checks (temporary fixtures, no real installs):
+python tests/tools/windows_setup_test.py
 # Documentation changes:
 python tools/ci/check-docs.py
 # C++ changes: put the repository-compatible clang-format on PATH first.

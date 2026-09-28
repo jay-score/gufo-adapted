@@ -5,6 +5,53 @@ distribution for gfx1151 (Ryzen AI Max+ 395 / Radeon 8060S). No WSL. Platform
 adaptations live in `compat/win32`, Windows-only files and `_WIN32` branches.
 The fork also changes shared engine code; Linux CI remains necessary.
 
+## Guided setup
+
+After cloning, double-click [setup-windows.bat](../setup-windows.bat) in the
+repository folder. It shows its plan before installing anything. Enter `y` to
+continue, and accept the relevant installer prompts. Setup builds Gufo and opens
+the [web launcher](../tools/gui/README.md). Later, use
+[launch-gui.bat](../launch-gui.bat). Models are selected separately in the GUI;
+setup does not download them or start inference.
+
+Setup requires native Windows 11 x64 on Ryzen AI Max/Strix Halo. Install the AMD
+graphics driver first; GPU memory allocation remains a manual AMD Software
+setting. Plan for at least 25 GiB free on the installation/build drives for fresh
+setup, plus space for models. An existing-tool rebuild requires 5 GiB free.
+
+- Compatible installed tools are reused. New WinGet installs select Git 2.55.0.3,
+  VS Build Tools 18.8.0 with the C++ tools and Windows SDK, CMake 4.4.0,
+  Ninja 1.13.2, and 64-bit Python 3.14.6. Package licenses and Windows elevation
+  prompts remain visible. If WinGet is unavailable, install/update Microsoft's
+  [App Installer](https://aka.ms/getwinget), or install the prerequisites below.
+- The compiler/runtime download is TheRock **10.0.0**, verified using the SHA-256
+  below. A new vcpkg checkout uses the commit pinned in `vcpkg.json`.
+  Downloads and managed dependencies live under `%LOCALAPPDATA%\Gufo\dependencies`.
+  Existing TheRock/vcpkg installations are reused without updating their checkouts.
+- Detected tool paths are saved in ignored `build\windows-setup.json`. Interrupted
+  downloads, completed installs and incremental builds are reused on rerun.
+  Setup logs are `build\setup-YYYYMMDD-HHMMSS.log`; a failure keeps the batch
+  window open. Fix the reported issue and rerun, including after a requested reboot.
+- Stop a Gufo instance using `build\release\gufo.exe` before rebuilding it.
+  Setup refuses to overwrite that running executable. It checks `--version` and
+  GPU diagnostics outside the build environment before preparing the GUI.
+- Existing `%LOCALAPPDATA%\Gufo\launcher.json` settings are preserved, including
+  a custom executable selection. New GUI settings default to this checkout's
+  `build\release\gufo.exe`; opening the GUI still does not load a model.
+
+Optional commands from the repository root:
+
+```powershell
+.\setup-windows.bat -CheckOnly       # preview, no writes/downloads/installs
+.\setup-windows.bat -NoLaunch        # complete setup without opening the GUI
+.\setup-windows.bat -Rocm D:\TheRock\build -Vcpkg D:\vcpkg
+```
+
+`-Yes` accepts the setup plan (installer/license prompts may still appear).
+`-Jobs N` changes build parallelism; the default is 4. Rerunning setup builds
+the currently checked-out source; it does not pull, reset or switch Git branches.
+The manual scripts below remain available for developers.
+
 ## Prerequisites
 
 | Piece | Default location | Notes |
@@ -27,7 +74,11 @@ powershell -ExecutionPolicy Bypass -File tools\windows\build.ps1 -Preset gpu-tes
 `build.ps1` imports the MSVC environment, configures with TheRock clang and the
 vcpkg toolchain, builds, and copies the ROCm and vcpkg runtime DLLs plus the
 hipBLASLt/rocBLAS kernel libraries next to `gufo.exe`, so `build\release` runs
-as it is.
+outside the developer shell. Local MSVC runtime DLLs are staged as well. If CMake
+selects Visual Studio's LLVM OpenMP library, its matching `libomp140.x86_64.dll`
+is copied for local source-build use. **Do not redistribute this build folder**:
+that OpenMP DLL comes from `debug_nonredist`; a public binary release needs a
+distributable runtime and a separate dependency/license audit.
 
 The manifest records the vcpkg baseline used for the Windows dependencies.
 `build.ps1` installs them under `build\vcpkg_installed`, independently of other

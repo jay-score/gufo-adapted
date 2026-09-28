@@ -2,28 +2,38 @@
 param(
   [int]$Port = 8090,
   [string]$Config = "",
-  [switch]$NoBrowser
+  [switch]$NoBrowser,
+  [string]$Python = "python",
+  [switch]$PrepareOnly
 )
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
 $environment = Join-Path $root "build\gui-env"
-$python = Join-Path $environment "Scripts\python.exe"
+$venvPython = Join-Path $environment "Scripts\python.exe"
 $requirements = Join-Path $root "tools\gui\requirements.txt"
 $stamp = Join-Path $environment "gufo-requirements.sha256"
-if (-not (Test-Path $python)) {
+if (-not (Test-Path $venvPython)) {
   Write-Host "Creating the Gufo launcher environment (Python 3.10+ required)..."
-  & python -m venv $environment
+  & $Python -I -c "import struct,sys; assert sys.version_info >= (3,10) and struct.calcsize('P') == 8, '64-bit Python 3.10+ is required'"
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  & $Python -m venv $environment
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $requirements).Hash
 $installedHash = if (Test-Path $stamp) { [string](Get-Content -LiteralPath $stamp -Raw) } else { "" }
 if ($installedHash.Trim() -ne $hash) {
-  & $python -m pip install -r $requirements
+  # A cancelled first-time venv creation may leave Python present without pip.
+  & $venvPython -m ensurepip --upgrade
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  & $venvPython -m pip install -r $requirements
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   Set-Content -LiteralPath $stamp -Value $hash
 }
+& $venvPython -c "import flask, waitress"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($PrepareOnly) { exit 0 }
 $arguments = @((Join-Path $root "tools\gui\server.py"), "--port", "$Port")
 if ($Config) { $arguments += @("--config", $Config) }
 if ($NoBrowser) { $arguments += "--no-browser" }
-& $python @arguments
+& $venvPython @arguments
 exit $LASTEXITCODE

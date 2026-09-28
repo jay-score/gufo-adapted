@@ -6,8 +6,10 @@ and start or stop inference. The engine remains a separate executable.
 
 ## Start on Windows
 
-Build Gufo using the [Windows instructions](../../docs/WINDOWS.md), and install
-Python 3.10 or newer. Double-click **[launch-gui.bat](../../launch-gui.bat)**
+For first-time setup, double-click **[setup-windows.bat](../../setup-windows.bat)**
+to install missing prerequisites, build Gufo, and open the GUI. See the
+[Windows instructions](../../docs/WINDOWS.md#guided-setup) for details and manual setup.
+On subsequent runs, double-click **[launch-gui.bat](../../launch-gui.bat)**
 in the repository folder, or create a desktop shortcut to it. If startup fails,
 the terminal stays open so you can read the error.
 
