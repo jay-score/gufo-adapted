@@ -640,6 +640,20 @@ void TestQwenToolBoundariesAndSchema() {
         Case{"<tool_call><function=f><parameter=flag>Yes</parameter>"
              "</function></tool_call>",
              0, ""},
+        // A repeated parameter with the same value is dropped; a conflicting
+        // repeat still rejects the call.
+        Case{"<tool_call>\n<function=f>\n<parameter=text>\na\n</parameter>\n"
+             "<parameter=count>42</parameter><parameter=flag>True</parameter>"
+             "<parameter=text>a</parameter><parameter=count>\n42\n"
+             "</parameter><parameter=flag>true</parameter>\n</function>\n"
+             "</tool_call>",
+             1, R"({"text":"a","count":42,"flag":true})"},
+        Case{"<tool_call><function=f><parameter=text>a</parameter>"
+             "<parameter=text>b</parameter></function></tool_call>",
+             0, ""},
+        Case{"<tool_call><function=f><parameter=text>a</parameter>"
+             "<parameter=text>a </parameter></function></tool_call>",
+             0, ""},
         Case{"<tool_call>{\"name\":\"f\",\"arguments\":{\"text\":"
              "\"literal </tool_call>\"}}</tool_call>",
              1, R"({"text":"literal </tool_call>"})"}}) {
@@ -798,6 +812,35 @@ void TestDeepSeekToolCallsAreStructured() {
   Expect(
       response.body.find(R"(\"path\":\"/etc/hostname\")") != std::string::npos,
       "Hybrid DeepSeek tool arguments are translated");
+}
+
+void TestDeepSeekRepeatedToolParameters() {
+  const auto call = [](std::string_view repeat) {
+    return "<｜DSML｜tool_calls｜><｜DSML｜invoke name=\"read\">"
+           "<｜DSML｜parameter name=\"path\" string=\"true\">/a"
+           "</｜DSML｜parameter><｜DSML｜parameter name=\"path\" "
+           "string=\"true\">" +
+           std::string(repeat) +
+           "</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls｜>";
+  };
+  for (const auto& [repeat, accepted] :
+       {std::pair{"\n/a\n", true}, std::pair{"/b", false}}) {
+    FakeBackend backend;
+    backend.pieces = {call(repeat)};
+    const auto response = gufo::server::HandleOpenAiChat(
+        Request(
+            R"({"model":"test-model","messages":[{"role":"user","content":"read"}],)"
+            R"("tools":[{"type":"function","function":{"name":"read",)"
+            R"("parameters":{"type":"object","properties":{"path":{"type":"string"}}}}}]})"),
+        backend);
+    Expect(response.status == 200, "DeepSeek repeated parameter request");
+    Expect((response.body.find(R"("arguments":"{\"path\":\"/a\"}")") !=
+            std::string::npos) == accepted,
+           "identical DeepSeek repeats are dropped, conflicts rejected");
+    Expect((response.body.find(R"("finish_reason":"tool_calls")") !=
+            std::string::npos) == accepted,
+           "a conflicting DeepSeek repeat is not a tool call");
+  }
 }
 
 void TestBackendSamplingDefaults() {
@@ -1625,6 +1668,7 @@ int main() {
   TestInvalidToolsFailBeforeGeneration();
   TestQwenToolBoundariesAndSchema();
   TestDeepSeekToolCallsAreStructured();
+  TestDeepSeekRepeatedToolParameters();
   TestWrongModelIsRejected();
   TestClientIdentityReachesBackend();
   TestStreamingOverloadIsRejectedBeforeHeaders();
