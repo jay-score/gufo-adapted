@@ -117,6 +117,16 @@ video generation or duplicate suites for routine edits. A missing-model skip
 is not a quality pass. Broaden checks when shared behavior changes or failures
 expose risk.
 
+For code changes that could affect inference correctness, run the relevant
+matched-token logit and perplexity checks against a recorded baseline before
+marking the change complete. Match model artifacts, corpus, toolchain and runtime
+settings; require exact full-logit equality when arithmetic should be unchanged,
+or declared numerical limits when it intentionally changes. Keep the commands,
+build identities and results. Logit checks supplement parser/API fixtures and
+state, sampling and rollback tests; they do not replace them. Document missing
+coverage or blocked checks explicitly. See
+[matched-token validation](docs/TESTING.md#matched-token-and-layer-comparisons).
+
 On Windows, use the bounded CPU setup in
 [.github/workflows/ci.yml](.github/workflows/ci.yml) as the reference for
 `cpu-test`; it does not require a GPU. Build the affected targets before

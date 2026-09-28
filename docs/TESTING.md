@@ -114,6 +114,26 @@ see [benchmark artifact retention](BENCHMARKS.md).
 
 ## Matched-token and layer comparisons
 
+Code changes that could affect inference correctness require relevant logit
+regression checks before completion, including changes to kernels, model loading,
+tokenization, prefill/decode, sampling, caching or speculative state. Record the
+baseline and candidate revisions and executable hashes, model/sidecar identities,
+corpus hash, toolchain, runtime settings, exact commands and results. Match these
+inputs across runs. Require exact full-logit equality for unchanged arithmetic;
+use declared model-owned numerical limits for intentional arithmetic changes.
+Never treat a missing model, skipped check or uninvestigated mismatch as a pass.
+
+For Flash-Next, `gufo bench --logit-eval corpus.txt --logit-schedules "1:1:2,4,8"`
+with the appropriate model and MTP options reports perplexity for repeated decode
+and mixed verification widths. Set `--logit-out` separately for baseline and
+candidate, then use `python tools/bench/logit-eval.py LEFT.bin.sha256
+RIGHT.bin.sha256` to compare complete raw-logit hashes for corresponding schedules.
+See the [Windows logit check](WINDOWS.md#windows-validated-switches) for limits.
+Perplexity alone can hide individual mismatches. Parser/API-only changes still
+require deterministic contract tests; teacher-forced logits do not exercise tool
+parsing, sampling draws, rejection rollback or snapshot interleaving. Run those
+focused checks separately when affected.
+
 Tokenize once and feed the same predetermined history to teacher and
 candidate. Compare full next-token distributions at each position before
 appending the next evaluation token. Free-running text diverges after one
