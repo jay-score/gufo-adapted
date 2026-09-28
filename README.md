@@ -11,7 +11,7 @@ Special thanks to pixmaate for creating the initial windows port https://github.
 and to the original Gufo team https://github.com/gufo-org/gufo
 
 
-## Models and benchmarks
+## Models and benchmarks (benchmarks listed below were run on Linux)
 
 All model documentation lives under [docs/models](docs/models/README.md):
 
