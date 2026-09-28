@@ -1,16 +1,63 @@
 # Windows (native, gfx1151)
 
 Gufo builds and runs natively on Windows 11 x64 against AMD's TheRock ROCm
-distribution for gfx1151 (Ryzen AI Max+ 395 / Radeon 8060S). No WSL. Linux
-builds are unaffected: the port lives in `compat/win32`, Windows-only files and
-`_WIN32` branches.
+distribution for gfx1151 (Ryzen AI Max+ 395 / Radeon 8060S). No WSL. Platform
+adaptations live in `compat/win32`, Windows-only files and `_WIN32` branches.
+The fork also changes shared engine code; Linux CI remains necessary.
+
+## Guided setup
+
+After cloning, double-click [setup-windows.bat](../setup-windows.bat) in the
+repository folder. It shows its plan before installing anything. Enter `y` to
+continue, and accept the relevant installer prompts. Setup builds Gufo and opens
+the [web launcher](../tools/gui/README.md). Later, use
+[launch-gui.bat](../launch-gui.bat). Models are selected separately in the GUI;
+setup does not download them or start inference.
+
+Setup requires native Windows 11 x64 on Ryzen AI Max/Strix Halo. Install the AMD
+graphics driver first; GPU memory allocation remains a manual AMD Software
+setting. Plan for at least 25 GiB free on the installation/build drives for fresh
+setup, plus space for models. An existing-tool rebuild requires 5 GiB free.
+
+- Compatible installed tools are reused. New WinGet installs select Git 2.55.0.3,
+  VS Build Tools 18.8.0 with the C++ tools and Windows SDK, CMake 4.4.0,
+  Ninja 1.13.2, and 64-bit Python 3.14.6. Package licenses and Windows elevation
+  prompts remain visible. If WinGet is unavailable, install/update Microsoft's
+  [App Installer](https://aka.ms/getwinget), or install the prerequisites below.
+- The compiler/runtime download is TheRock **10.0.0**, verified using the SHA-256
+  below. A new vcpkg checkout uses the commit pinned in `vcpkg.json`.
+  Downloads and managed dependencies live under `%LOCALAPPDATA%\Gufo\dependencies`.
+  Existing TheRock/vcpkg installations are reused without updating their checkouts.
+- Detected tool paths are saved in ignored `build\windows-setup.json`. Interrupted
+  downloads, completed installs and incremental builds are reused on rerun.
+  Setup logs are `build\setup-YYYYMMDD-HHMMSS.log`; a failure keeps the batch
+  window open. Fix the reported issue and rerun, including after a requested reboot.
+- Stop a Gufo instance using `build\release\gufo.exe` before rebuilding it.
+  Setup refuses to overwrite that running executable. It checks `--version` and
+  GPU diagnostics outside the build environment before preparing the GUI.
+- Existing `%LOCALAPPDATA%\Gufo\launcher.json` settings are preserved, including
+  a custom executable selection. New GUI settings default to this checkout's
+  `build\release\gufo.exe`; opening the GUI still does not load a model.
+
+Optional commands from the repository root:
+
+```powershell
+.\setup-windows.bat -CheckOnly       # preview, no writes/downloads/installs
+.\setup-windows.bat -NoLaunch        # complete setup without opening the GUI
+.\setup-windows.bat -Rocm D:\TheRock\build -Vcpkg D:\vcpkg
+```
+
+`-Yes` accepts the setup plan (installer/license prompts may still appear).
+`-Jobs N` changes build parallelism; the default is 4. Rerunning setup builds
+the currently checked-out source; it does not pull, reset or switch Git branches.
+The manual scripts below remain available for developers.
 
 ## Prerequisites
 
 | Piece | Default location | Notes |
 | --- | --- | --- |
 | TheRock ROCm 10.0.0 (Windows, gfx1151) | `C:\TheRock\build` | [`therock-dist-windows-gfx1151-10.0.0.tar.gz`](https://stable.repo.amd.com/rocm/core/tarball/therock-dist-windows-gfx1151-10.0.0.tar.gz), SHA-256 `1293927b06b3b8d4bd7e0265823fb998bc9e0d83c68f33dcfa5d32663b30ce38`; extract so that `C:\TheRock\build\bin` exists. Its clang compiles C, C++ and HIP |
-| vcpkg | `C:\vcpkg` | `vcpkg install icu curl openssl libpng libjpeg-turbo --triplet x64-windows` |
+| vcpkg | `C:\vcpkg` | Run `bootstrap-vcpkg.bat`; CMake installs the dependencies pinned by `vcpkg.json` |
 | Visual Studio Build Tools | any | "Desktop development with C++": MSVC STL + Windows SDK only; tested with VS 18 (MSVC 14.51) |
 | CMake 3.21+ and Ninja | `PATH`, or Ninja at `C:\tools\ninja` | |
 | Dedicated GPU memory | AMD Software > Performance > Tuning > Variable Graphics Memory | 96 GB for Qwen3.8-Flash-Next at 256K context; see [Memory](#memory) |
@@ -27,7 +74,21 @@ powershell -ExecutionPolicy Bypass -File tools\windows\build.ps1 -Preset gpu-tes
 `build.ps1` imports the MSVC environment, configures with TheRock clang and the
 vcpkg toolchain, builds, and copies the ROCm and vcpkg runtime DLLs plus the
 hipBLASLt/rocBLAS kernel libraries next to `gufo.exe`, so `build\release` runs
-as it is.
+outside the developer shell. Local MSVC runtime DLLs are staged as well. If CMake
+selects Visual Studio's LLVM OpenMP library, its matching `libomp140.x86_64.dll`
+is copied for local source-build use. **Do not redistribute this build folder**:
+that OpenMP DLL comes from `debug_nonredist`; a public binary release needs a
+distributable runtime and a separate dependency/license audit.
+
+The manifest records the vcpkg baseline used for the Windows dependencies.
+`build.ps1` installs them under `build\vcpkg_installed`, independently of other
+projects' packages, and reconfigures on each invocation. The first build needs
+network access and can take several minutes to build the dependencies.
+Existing classic-mode CMake caches are cleared once during migration so they
+cannot retain paths to the old global dependencies.
+Git checkouts also embed the source revision in `gufo --version`, including a
+`-dirty` suffix for modified tracked files. Record this output with benchmark
+results. Source archives without Git metadata keep the `development` fallback.
 
 ## Running Qwen3.8-Flash-Next
 
@@ -35,7 +96,7 @@ Download the qualified files with the Hugging Face CLI
 (`pip install -U huggingface_hub`):
 
 ```powershell
-hf download unsloth/Qwen3.8-Flash-Next-GGUF --include "UD-Q4_K_XL/*" "MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf" "mmproj-BF16.gguf"
+hf download unsloth/Qwen3.8-Flash-Next-GGUF --revision 38bb39ee97821de2c9009abb7e93950eec396e66 --include "UD-Q4_K_XL/*" "MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf" "mmproj-BF16.gguf"
 powershell -ExecutionPolicy Bypass -File tools\windows\run-flash-next.ps1
 ```
 
@@ -45,8 +106,10 @@ the model's own sampler). `-Think off`, `-Draft mtp3|off`, `-Context N` and
 `-Mode bench` (pp2048/tg128 at depths 0..128K) are the common variations. The
 server is ready when the log shows `event=load_completed`.
 
-The script picks the newest Hugging Face snapshot that holds each file, so
-files downloaded at different revisions are found. `GUFO_*` environment
+The script uses the pinned revision above and takes the target and MTP sidecar
+from the same snapshot. Use `-Snapshot PATH` to select another model directory,
+or `-MtpModel PATH` to explicitly select a separate sidecar. The printed command
+records the selected paths. `GUFO_*` environment
 variables (`GUFO_PLATFORM_TUNING`, diagnostics) reach the server; the script
 lists any set in the calling shell.
 
@@ -89,7 +152,7 @@ lists any set in the calling shell.
 
 Some behaviour changes were developed and measured on Windows only. They live
 in `src/core/platform/tuning.hpp`: each is on by default on Windows and off
-elsewhere, so Linux runs exactly the code it ran before. The decode switches
+elsewhere; these defaults do not qualify every shared change on Linux. The decode switches
 change timing and memory placement only. `GUFO_PLATFORM_TUNING` overrides the
 defaults on any platform, for
 example `GUFO_PLATFORM_TUNING=+prompt_checkpoint` to try one on Linux, or
@@ -108,14 +171,33 @@ example `GUFO_PLATFORM_TUNING=+prompt_checkpoint` to try one on Linux, or
 | `fused_hc_down` | The HC mixer down projection fuses its SiLU scale into the GEMV write and prefetches deeper for 2-8 tokens | One launch fewer per mixer; part of the 3-6% above |
 | `hot_first_upload` | Weights read on every token are uploaded before the routed experts | GEMVs on memory allocated late run 6-22% slower on Windows; placement only |
 
-Checked on Windows, all decode switches on against all off (the Linux path):
-`gufo bench --logit-eval` dumps are bit-identical at all 4418 positions, and a
-fixed-seed sampled decode produces byte-identical text. All off decodes
+The port author's Windows checks compared all decode switches on against all
+off: the original `gufo bench --logit-eval` dumps matched at 4418 positions,
+and one fixed-seed sampled decode produced byte-identical text. Those dumps
+contain target/top-64 log probabilities and a normalization value, not every
+raw logit. This does not establish full-row equality or rejection/rollback
+correctness. In those measurements, all off decodes
 7.6-9.5% slower on Windows (sampled probe, prose / code / reasoning 32.0 /
 34.3 / 44.1 against 34.5 / 37.2 / 48.3 tok/s). `prompt_checkpoint` is the
 exception to identical text: splitting prefill at the generation suffix
 changes rounding the way a different prefill chunk size does, so sampled texts
 differ from an unsplit prefill, as equally valid samples.
+
+`--logit-eval` now also writes `PREFIX-sN.bin.sha256`, hashing every raw float
+in each recorded vocabulary row. Compare two runs or schedules with:
+
+```powershell
+python tools/bench/logit-eval.py left-s0.bin.sha256 right-s0.bin.sha256
+```
+
+The comparison rejects incomplete files and mismatched targets; exit 0 means
+all recorded rows match, 1 means differing rows, and 2 means invalid inputs.
+These teacher-forced schedules fully accept each batch. They do not cover
+rejection prefixes, snapshot interleaving, or output quality. Keep those checks
+separate. Changing speculative policies can also consume random draws
+differently, so distribution preservation does not promise identical text for
+the same seed. IQ4 targets that re-quantize Q6_K tensors at load remain
+unqualified and are not covered by lossless quantization claims.
 
 ## Memory
 
@@ -142,7 +224,11 @@ carve-out works, but the load takes ~2 minutes and decode is slower.
 
 ## Test status
 
-- All Flash-Next operator tests pass, plus 86/92 CPU-labelled tests.
+- The original port author reported all Flash-Next operator tests passing,
+  plus 86/92 CPU-labelled tests. These are not results for every later commit.
+- CI on `main` and `windows-port` includes a bounded Windows CPU suite and
+  launcher checks, alongside the Linux checks. Hosted Windows CI does not
+  validate GPU kernels or real-model quality.
 - Not ported: Linux-only Python dev tools (`h3_profile*`, `qwen27b.tools`,
   TTS reference verification needs numpy), and `video_jobs_test` needs
   symlink privileges (Developer Mode).

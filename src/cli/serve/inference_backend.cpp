@@ -2741,6 +2741,7 @@ struct InferenceBackend::Impl {
     std::string model_id;
     SamplingDefaults sampling_defaults;
     std::uint32_t max_context{0};
+    bool supports_image_input{false};
     ReasoningOptions reasoning_defaults;
   };
 
@@ -3143,6 +3144,7 @@ bool InferenceBackend::load(std::shared_ptr<const hip::QwenGpuModel> model,
     }
 
     auto new_state = std::make_shared<Impl::State>();
+    new_state->supports_image_input = model->VisionEncoder() != nullptr;
     auto runner = std::make_shared<QwenTextRunner>(
         std::move(model), max_context, std::move(dflash_model),
         speculative_options, disk_cache_config.model_artifact_fingerprint,
@@ -3306,6 +3308,7 @@ bool InferenceBackend::load(
   }
   try {
     auto new_state = std::make_shared<Impl::State>();
+    new_state->supports_image_input = model->VisionEncoder() != nullptr;
     auto runner = std::make_shared<QwenFlashNextTextRunner>(
         std::move(model), max_context,
         speculative_config.backend == TextSpeculativeBackend::kMtp,
@@ -3344,6 +3347,15 @@ std::string InferenceBackend::model_id() const {
   return state != nullptr ? state->model_id : "unknown";
 #else
   return "unknown";
+#endif
+}
+
+bool InferenceBackend::supports_image_input() const {
+#if defined(ENGINE_ENABLE_HIP)
+  const auto state = impl_->Snapshot();
+  return state != nullptr && state->supports_image_input;
+#else
+  return false;
 #endif
 }
 

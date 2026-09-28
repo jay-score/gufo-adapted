@@ -38,8 +38,9 @@ public:
       std::function<void(std::string_view, std::span<const float>)>;
   using CancellationCheck = std::function<bool()>;
   Encoder(const std::filesystem::path& path, std::uint32_t output_width);
-  /// An explicit sidecar is required to exist. Otherwise discover the canonical
-  /// sidecar beside the target or its quantization subdirectory.
+  /// An explicit sidecar must exist and pass validation. Otherwise discover a
+  /// compatible canonical sidecar beside the target or its quantization
+  /// subdirectory, skipping candidates that fail validation.
   [[nodiscard]] static std::shared_ptr<Encoder> Open(
       const std::filesystem::path& target, const std::filesystem::path& sidecar,
       std::uint32_t output_width);

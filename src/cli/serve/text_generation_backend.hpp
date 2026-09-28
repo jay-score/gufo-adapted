@@ -211,6 +211,8 @@ public:
 
   [[nodiscard]] virtual std::string model_id() const = 0;
   [[nodiscard]] virtual bool ready() const = 0;
+  /// True only when the loaded model can encode image inputs.
+  [[nodiscard]] virtual bool supports_image_input() const { return false; }
   [[nodiscard]] virtual SamplingDefaults sampling_defaults() const {
     return {};
   }

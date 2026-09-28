@@ -54,6 +54,11 @@ add_qwen_cpu_test(qwen_gemm_route_test
   "cpu;models;qwen;gemm;dispatch")
 
 if (ENGINE_ENABLE_HIP)
+  # Sidecar validation is host-only, but the encoder lives in the HIP backend.
+  add_qwen_cpu_test(qwen_vision_discovery_test
+    tests/models/qwen/vision_discovery_test.cpp
+    "cpu;models;qwen;vision")
+
   function(add_qwen_hip_test target source labels)
     add_executable(${target} ${PROJECT_SOURCE_DIR}/${source})
     target_link_libraries(${target} PRIVATE

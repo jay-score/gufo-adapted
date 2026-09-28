@@ -1,0 +1,12 @@
+{
+  "name": "gufo",
+  "version-string": "development",
+  "builtin-baseline": "9e2895bf6afb246396d85232ba70fcfa1fa67ba1",
+  "dependencies": [
+    "icu",
+    "curl",
+    "openssl",
+    "libpng",
+    "libjpeg-turbo"
+  ]
+}

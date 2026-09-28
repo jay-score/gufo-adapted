@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="/static/theme.js"></script>
+  <meta name="gufo-token" content="{{ token }}">
+  <title>Gufo · Local launcher</title>
+  <link rel="icon" href="/logo.jpg">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><img src="/logo.jpg" alt="Gufo owl"><span>gufo <small>LOCAL LAUNCHER</small></span></a>
+    <div class="topbar-actions">
+      <button type="button" id="theme-toggle" class="quiet theme-toggle" aria-pressed="false" aria-label="Switch to the dark theme">
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20.3 15.6A8.9 8.9 0 0 1 8.4 3.7a8.9 8.9 0 1 0 11.9 11.9Z"/></svg>
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4.4"/><path d="M11 1.3a1 1 0 0 1 2 0v2.2a1 1 0 0 1-2 0Zm0 17a1 1 0 0 1 2 0v2.2a1 1 0 0 1-2 0ZM2.3 11a1 1 0 0 1 2.2 0v.1a1 1 0 0 1-2.2 0Zm17.2 0a1 1 0 0 1 2.2 0v.1a1 1 0 0 1-2.2 0ZM4.9 3.5a1 1 0 0 1 1.4 1.4l-1.5 1.5a1 1 0 0 1-1.4-1.4Zm13.3 13.3a1 1 0 0 1 1.4 1.4l-1.5 1.5a1 1 0 0 1-1.4-1.4ZM20.5 3.5a1 1 0 0 1 0 1.4l-1.5 1.5a1 1 0 1 1-1.4-1.4l1.5-1.5a1 1 0 0 1 1.4 0ZM7.2 16.8a1 1 0 0 1 0 1.4l-1.5 1.5a1 1 0 0 1-1.4-1.4l1.5-1.5a1 1 0 0 1 1.4 0Z"/></svg>
+      </button>
+      <button type="button" id="exit-button" class="quiet">Exit launcher</button>
+    </div>
+  </header>
+  <main>
+    <div class="intro"><div><p class="eyebrow">YOUR STRIX HALO, READY TO SERVE</p><h1>Launch your model.</h1>
+      <p>Choose your files, tune the defaults, and start your local API.</p></div>
+      <span class="local-label">● &nbsp; On this computer</span>
+    </div>
+    <div id="notice" class="notice" role="alert" hidden></div>
+    <form id="settings-form">
+      <div class="columns">
+        <section class="card files-card" aria-labelledby="files-heading">
+          <div class="section-title"><span class="section-number">01</span><h2 id="files-heading">Model files</h2></div>
+          <label for="models_dir">Models folder</label>
+          <div class="path-row"><input id="models_dir" name="models_dir" type="text" spellcheck="false"><button type="button" data-browse="models_dir" data-kind="folder">Browse</button></div>
+          <p class="hint">Use your existing library. Files stay where they are.</p>
+          <label for="model">Main model <span class="tag">GGUF</span></label>
+          <div class="path-row"><input id="model" name="model" type="text" spellcheck="false" placeholder="Choose a model or its first shard"><button type="button" data-browse="model" data-kind="gguf" aria-label="Choose main model">Choose</button></div>
+          <p id="model-filename" class="selected-file"></p>
+          <div class="divider"></div>
+          <label class="check-label"><input id="mtp" name="mtp" type="checkbox"> Enable MTP speculative decoding</label>
+          <div id="mtp-files"><label for="mtp_model">MTP sidecar</label>
+            <div class="path-row"><input id="mtp_model" name="mtp_model" type="text" spellcheck="false" placeholder="Matching shared Q8_0 sidecar"><button type="button" data-browse="mtp_model" data-kind="gguf" aria-label="Choose MTP sidecar">Choose</button></div>
+            <p id="mtp_model-filename" class="selected-file"></p>
+          </div>
+          <p class="hint">For supported models with a matching MTP head. Flash-Next uses the shared Q8_0 sidecar.</p>
+          <label for="mmproj">Vision projector <span class="optional">optional</span></label>
+          <div class="path-row"><input id="mmproj" name="mmproj" type="text" spellcheck="false" placeholder="Auto-detect"><button type="button" data-browse="mmproj" data-kind="gguf" aria-label="Choose vision projector">Choose</button></div>
+          <p id="mmproj-filename" class="selected-file"></p>
+          <p class="hint">Leave blank for Gufo to auto-detect a compatible projector.</p>
+          <div class="divider"></div>
+          <label for="executable">Gufo executable</label>
+          <div class="path-row"><input id="executable" name="executable" type="text" spellcheck="false" placeholder="…\build\release\gufo.exe"><button type="button" data-browse="executable" data-kind="executable" aria-label="Choose Gufo executable">Choose</button></div>
+          <p class="hint">Select the built executable alongside its runtime libraries.</p>
+        </section>
+        <div class="right-column">
+          <section class="card" aria-labelledby="run-heading">
+            <div class="section-title"><span class="section-number">02</span><h2 id="run-heading">Run settings</h2></div>
+            <div class="field-grid">
+              <div><label for="context">Context tokens</label><input id="context" name="context" type="number" min="0" max="4294967295" step="1" required><p class="hint">0 uses the model's native context.</p></div>
+              <div><label for="max_tokens">Max output tokens</label><input id="max_tokens" name="max_tokens" type="number" min="-1" max="4294967295" step="1" required><p class="hint">-1 continues until EOS or context full.</p></div>
+              <div><label for="think">Thinking</label><select id="think" name="think"><option value="on">On</option><option value="off">Off</option><option value="auto">Model default</option></select></div>
+              <div><label for="reasoning_effort">Default thinking level</label><select id="reasoning_effort" name="reasoning_effort" aria-describedby="thinking-hint"><option value="auto">Auto (model default)</option><option value="low">Low</option><option value="medium">Medium</option><option value="xhigh">Xhigh</option></select></div>
+              <div><label for="port">API port</label><input id="port" name="port" type="number" min="1" max="65535" step="1" required></div>
+              <div><label for="served_model_name">API model name</label><input id="served_model_name" name="served_model_name" type="text" required></div>
+            </div>
+            <p id="thinking-hint" class="hint">Auto uses the model default (Qwen: xhigh). Clients can override the level per request. The level is ignored while Thinking is Off.</p>
+            <p class="hint">Use this name in your chat client. The API listens on localhost.</p>
+          </section>
+          <section class="card" aria-labelledby="sampling-heading">
+            <div class="section-title"><span class="section-number">03</span><h2 id="sampling-heading">Sampling defaults</h2></div>
+            <div class="field-grid sampling-grid">
+              <div><label for="temperature">Temperature</label><input id="temperature" name="temperature" type="number" min="0" max="2" step="any" required></div>
+              <div><label for="top_k">Top-k</label><input id="top_k" name="top_k" type="number" min="0" max="2147483647" step="1" required></div>
+              <div><label for="top_p">Top-p</label><input id="top_p" name="top_p" type="number" min="0.000001" max="1" step="any" required></div>
+              <div><label for="min_p">Min-p</label><input id="min_p" name="min_p" type="number" min="0" max="1" step="any" required></div>
+              <div><label for="seed">Seed</label><input id="seed" name="seed" type="number" min="-1" max="9007199254740991" step="1" required></div>
+            </div>
+            <p class="hint">Temperature 0 is greedy; seed -1 is random. Initial values suit Flash-Next with thinking. Clients may override these defaults.</p>
+          </section>
+        </div>
+      </div>
+      <details class="card advanced"><summary>More options <span>Sessions, repetition penalties &amp; MTP</span></summary>
+        <div class="field-grid advanced-grid">
+          <div><label for="sessions">Sessions</label><input id="sessions" name="sessions" type="number" min="1" max="64" step="1" required><p class="hint">Each session reserves its own context memory.</p></div>
+          <div><label for="repeat_penalty">Repetition penalty</label><input id="repeat_penalty" name="repeat_penalty" type="number" min="0.000001" max="100" step="any" required><p class="hint">1 disables the penalty.</p></div>
+          <div><label for="repeat_last_n">Repetition window</label><input id="repeat_last_n" name="repeat_last_n" type="number" min="0" max="4294967295" step="1" required></div>
+          <div><label for="frequency_penalty">Frequency penalty</label><input id="frequency_penalty" name="frequency_penalty" type="number" min="-2" max="2" step="any" required></div>
+          <div><label for="presence_penalty">Presence penalty</label><input id="presence_penalty" name="presence_penalty" type="number" min="-2" max="2" step="any" required></div>
+        </div>
+        <fieldset id="mtp-options"><legend>MTP options · Flash-Next</legend>
+          <div class="field-grid advanced-grid">
+            <div><label for="draft_tokens">Max draft tokens</label><input id="draft_tokens" name="draft_tokens" type="number" min="1" max="7" step="1" required></div>
+            <div><label for="mtp_policy">Draft policy</label><select id="mtp_policy" name="mtp_policy"><option value="length">Length (default)</option><option value="survival">Survival</option></select></div>
+            <div><label for="mtp_draft_vocab">Draft vocabulary</label><select id="mtp_draft_vocab" name="mtp_draft_vocab"><option value="full">Full (default)</option><option value="latin">Latin / code</option></select></div>
+          </div>
+          <label class="check-label"><input id="prompt_lookup" name="prompt_lookup" type="checkbox"> Prompt lookup</label>
+          <p class="hint">Survival and prompt lookup target single-session decoding. Latin vocabulary is intended for English/code and may slow drafting in other languages.</p>
+        </fieldset>
+      </details>
+      <section class="launch-bar" aria-label="Launch controls">
+        <div class="save-state"><span id="saved-state">Loading settings…</span><small>Changes apply to the next launch.</small></div>
+        <div class="actions"><button type="button" id="save-button">Save settings</button><button type="button" id="stop-button" class="stop" disabled>Stop</button><button type="submit" id="start-button" class="primary" disabled>Start Gufo <span aria-hidden="true">↗</span></button></div>
+      </section>
+    </form>
+    <section class="card runtime" aria-labelledby="runtime-heading">
+      <div class="runtime-heading"><h2 id="runtime-heading">Server</h2><span id="status" class="status stopped" role="status">Stopped</span></div>
+      <div class="connection"><span>API base URL</span><code id="api-url">http://127.0.0.1:8080/v1</code><button type="button" id="copy-url" class="quiet">Copy</button><span id="active-model"></span></div>
+      <p class="hint" id="runtime-note">Start Gufo to connect your OpenAI-compatible client.</p>
+      <section class="performance" aria-labelledby="performance-heading">
+        <h3 id="performance-heading">Performance</h3>
+        <dl class="metrics-grid">
+          <div><dt>Prefill speed <span>tok/s</span></dt><dd id="prefill-speed">—</dd></div>
+          <div><dt>Generation speed <span>tok/s</span></dt><dd id="generation-speed">—</dd></div>
+          <div><dt>Prompt tokens <span>total</span></dt><dd id="prompt-total">—</dd></div>
+          <div><dt>Generated tokens <span>total</span></dt><dd id="generated-total">—</dd></div>
+        </dl>
+        <p class="hint" id="metrics-note">Start Gufo to see performance.</p>
+        <p class="hint">Speeds are the last completed nonzero measurements, not live rates. Fully cached prompts retain the previous prefill speed. Token totals cover this server run and include cached prompt tokens.</p>
+      </section>
+      <details id="logs-details"><summary>Process log <span>Last 300 lines</span></summary><pre id="logs">No process output yet.</pre></details>
+      <details><summary>Command preview <span>Next launch</span></summary><pre id="command">Choose a model to get started.</pre></details>
+    </section>
+    <footer><span>Gufo · Made for Strix Halo</span><span id="settings-location"></span></footer>
+  </main>
+  <dialog id="file-dialog" aria-labelledby="picker-title">
+    <div class="dialog-heading"><h2 id="picker-title">Choose a file</h2><button type="button" id="close-picker" class="quiet" aria-label="Close file picker">✕</button></div>
+    <div id="picker-roots" class="roots"></div>
+    <div class="path-row"><button type="button" id="picker-up" aria-label="Parent folder">↑</button><input id="picker-path" aria-label="Folder path" spellcheck="false"><button type="button" id="picker-go">Go</button></div>
+    <input id="picker-filter" type="search" placeholder="Filter this folder…" aria-label="Filter files">
+    <p id="picker-error" role="alert" class="picker-error"></p>
+    <div id="picker-entries" class="file-list"></div>
+    <div class="dialog-footer"><p class="hint">Split models appear once, using their first shard.</p><button type="button" id="select-folder" class="primary" hidden>Use this folder</button></div>
+  </dialog>
+</body>
+</html>

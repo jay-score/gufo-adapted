@@ -5,11 +5,13 @@
 </p>
 
 Gufo is a vertical local inference engine specifically built and optimized for the AMD Strix Halo hardware:
-Ryzen AI MAX+ 395 systems with Radeon 8060S (`gfx1151`), up to 128 GiB of unified memory.
+Ryzen AI MAX+ 395 systems with Radeon 8060S (`gfx1151`), up to 128 GiB of unified memory. This fork is specifically for adding Windows support for Gufo.
 
-**Contrinutions are welcome!**
+Special thanks to pixmaate for creating the initial windows port https://github.com/pixmaate/gufo 
+and to the original Gufo team https://github.com/gufo-org/gufo
 
-## Models and benchmarks
+
+## Models and benchmarks (benchmarks listed below were run on Linux)
 
 All model documentation lives under [docs/models](docs/models/README.md):
 
@@ -39,7 +41,40 @@ Each model guide lists the required files and complete benchmark settings.
 - Treat concurrent requests, cancellation and conversation caching as first-class workloads.
 - Keep production dependencies small and development tools separate.
 
-## Quickstart
+## Windows quickstart
+
+Run Qwen3.8-Flash-Next natively on **Windows 11, Strix Halo / gfx1151, 128 GB RAM**.
+Install the AMD graphics driver. For Flash-Next at 256K context, set **96 GB
+dedicated GPU memory** in AMD Software → Performance → Tuning → Variable
+Graphics Memory. Setup checks the computer but does not change these settings.
+
+1. Install [Git for Windows](https://git-scm.com/downloads/win), then clone this fork:
+
+   ```powershell
+   git clone --branch windows-port https://github.com/thomas9120/gufo.git
+   ```
+
+2. Open the cloned `gufo` folder and double-click **[setup-windows.bat](setup-windows.bat)**.
+   Review the plan and enter `y`. Setup reuses existing tools, installs missing
+   prerequisites, builds Gufo, and opens the GUI. Allow the installers to finish;
+   the first setup needs substantial downloads, disk space, and compilation time.
+   If interrupted, run the same file again to resume completed work.
+
+3. In the GUI, choose your model and optional MTP/projector files, adjust settings,
+   click **Save**, then **Start**. For Flash-Next vision, use the compatible
+   **BF16** projector. See [model download instructions](docs/WINDOWS.md#running-qwen38-flash-next)
+   if you do not already have the files. Connect your chat client to
+   **`http://127.0.0.1:8080/v1`** with the model name shown in the GUI (`gufo` by default).
+
+For subsequent launches, double-click **[launch-gui.bat](launch-gui.bat)** or a
+desktop shortcut to it. The [GUI](tools/gui/README.md) opens at
+`http://127.0.0.1:8090`; opening it does not load a model. Use **Stop** to unload
+Gufo or **Exit** to close both processes.
+
+See [guided setup details](docs/WINDOWS.md#guided-setup) for logs, preview mode,
+and custom dependency paths, or use the [manual build instructions](docs/WINDOWS.md#prerequisites).
+
+## Linux quickstart
 
 ```sh
 hf download unsloth/Qwen3.8-27B-GGUF \

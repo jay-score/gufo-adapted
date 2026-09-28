@@ -5,7 +5,7 @@
 #   powershell -ExecutionPolicy Bypass -File tools\windows\run-flash-next.ps1 -Draft mtp3    # MTP capped at 3 drafts
 #   powershell -ExecutionPolicy Bypass -File tools\windows\run-flash-next.ps1 -Draft off     # autoregressive baseline
 #   powershell -ExecutionPolicy Bypass -File tools\windows\run-flash-next.ps1 -Mode bench    # pp/tg at depths 0..128K
-#   ... -DraftVocab -Survival -Lookup   the opt-in MTP options (docs\models\qwen3.8-flash-next)
+#   ... -DraftVocab -Survival -Lookup   serve-only MTP options; require -Draft mtp or mtp3
 #
 # Files come from the Hugging Face cache (see docs\WINDOWS.md for the
 # download); -Snapshot points at another copy of unsloth/Qwen3.8-Flash-Next-GGUF.
@@ -24,6 +24,9 @@ param(
   [string]$MtpModel = ""
 )
 $ErrorActionPreference = "Stop"
+if (($DraftVocab -or $Survival -or $Lookup) -and ($Mode -ne "serve" -or $Draft -eq "off")) {
+  throw "-DraftVocab, -Survival and -Lookup require -Mode serve and -Draft mtp or mtp3."
+}
 $bin = Join-Path $PSScriptRoot "..\..\build\release"
 if (-not (Test-Path "$bin\gufo.exe")) {
   throw "gufo.exe not found in $bin; build first: powershell -ExecutionPolicy Bypass -File tools\windows\build.ps1"
@@ -31,27 +34,18 @@ if (-not (Test-Path "$bin\gufo.exe")) {
 
 $modelFile = "UD-Q4_K_XL\Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf"
 $mtpFile = "MTP\mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf"
-# Each Hugging Face revision is its own snapshot folder, holding only the files
-# downloaded at that revision: pick the newest one that has each file.
-$snapshots = @()
+# Match the qualified revision in docs/models/qwen3.8-flash-next/README.md.
+$revision = "38bb39ee97821de2c9009abb7e93950eec396e66"
 if (-not $Snapshot) {
   $cache = if ($env:HF_HUB_CACHE) { $env:HF_HUB_CACHE }
            elseif ($env:HF_HOME) { Join-Path $env:HF_HOME "hub" }
            else { Join-Path $env:USERPROFILE ".cache\huggingface\hub" }
-  $snapshots = @(Get-ChildItem (Join-Path $cache "models--unsloth--Qwen3.8-Flash-Next-GGUF\snapshots") `
-    -Directory -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending |
-    Select-Object -ExpandProperty FullName)
-  $Snapshot = $snapshots | Where-Object { Test-Path (Join-Path $_ $modelFile) } | Select-Object -First 1
-  if (-not $Snapshot) {
-    throw "$modelFile not found in unsloth/Qwen3.8-Flash-Next-GGUF under $cache; see docs\WINDOWS.md or pass -Snapshot"
-  }
+  $Snapshot = Join-Path $cache "models--unsloth--Qwen3.8-Flash-Next-GGUF\snapshots\$revision"
 }
 $model = Join-Path $Snapshot $modelFile
-if (-not (Test-Path $model)) { throw "model not found: $model" }
+if (-not (Test-Path $model)) { throw "model not found: $model; see docs\WINDOWS.md or pass -Snapshot" }
 if (-not $MtpModel) {
-  $MtpModel = @($Snapshot) + $snapshots | ForEach-Object { Join-Path $_ $mtpFile } |
-    Where-Object { Test-Path $_ } | Select-Object -First 1
-  if (-not $MtpModel) { $MtpModel = Join-Path $Snapshot $mtpFile }
+  $MtpModel = Join-Path $Snapshot $mtpFile
 }
 if ($Draft -ne "off" -and -not (Test-Path $MtpModel)) { throw "MTP model not found: $MtpModel (or use -Draft off)" }
 
@@ -97,3 +91,4 @@ Get-ChildItem Env: | Where-Object { $_.Name -like "GUFO_*" } | ForEach-Object {
 }
 Write-Host "gufo $($arguments -join ' ')"
 & "$bin\gufo.exe" @arguments
+exit $LASTEXITCODE

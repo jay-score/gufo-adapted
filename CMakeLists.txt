@@ -18,6 +18,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(GUFO_VERSION "development" CACHE STRING "Gufo build revision")
 include_directories(${CMAKE_SOURCE_DIR})
 if (WIN32)
+  # Keep every executable beside the runtime DLLs staged by build.ps1.
+  # PATH alone can select an incompatible HIP runtime from System32.
+  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
   # Windows: POSIX shadow headers (compat/win32/include) plus their Win32
   # implementation, linked into every target. The UCRT's own deprecated POSIX
   # aliases are disabled so they cannot collide with the shim.
@@ -63,7 +66,7 @@ if (ENGINE_ENABLE_HIP)
     # Before enable_language so CMake's compiler probe gets it too; see the
     # header for the MSVC 14.5x <cmath> conflict it works around.
     set(CMAKE_HIP_FLAGS
-      "${CMAKE_HIP_FLAGS} -I${CMAKE_SOURCE_DIR}/compat/win32/hip_include"
+      "${CMAKE_HIP_FLAGS} -I\"${CMAKE_SOURCE_DIR}/compat/win32/hip_include\""
       CACHE STRING "HIP flags" FORCE)
   endif()
   enable_language(HIP)
@@ -337,6 +340,9 @@ include(CTest)
 if (BUILD_TESTING)
   add_compile_options(-UNDEBUG)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME logit_eval_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/logit_eval_test.py)
+  set_tests_properties(logit_eval_test PROPERTIES LABELS "cpu;quality;tools")
 
   add_subdirectory(tests/models/qwen)
   add_subdirectory(tests/models/qwen27b)

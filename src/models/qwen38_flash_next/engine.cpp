@@ -672,13 +672,15 @@ std::uint32_t Session::MaxVerifyWidth() const noexcept {
 
 bool Session::TeacherForce(std::span<const std::int32_t> tokens,
                            std::vector<float>* rows, std::string* error_msg,
-                           bool prefill) {
+                           bool prefill, std::size_t keep) {
   if (!valid_ || tokens_.empty()) {
     AssignError(error_msg, "teacher forcing needs a synced session");
     return false;
   }
   const std::size_t n = tokens.size();
-  if (n == 0 || (prefill ? MtpEnabled() : n > MaxVerifyWidth()) ||
+  const std::size_t committed = keep == 0 ? n : keep;
+  if (n == 0 || committed > n || (prefill && committed != n) ||
+      (prefill ? MtpEnabled() : n > MaxVerifyWidth()) ||
       tokens_.size() + n > ContextSize()) {
     AssignError(error_msg, "teacher forcing width or context out of range");
     return false;
@@ -689,7 +691,7 @@ bool Session::TeacherForce(std::span<const std::int32_t> tokens,
   valid_ = false;
   anchor_candidates_valid_ = false;
   // The same Forward calls DecodeStep makes: a one-token decode, or a verify
-  // pass whose every row is kept (the draft head is never consulted).
+  // pass with a specified kept prefix (the draft head is never consulted).
   // Prefill arithmetic is the same at every chunk width.
   const auto mode = prefill  ? rocm::Executor::ForwardMode::kPrefill
                     : n == 1 ? rocm::Executor::ForwardMode::kDecode
@@ -697,11 +699,12 @@ bool Session::TeacherForce(std::span<const std::int32_t> tokens,
   if (!exec.Forward(*session_, tokens, static_cast<std::uint32_t>(n),
                     rows->data(), mode, error_msg) ||
       (mode == rocm::Executor::ForwardMode::kVerify &&
-       !exec.Rollback(*session_, static_cast<std::uint32_t>(n), error_msg))) {
+       !exec.Rollback(*session_, static_cast<std::uint32_t>(committed),
+                      error_msg))) {
     return false;
   }
-  std::copy_n(rows->data() + (n - 1) * vocab, vocab, logits_.begin());
-  tokens_.insert(tokens_.end(), tokens.begin(), tokens.end());
+  std::copy_n(rows->data() + (committed - 1) * vocab, vocab, logits_.begin());
+  tokens_.insert(tokens_.end(), tokens.begin(), tokens.begin() + committed);
   valid_ = true;
   return true;
 }

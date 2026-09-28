@@ -10,8 +10,8 @@ versioned contract: supported fields behave as documented, and unsupported
 fields return explicit errors.
 
 Chat Completions is the main API, including streaming, images and tools.
-Responses supports text with optional streaming; Anthropic Messages exposes a
-synchronous text subset.
+Responses supports text, images and function tools with optional streaming;
+Anthropic Messages exposes a synchronous text subset.
 The reference protocols are:
 
 - https://developers.openai.com/api/reference/resources/responses/methods/create/
@@ -231,6 +231,14 @@ Generated reasoning is returned as `reasoning_content` in ordinary and
 streaming Chat Completions responses. Per-model effort mappings and history
 policies are documented in the model cards under `docs/models/`.
 
+`POST /v1/responses` accepts the same effort levels through
+`reasoning.effort`, for example `"reasoning": {"effort": "low"}`.
+Use `none` or `off` to disable thinking. An explicit effort overrides the
+server's thinking defaults; omitting it or setting it to null retains those
+defaults. With no server override, Qwen defaults to `xhigh`; its native levels
+are `low`, `medium`, and `xhigh` (`minimal` maps to `low`, and `high`/`max`
+map to `xhigh`). These controls work with buffered and streaming responses.
+
 The server uses compiled model-specific formatters and validates recognized
 artifact template hashes during model loading. It does not accept custom Jinja
 or claim to enforce a reasoning-token budget.
@@ -260,7 +268,7 @@ cache snapshots. HTTP handlers do not implement model kernels.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/v1/models` | List loaded model aliases and capabilities |
-| `POST` | `/v1/responses` | Text, optional SSE streaming |
+| `POST` | `/v1/responses` | Text and function tools, optional SSE streaming |
 | `POST` | `/v1/chat/completions` | Main chat, streaming, image and tool API |
 | `POST` | `/v1/completions` | Optional legacy text completion adapter |
 | `GET` | `/health` | Process liveness (aliases: `/v1/health`, `/healthz`) |
@@ -431,21 +439,71 @@ Chat messages retain roles, reasoning, tool calls and image content until the
 model's tokenizer and template turn them into model input. The scheduler owns
 request limits, cancellation, cache accounting and completion state.
 
+## Model Discovery
+
+Model discovery at `/v1/models` reports `architecture.input_modalities` as
+`["text", "image"]` only when the loaded text model has a vision encoder;
+otherwise it reports `["text"]`. `/props` exposes the same capability as
+`modalities.vision` for llama.cpp-compatible clients. Its optional `model`
+query parameter must match the loaded model. Selecting a model for a client's
+vision role does not itself enable image input; load a compatible projector.
+
 ## Responses API Subset
 
-`POST /v1/responses` accepts `model`, `input` as text or text-message arrays,
-`instructions`, `max_output_tokens`, `stream`, and the shared sampling controls.
+`POST /v1/responses` accepts `model`, `input` as text or conversation-item arrays,
+`instructions`, `max_output_tokens`, `stream`, `tools`, `tool_choice`,
+`parallel_tool_calls`, `reasoning`, `include`, and the shared sampling controls.
 Clients supply the complete conversation, including prior Gufo `output` items
 when retaining reasoning. `store` and `background` must be false
-when present. Images, tools, structured output, server-side conversations and
-`previous_response_id` are rejected on this route. Use Chat Completions for images
-and tools.
+when present. Built-in tools, structured output, server-side conversations
+and `previous_response_id` are rejected on this route.
+
+User message content and `function_call_output.output` arrays accept
+`{"type":"input_image","image_url":"data:image/png;base64,...","detail":"auto"}`
+alongside text parts. Image placement relative to text is preserved, including
+inside tool results. Images use the same model-owned vision pipeline and
+request-wide limits as Chat Completions: at most 16 images and 20 MiB of encoded
+image data, with PNG/JPEG data URLs or public HTTPS URLs. Omitted detail means
+`auto`; other detail policies, uploaded `file_id` references, and images in
+assistant/system messages are rejected. Load a compatible BF16 projector for
+Qwen image input. Clients must resend the image content in stateless history.
+
+Function tools accept the flat Responses definition (`type`, `name`,
+`description`, `parameters`) or the nested Chat Completions definition.
+`tool_choice` supports `auto` (default), `none`, and `required`; named-function
+and allowed-tools choices are not supported. `parallel_tool_calls` defaults to
+true when tools are present. Setting it to false requires at most one call;
+multiple generated calls fail instead of silently discarding calls.
+
+Calls are returned as `function_call` output items with a JSON `arguments`
+string, a unique item `id`, and a `call_id`. On the next request, append the
+response's output items to the conversation and then append one
+`function_call_output` item per result, using the corresponding `call_id`.
+Its `output` accepts a string or text/image content parts. Each result must match
+an earlier call in the supplied `input`; no server-side response history is stored.
+For example, a result item is
+`{"type":"function_call_output","call_id":"call_...","output":"Sunny"}`.
+
+Streams emit `response.output_item.added`,
+`response.function_call_arguments.delta`,
+`response.function_call_arguments.done`, and `response.output_item.done` for
+each call. Arguments are sent together after the complete call is parsed, as
+with Chat Completions. Reasoning and ordinary text continue to stream live.
+Tool-choice failures return HTTP 502, or `response.failed` after streaming
+headers have been sent. Function tools use the same parser and inference path
+as Chat Completions; clients execute the tools.
 
 Responses report `incomplete` with reason `max_output_tokens` when generation
 hits its limit. Otherwise they report `completed`. `stream: true` sends typed
 SSE events with consecutive `sequence_number` values: lifecycle, output items,
 text/reasoning deltas and terminal status. Local reasoning is exposed as
 `reasoning` items with `summary_text`; visible answers use `output_text`.
+`reasoning.summary` accepts `auto` or null, using this existing plaintext
+format; separate concise/detailed summaries are not supported. Clients such
+as Oh My Pi may send `include: ["reasoning.encrypted_content"]`. Gufo accepts
+this optional-data hint and returns `encrypted_content: null`; replay uses
+the plaintext summary. Non-null encrypted reasoning input, other include
+values and unrecognized reasoning controls are rejected.
 Disconnects cancel generation through the same scheduler as Chat Completions.
 
 The official [OpenAI Python SDK](https://github.com/openai/openai-python) is
@@ -475,7 +533,8 @@ The other compatibility routes are deliberately limited:
 
 All four routes validate the loaded model, positive integer limits and shared
 sampling controls. The three routes above reject streaming; all reject multiple
-candidates. Responses and Messages honor the server's thinking defaults.
+candidates. Messages honors the server's thinking defaults; Responses also
+allows per-request effort overrides.
 Native Messages rejects tools, `thinking`, and `output_config`; use Chat
 Completions for tool/reasoning controls. Completions routes accept `stop`;
 Messages accepts `stop_sequences`. Responses has no stop-sequence field.
