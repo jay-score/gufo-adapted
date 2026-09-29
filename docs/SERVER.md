@@ -156,6 +156,14 @@ and newly processed tokens separately; resuming from the checkpoint processes
 the short suffix. System instructions, tool definitions and image identities
 must match the retained prefix.
 
+Qwen's in-memory cache compares image inputs only through the retained token
+boundary. Appending a screenshot can reuse earlier text and images, including
+an earlier snapshot; changing an image inside that prefix still rejects reuse.
+An image partially inside the prefix contributes its entire pixel fingerprint.
+Disk lookup remains keyed by the complete request's image identity. Flash-Next
+snapshot payload version 15 stores the image identity at the snapshot boundary;
+older disk checkpoints are not reused by this version.
+
 `SIGINT` and `SIGTERM` cancel active requests and drain accepted disk writes
 before exiting. `--cache-disk DIR` defaults to 8 GiB retained on disk.
 `--cache-disk-staging-bytes 0` (the default) selects the smallest of 1 GiB,

@@ -27,6 +27,10 @@ using TextRunnerToken = ContinuationToken;
 struct TextPromptContext {
   virtual ~TextPromptContext() = default;
   std::vector<std::uint8_t> cache_identity;
+  [[nodiscard]] virtual std::span<const std::uint8_t> IdentityBefore(
+      std::size_t) const {
+    return cache_identity;
+  }
 };
 
 struct TextPreparedPrompt {

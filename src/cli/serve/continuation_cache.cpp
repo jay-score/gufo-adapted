@@ -101,6 +101,7 @@ ContinuationCache::Lease::Lease(Lease&& other) noexcept
       reserved_snapshot_bytes_(
           std::exchange(other.reserved_snapshot_bytes_, 0)),
       input_identity_(std::move(other.input_identity_)),
+      input_identity_at_(std::move(other.input_identity_at_)),
       lookup_(std::exchange(other.lookup_, {})) {}
 
 ContinuationCache::Lease& ContinuationCache::Lease::operator=(
@@ -117,6 +118,7 @@ ContinuationCache::Lease& ContinuationCache::Lease::operator=(
     restored_from_disk_ = std::exchange(other.restored_from_disk_, false);
     reserved_snapshot_bytes_ = std::exchange(other.reserved_snapshot_bytes_, 0);
     input_identity_ = std::move(other.input_identity_);
+    input_identity_at_ = std::move(other.input_identity_at_);
     lookup_ = std::exchange(other.lookup_, {});
   }
   return *this;
@@ -177,6 +179,11 @@ void ContinuationCache::Lease::SkipSnapshot(SnapshotEventReason reason,
   reserved_snapshot_bytes_ = 0;
 }
 
+std::span<const std::uint8_t> ContinuationCache::Lease::IdentityAt(
+    std::size_t count) const {
+  return input_identity_at_ ? input_identity_at_(count) : input_identity_;
+}
+
 std::size_t ContinuationCache::Lease::Commit(
     std::vector<ContinuationToken> tokens,
     std::shared_ptr<const ContinuationSnapshot> snapshot,
@@ -184,9 +191,12 @@ std::size_t ContinuationCache::Lease::Commit(
   if (cache_ == nullptr) {
     throw std::logic_error("continuation cache lease is empty");
   }
+  const auto identity = IdentityAt(tokens.size());
+  const auto live_identity = IdentityAt(live_tokens.size());
   const std::size_t retained = cache_->Commit(
       index_, source_index_, reserved_snapshot_bytes_, std::move(tokens),
-      std::move(snapshot), std::move(input_identity_), std::move(live_tokens));
+      std::move(snapshot), {identity.begin(), identity.end()},
+      std::move(live_tokens), {live_identity.begin(), live_identity.end()});
   cache_ = nullptr;
   reserved_snapshot_bytes_ = 0;
   return retained;
@@ -197,9 +207,10 @@ std::size_t ContinuationCache::Lease::PublishSnapshot(
     std::shared_ptr<const ContinuationSnapshot> snapshot) {
   if (cache_ == nullptr)
     throw std::logic_error("continuation cache lease is empty");
+  const auto identity = IdentityAt(tokens.size());
   const auto retained = cache_->Commit(
       index_, source_index_, reserved_snapshot_bytes_, std::move(tokens),
-      std::move(snapshot), input_identity_, {}, false);
+      std::move(snapshot), {identity.begin(), identity.end()}, {}, {}, false);
   reserved_snapshot_bytes_ = 0;
   return retained;
 }
@@ -253,7 +264,8 @@ bool ContinuationCache::Lease::HasSnapshotFor(
   const std::lock_guard lock(cache_->impl_->mutex);
   return std::ranges::any_of(cache_->impl_->entries, [&](const auto& source) {
     return source->valid && source->snapshot &&
-           source->input_identity == input_identity_ &&
+           std::ranges::equal(source->input_identity,
+                              IdentityAt(tokens.size())) &&
            std::ranges::equal(source->tokens, tokens);
   });
 }
@@ -263,7 +275,10 @@ ContinuationCache::Lease ContinuationCache::Acquire(
     const CancellationCheck& is_cancelled,
     std::span<const std::uint8_t> input_identity,
     const std::function<void(ContinuationState&)>& prepare_state,
-    bool reuse_prompt) {
+    bool reuse_prompt, InputIdentityAt input_identity_at) {
+  const auto identity_at = [&](std::size_t count) {
+    return input_identity_at ? input_identity_at(count) : input_identity;
+  };
   while (true) {
     std::unique_lock<std::mutex> lock(impl_->mutex);
 
@@ -274,8 +289,8 @@ ContinuationCache::Lease ContinuationCache::Acquire(
          ++index) {
       const auto& entry = *impl_->entries[index];
       if ((!impl_->snapshot_mode() && !entry.available) || !entry.valid ||
-          !std::equal(entry.input_identity.begin(), entry.input_identity.end(),
-                      input_identity.begin(), input_identity.end()) ||
+          !std::ranges::equal(entry.input_identity,
+                              identity_at(entry.tokens.size())) ||
           !IsPrefix(entry.tokens, prompt)) {
         continue;
       }
@@ -292,7 +307,8 @@ ContinuationCache::Lease ContinuationCache::Acquire(
         const auto& entry = *impl_->entries[index];
         if (entry.available && !entry.live_tokens.empty() &&
             entry.live_tokens.size() >= cached_tokens &&
-            std::ranges::equal(entry.live_identity, input_identity) &&
+            std::ranges::equal(entry.live_identity,
+                               identity_at(entry.live_tokens.size())) &&
             IsPrefix(entry.live_tokens, prompt)) {
           live_source = index;
           cached_tokens = entry.live_tokens.size();
@@ -308,7 +324,7 @@ ContinuationCache::Lease ContinuationCache::Acquire(
       const auto inspect = [&](const auto& tokens, const auto& identity) {
         if (tokens.empty())
           return;
-        if (!std::ranges::equal(identity, input_identity)) {
+        if (!std::ranges::equal(identity, identity_at(tokens.size()))) {
           if (lookup.miss_reason == "no_checkpoint")
             lookup.miss_reason = "input_changed";
           return;
@@ -400,6 +416,7 @@ ContinuationCache::Lease ContinuationCache::Acquire(
                   restored_snapshot_bytes, restore_ms);
       lease.input_identity_.assign(input_identity.begin(),
                                    input_identity.end());
+      lease.input_identity_at_ = std::move(input_identity_at);
       lease.lookup_ = lookup;
       return lease;
     }
@@ -553,7 +570,8 @@ std::size_t ContinuationCache::Commit(
     std::vector<ContinuationToken> tokens,
     std::shared_ptr<const ContinuationSnapshot> snapshot,
     std::vector<std::uint8_t> input_identity,
-    std::vector<ContinuationToken> live_tokens, bool release_state) {
+    std::vector<ContinuationToken> live_tokens,
+    std::vector<std::uint8_t> live_identity, bool release_state) {
   const std::size_t token_count = tokens.size();
   const std::size_t snapshot_bytes =
       snapshot != nullptr ? snapshot->PayloadBytes() : 0;
@@ -604,7 +622,7 @@ std::size_t ContinuationCache::Commit(
     if (impl_->snapshot_mode()) {
       if (release_state) {
         state_entry.live_tokens = std::move(live_tokens);
-        state_entry.live_identity = input_identity;
+        state_entry.live_identity = std::move(live_identity);
       }
       if (retain_snapshot) {
         const std::size_t no_entry = impl_->entries.size();

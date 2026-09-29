@@ -234,7 +234,7 @@ public:
   }
 
   /// Compatibility version; bump on payload or inference arithmetic changes.
-  static constexpr std::uint32_t kSnapshotPayloadVersion = 14;
+  static constexpr std::uint32_t kSnapshotPayloadVersion = 15;
   /// Bytes a snapshot of the current context occupies.
   [[nodiscard]] std::uint64_t SnapshotBytes() const;
   /// Captures the whole context (tokens, device caches and recurrent
@@ -244,7 +244,8 @@ public:
       std::string* error_msg = nullptr) const;
   /// Replaces this session's context with a snapshot of the same model.
   /// Image snapshots require ConfigureVision with the matching immutable
-  /// prompt first; pixel data is not serialized. Text snapshots clear images.
+  /// prompt prefix first; pixel data is not serialized. Later images may
+  /// differ. Text snapshots clear images that would affect the restored prefix.
   [[nodiscard]] bool RestoreSnapshot(const SessionSnapshot& snapshot,
                                      std::string* error_msg = nullptr);
   [[nodiscard]] bool RestoreSnapshot(std::span<const std::uint8_t> payload,
@@ -297,7 +298,9 @@ private:
   /// Index of tokens_ for ModelOptions::prompt_lookup.
   PromptLookup lookup_;
   SpeculativeStats stats_;
-  std::vector<std::uint8_t> image_identity_;
+  std::shared_ptr<const qwen::vision::Prompt> image_prompt_;
+  [[nodiscard]] std::span<const std::uint8_t> ImageIdentityBefore(
+      std::size_t count) const;
   bool valid_{true};
   [[nodiscard]] bool MtpEnabled() const noexcept;
 };

@@ -7,6 +7,17 @@ September 23, 2026; other results: September 22.
 llama.cpp uses `b11069` for AR and `6fcaa16f` for MTP.
 
 Positive gain favors Gufo.
+
+September 29 Windows screenshot-cache check (separate from the throughput tables):
+on a 14.5K-token C1 tool conversation, appending two 512x512 screenshots changed
+time to first token from **12.56 / 11.21 s** to **2.36 / 0.83 s**. Each append
+processed **317** new prompt tokens instead of **14,885 / 15,213**. One matched
+sequence per build, UD-Q4_K_XL, Q8_0 MTP, BF16 projector, context 200,000,
+greedy, thinking off, disk cache off. The first screenshot includes lazy vision
+startup in both runs. Response text matched; these are workload-specific
+latencies, not a general throughput claim.
+[Measurements and identities](artifacts/image-prefix-cache.json).
+
 [Quality and measurement details](QUALITY.md#benchmark-method) · [Model identities](artifacts/model-identities.json)
 
 ## Single user, autoregressive

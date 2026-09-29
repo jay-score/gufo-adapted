@@ -100,6 +100,26 @@ void HashU32(crypto::Sha256Hasher& hash, std::uint32_t value) {
 }
 }  // namespace
 
+bool RopeLayout::SamePrefix(const RopeLayout& other,
+                            std::size_t token_count) const {
+  const auto end = std::find_if(
+      images.begin(), images.end(),
+      [token_count](const auto& image) { return image.offset >= token_count; });
+  const auto other_end = std::find_if(
+      other.images.begin(), other.images.end(),
+      [token_count](const auto& image) { return image.offset >= token_count; });
+  return std::equal(images.begin(), end, other.images.begin(), other_end);
+}
+
+std::span<const std::uint8_t> Prompt::IdentityBefore(
+    std::size_t token_count) const {
+  for (auto it = images.rbegin(); it != images.rend(); ++it) {
+    if (it->grid.offset < token_count)
+      return it->prefix_identity.empty() ? cache_identity : it->prefix_identity;
+  }
+  return {};
+}
+
 std::array<std::int32_t, 3> RopeLayout::Position(std::uint32_t physical) const {
   std::int64_t delta = 0;
   for (const auto& image : images) {
@@ -281,9 +301,12 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
       HashU32(identity, grid.height);
       HashU32(identity, grid.width);
       identity.Update(pixels.pixels);
+      const auto prefix_digest = identity.Digest();
       prompt.tokens.insert(prompt.tokens.end(), count, kImageToken);
       prompt.rope.images.push_back(grid);
-      prompt.images.push_back({std::move(pixels), grid});
+      prompt.images.push_back({std::move(pixels),
+                               grid,
+                               {prefix_digest.begin(), prefix_digest.end()}});
       cursor = offsets[index++] + std::string_view("<|image_pad|>").size();
     }
   }
