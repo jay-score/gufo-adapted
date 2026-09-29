@@ -16,7 +16,7 @@ class ConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings/launcher.json"
             self.assertEqual(config.load_settings(path), config.DEFAULTS)
-            settings = config.DEFAULTS | {"model": str(Path(directory) / "模型 & test.gguf"), "mtp": True}
+            settings = config.DEFAULTS | {"model": str(Path(directory) / "模型 & test.gguf"), "speculative": "mtp"}
             config.save_settings(path, settings)
             self.assertEqual(config.load_settings(path), settings)
             before = path.read_bytes()
@@ -36,7 +36,8 @@ class ConfigTest(unittest.TestCase):
         for change in ({"port": True}, {"port": 0}, {"port": 65536}, {"context": -1},
                        {"temperature": float("nan")}, {"temperature": 2.1}, {"top_p": 1.1}, {"top_p": 0},
                        {"top_k": 2.5}, {"seed": 2**60}, {"max_tokens": 0}, {"repeat_penalty": 0},
-                       {"think": "yes"}, {"mtp": "false"}, {"model": "relative.gguf"},
+                       {"think": "yes"}, {"mtp": "false"}, {"speculative": "unknown"},
+                       {"dflash_model": "relative.gguf"}, {"model": "relative.gguf"},
                        {"served_model_name": "line\nbreak"}, {"extra_args": "--anything"}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 config.validate_settings(change)
@@ -60,7 +61,7 @@ class ConfigTest(unittest.TestCase):
             self.assertNotIn("--mtp-model", command)
             with self.assertRaisesRegex(ValueError, "first shard"):
                 config.check_gguf(str(root / "模型-00002-of-00003.gguf"), "Model", sharded=True)
-            settings.update(mtp=True, prompt_lookup=True, mtp_policy="survival", mtp_draft_vocab="latin")
+            settings.update(speculative="mtp", prompt_lookup=True, mtp_policy="survival", mtp_draft_vocab="latin")
             with self.assertRaisesRegex(ValueError, "MTP sidecar"):
                 config.build_command(settings, check_files=True)
             sidecar = root / "mtp & sidecar.gguf"
@@ -73,6 +74,52 @@ class ConfigTest(unittest.TestCase):
             sidecar.write_text("not a model")
             with self.assertRaisesRegex(ValueError, "GGUF header"):
                 config.build_command(settings, check_files=True)
+
+    def test_legacy_mtp_settings_migrate_without_writing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "launcher.json"
+            for enabled, mode in ((True, "mtp"), (False, "off")):
+                legacy = {"mtp": enabled, "context": 200000, "draft_tokens": 3,
+                          "mtp_model": str(Path(directory) / "mtp.gguf")}
+                path.write_text(json.dumps({"version": 1, "settings": legacy}), encoding="utf-8")
+                before = path.read_bytes()
+                settings = config.load_settings(path)
+                self.assertEqual(settings["speculative"], mode)
+                self.assertNotIn("mtp", settings)
+                self.assertEqual(settings["mtp_model"], legacy["mtp_model"])
+                self.assertEqual(settings["context"], 200000)
+                self.assertEqual(settings["draft_tokens"], 3)
+                self.assertEqual(path.read_bytes(), before)
+                config.save_settings(path, settings)
+                self.assertEqual(config.load_settings(path), settings)
+
+    def test_dflash_and_off_do_not_inherit_mtp_flags(self):
+        with tempfile.TemporaryDirectory(prefix="gufo draft ") as directory:
+            root = Path(directory)
+            exe, model, draft = (root / name for name in ("gufo.exe", "main.gguf", "DFlash2.gguf"))
+            exe.touch()
+            model.write_bytes(b"GGUF")
+            settings = config.DEFAULTS | {
+                "executable": str(exe), "model": str(model), "speculative": "dflash2",
+                "dflash_model": str(draft), "mtp_model": str(root / "missing-mtp.gguf"),
+                "prompt_lookup": True, "mtp_policy": "survival", "mtp_draft_vocab": "latin",
+            }
+            with self.assertRaisesRegex(ValueError, "DFlash2 draft"):
+                config.build_command(settings, check_files=True)
+            draft.write_bytes(b"GGUF")
+            command = config.build_command(settings, check_files=True)
+            self.assertEqual(command[command.index("--speculative") + 1], "dflash2")
+            self.assertEqual(command[command.index("--dflash-model") + 1], str(draft))
+            for flag in ("--mtp-model", "--draft-tokens", "--mtp-policy", "--mtp-draft-vocab", "--prompt-lookup"):
+                self.assertNotIn(flag, command)
+            path = root / "launcher.json"
+            config.save_settings(path, settings)
+            self.assertEqual(config.load_settings(path), settings)
+            draft.unlink()
+            command = config.build_command(settings | {"speculative": "off"}, check_files=True)
+            self.assertEqual(command[command.index("--speculative") + 1], "off")
+            self.assertNotIn("--dflash-model", command)
+            self.assertNotIn("--mtp-model", command)
 
     def test_folder_picker_groups_shards_without_loading_weights(self):
         with tempfile.TemporaryDirectory() as directory:

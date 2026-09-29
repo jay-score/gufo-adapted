@@ -70,7 +70,7 @@ class ServerTest(unittest.TestCase):
         model.write_bytes(b"GGUF")
         mtp.write_bytes(b"GGUF")
         settings = DEFAULTS | {"executable": str(exe), "model": str(model),
-                               "mtp": True, "mtp_model": str(mtp), "prompt_lookup": True}
+                               "speculative": "mtp", "mtp_model": str(mtp), "prompt_lookup": True}
         started = self.client.post("/api/start", json=settings, headers=self.headers)
         self.assertEqual(started.status_code, 200)
         command, port, name = self.manager.start.call_args.args
@@ -94,6 +94,25 @@ class ServerTest(unittest.TestCase):
         response = client.get("/api/settings", headers={"X-Gufo-Token": token})
         self.assertIn("Cannot read saved settings", response.json["warning"])
         self.assertEqual(self.config.read_text(), "broken")
+
+    def test_dflash_launch_uses_draft_flag_and_leaves_saved_mtp_settings_alone(self):
+        exe, model, draft = [self.root / name for name in ("gufo.exe", "main.gguf", "DFlash2.gguf")]
+        exe.touch()
+        model.write_bytes(b"GGUF")
+        draft.write_bytes(b"GGUF")
+        saved = DEFAULTS | {"speculative": "mtp", "context": 200000}
+        self.client.post("/api/settings", json=saved, headers=self.headers)
+        before = self.config.read_bytes()
+        settings = saved | {"executable": str(exe), "model": str(model),
+                            "speculative": "dflash2", "dflash_model": str(draft), "prompt_lookup": True}
+        started = self.client.post("/api/start", json=settings, headers=self.headers)
+        self.assertEqual(started.status_code, 200)
+        command = self.manager.start.call_args.args[0]
+        self.assertEqual(command[command.index("--speculative") + 1], "dflash2")
+        self.assertEqual(command[command.index("--dflash-model") + 1], str(draft))
+        self.assertNotIn("--mtp-model", command)
+        self.assertNotIn("--prompt-lookup", command)
+        self.assertEqual(self.config.read_bytes(), before)
 
     def test_exit_stops_owned_process_and_rejects_a_racing_start(self):
         response = self.client.post("/api/exit", headers=self.headers)

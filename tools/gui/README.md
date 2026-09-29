@@ -25,8 +25,10 @@ launcher opens at **http://127.0.0.1:8090**. Keep its terminal open.
 
 1. Choose your **models folder**, then select a main GGUF. Browse into subfolders
    or paste a full path. Split models appear once; select their first shard.
-2. To use MTP, enable it and select the matching sidecar. Flash-Next uses its
-   shared Q8_0 MTP file. The picker shows local files; Gufo still decides which
+2. Choose **Speculative decoding**: **Off**, **MTP · Qwen Flash-Next**, or
+   **DFlash2 · Qwen3.8-27B**. MTP uses Flash-Next's matching shared Q8_0 sidecar;
+   DFlash2 uses a matching Qwen3.8-27B DFlash2 draft. Selecting a file does not
+   change the mode. The picker shows local files; Gufo still decides which
    models and tensor formats it supports.
 3. Optionally choose a **vision projector**. A blank field means **auto-detect**,
    not disabled vision. An explicitly selected incompatible projector fails
@@ -52,7 +54,9 @@ Settings live in `%LOCALAPPDATA%\Gufo\launcher.json`. Saving is explicit and
 works while the engine is running. Changes apply on the next launch; **Start**
 does not overwrite the saved configuration. Reopening the launcher restores
 the form without automatically loading a model. Choosing or entering a different
-model clears the previous sidecar selections.
+model clears the previous sidecar selections and resets speculative decoding to
+Off. Older saved MTP checkbox settings restore as MTP or Off without rewriting
+the file until you explicitly save.
 
 The button at the top right of the bar switches between the light paper palette
 and a dark navy one; cards, fields, the status pill, metrics and the file picker
@@ -89,6 +93,11 @@ Restart the launcher after updating its code to load the new panel.
 - More options exposes sessions, penalties and Flash-Next MTP options. MTP
   options are passed only when MTP is enabled. Latin draft vocabulary is
   intended for English/code; survival and lookup target single-session use.
+- DFlash2 uses the engine's adaptive defaults. MTP options, including its draft
+  token cap, are not passed to DFlash2. If Qwen3.8-27B reports `MTP HTTP decoding
+  requires a Qwen Flash-Next model`, select DFlash2 and choose its draft in the
+  DFlash2 field. Older GUI versions only expose MTP; update and restart the
+  launcher to see the mode selector.
 - Start validates paths, GGUF magic, split-file presence and numeric options.
   It does not establish model/sidecar compatibility or estimate available VRAM.
 - Command preview shows the next native argument list. It uses Windows native

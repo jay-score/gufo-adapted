@@ -38,10 +38,13 @@ function updateControls() {
   $("stop-button").disabled = busy || !active || runtime.state === "stopping" || closed;
   $("save-button").disabled = !loaded || busy || closed;
   $("exit-button").disabled = busy || closed;
-  $("mtp-options").disabled = !$("mtp").checked;
+  const mode = $("speculative").value;
+  $("mtp-options").disabled = mode !== "mtp";
+  $("mtp-options").hidden = mode !== "mtp";
   $("reasoning_effort").disabled = $("think").value === "off";
-  $("mtp-files").hidden = !$("mtp").checked;
-  for (const key of ["model", "mtp_model", "mmproj"]) {
+  $("mtp-files").hidden = mode !== "mtp";
+  $("dflash-files").hidden = mode !== "dflash2";
+  for (const key of ["model", "mtp_model", "dflash_model", "mmproj"]) {
     $(key).title = $(key).value;
     $(`${key}-filename`).textContent = $(key).value.split(/[\\/]/).pop();
   }
@@ -117,12 +120,15 @@ async function action(callback) {
 
 form.addEventListener("input", edited);
 form.addEventListener("change", edited);
-$("model").addEventListener("change", () => {
+function modelChanged() {
   if ($("model").value !== previousModel) {
-    $("mtp_model").value = ""; $("mmproj").value = ""; $("mtp").checked = false;
+    $("mtp_model").value = ""; $("dflash_model").value = ""; $("mmproj").value = "";
+    $("speculative").value = "off";
     previousModel = $("model").value;
   }
-});
+}
+$("model").addEventListener("input", modelChanged);
+$("model").addEventListener("change", modelChanged);
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   if (busy || closed) return;
@@ -204,7 +210,7 @@ function renderFiles() {
 
 document.querySelectorAll("[data-browse]").forEach((button) => button.addEventListener("click", () => {
   pickerTarget = button.dataset.browse; pickerKind = button.dataset.kind;
-  $("picker-title").textContent = pickerKind === "folder" ? "Choose your models folder" : `Choose ${pickerTarget === "executable" ? "Gufo executable" : pickerTarget === "mtp_model" ? "MTP sidecar" : pickerTarget === "mmproj" ? "vision projector" : "main model"}`;
+  $("picker-title").textContent = pickerKind === "folder" ? "Choose your models folder" : `Choose ${pickerTarget === "executable" ? "Gufo executable" : pickerTarget === "mtp_model" ? "MTP sidecar" : pickerTarget === "dflash_model" ? "DFlash2 draft" : pickerTarget === "mmproj" ? "vision projector" : "main model"}`;
   $("select-folder").hidden = pickerKind !== "folder";
   $("picker-roots").replaceChildren();
   const homeButton = document.createElement("button");

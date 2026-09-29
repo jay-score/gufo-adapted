@@ -10,12 +10,13 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 SHARD = re.compile(r"^(.*)-(\d{5})-of-(\d{5})\.gguf$", re.IGNORECASE)
-PATH_FIELDS = ("executable", "models_dir", "model", "mtp_model", "mmproj")
+PATH_FIELDS = ("executable", "models_dir", "model", "mtp_model", "dflash_model", "mmproj")
 DEFAULTS = {
     "executable": str(ROOT / "build" / "release" / ("gufo.exe" if os.name == "nt" else "gufo")),
     "models_dir": str(Path.home()),
     "model": "",
     "mtp_model": "",
+    "dflash_model": "",
     "mmproj": "",  # Empty means engine auto-discovery, not disabled vision.
     "context": 32768,
     "max_tokens": 2048,
@@ -33,7 +34,7 @@ DEFAULTS = {
     "repeat_last_n": 64,
     "frequency_penalty": 0.0,
     "presence_penalty": 0.0,
-    "mtp": False,
+    "speculative": "off",
     "draft_tokens": 7,
     "mtp_policy": "length",
     "mtp_draft_vocab": "full",
@@ -51,6 +52,7 @@ FLOAT_LIMITS = {
     "presence_penalty": (-2, 2),
 }
 ENUMS = {"think": ("auto", "on", "off"), "reasoning_effort": ("auto", "low", "medium", "xhigh"),
+         "speculative": ("off", "mtp", "dflash2"),
          "mtp_policy": ("length", "survival"),
          "mtp_draft_vocab": ("full", "latin")}
 CLI_FIELDS = (
@@ -66,8 +68,15 @@ def settings_path():
 
 
 def validate_settings(values):
-    if not isinstance(values, dict) or set(values) - DEFAULTS.keys():
+    if not isinstance(values, dict) or set(values) - DEFAULTS.keys() - {"mtp"}:
         raise ValueError("Settings must contain only the supported launcher fields.")
+    # Migrate the original MTP checkbox without rewriting saved settings on load.
+    if "mtp" in values:
+        values = dict(values)
+        mtp = values.pop("mtp")
+        if type(mtp) is not bool:
+            raise ValueError("mtp: expected a checkbox value.")
+        values.setdefault("speculative", "mtp" if mtp else "off")
     result = DEFAULTS | values
     for key, default in DEFAULTS.items():
         value = result[key]
@@ -160,8 +169,10 @@ def build_command(values, *, check_files=False):
         check_gguf(settings["model"], "Model", sharded=True)
         if settings["mmproj"]:
             check_gguf(settings["mmproj"], "Vision projector")
-        if settings["mtp"]:
+        if settings["speculative"] == "mtp":
             check_gguf(settings["mtp_model"], "MTP sidecar")
+        elif settings["speculative"] == "dflash2":
+            check_gguf(settings["dflash_model"], "DFlash2 draft")
     command = [settings["executable"], "serve", "--host", "127.0.0.1",
                "--port", str(settings["port"]), "--sessions", str(settings["sessions"]),
                "llm", "--model", settings["model"]]
@@ -171,12 +182,14 @@ def build_command(values, *, check_files=False):
         command.extend(["--reasoning-effort", settings["reasoning_effort"]])
     if settings["mmproj"]:
         command.extend(["--mmproj", settings["mmproj"]])
-    command.extend(["--speculative", "mtp" if settings["mtp"] else "off"])
-    if settings["mtp"]:
+    command.extend(["--speculative", settings["speculative"]])
+    if settings["speculative"] == "mtp":
         for key in ("mtp_model", "draft_tokens", "mtp_policy", "mtp_draft_vocab"):
             command.extend(["--" + key.replace("_", "-"), str(settings[key])])
         if settings["prompt_lookup"]:
             command.append("--prompt-lookup")
+    elif settings["speculative"] == "dflash2":
+        command.extend(["--dflash-model", settings["dflash_model"]])
     return command
 
 

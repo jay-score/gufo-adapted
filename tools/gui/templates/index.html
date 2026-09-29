@@ -38,12 +38,18 @@
           <div class="path-row"><input id="model" name="model" type="text" spellcheck="false" placeholder="Choose a model or its first shard"><button type="button" data-browse="model" data-kind="gguf" aria-label="Choose main model">Choose</button></div>
           <p id="model-filename" class="selected-file"></p>
           <div class="divider"></div>
-          <label class="check-label"><input id="mtp" name="mtp" type="checkbox"> Enable MTP speculative decoding</label>
-          <div id="mtp-files"><label for="mtp_model">MTP sidecar</label>
+          <label for="speculative">Speculative decoding</label>
+          <select id="speculative" name="speculative"><option value="off">Off</option><option value="mtp">MTP · Qwen Flash-Next</option><option value="dflash2">DFlash2 · Qwen3.8-27B</option></select>
+          <div id="mtp-files" hidden><label for="mtp_model">MTP sidecar</label>
             <div class="path-row"><input id="mtp_model" name="mtp_model" type="text" spellcheck="false" placeholder="Matching shared Q8_0 sidecar"><button type="button" data-browse="mtp_model" data-kind="gguf" aria-label="Choose MTP sidecar">Choose</button></div>
             <p id="mtp_model-filename" class="selected-file"></p>
           </div>
-          <p class="hint">For supported models with a matching MTP head. Flash-Next uses the shared Q8_0 sidecar.</p>
+          <div id="dflash-files" hidden><label for="dflash_model">DFlash2 draft</label>
+            <div class="path-row"><input id="dflash_model" name="dflash_model" type="text" spellcheck="false" placeholder="Matching Qwen3.8-27B DFlash2 draft"><button type="button" data-browse="dflash_model" data-kind="gguf" aria-label="Choose DFlash2 draft">Choose</button></div>
+            <p id="dflash_model-filename" class="selected-file"></p>
+            <p class="hint">Uses Gufo's adaptive DFlash2 defaults.</p>
+          </div>
+          <p class="hint">Choose the mode for your main model and a matching draft file. Flash-Next uses an MTP sidecar; Qwen3.8-27B uses DFlash2.</p>
           <label for="mmproj">Vision projector <span class="optional">optional</span></label>
           <div class="path-row"><input id="mmproj" name="mmproj" type="text" spellcheck="false" placeholder="Auto-detect"><button type="button" data-browse="mmproj" data-kind="gguf" aria-label="Choose vision projector">Choose</button></div>
           <p id="mmproj-filename" class="selected-file"></p>
