@@ -1,7 +1,7 @@
 # Local Gufo launcher
 
 A small browser control panel for one Gufo text server. Select existing model
-files, configure a curated set of server and sampler options, save the settings,
+files, configure a curated set of server and sampler options, save named presets,
 and start or stop inference. The engine remains a separate executable.
 
 ## Start on Windows
@@ -25,8 +25,8 @@ launcher opens at **http://127.0.0.1:8090**. Keep its terminal open.
 
 1. Choose your **models folder**, then select a main GGUF. Browse into subfolders
    or paste a full path. Split models appear once; select their first shard.
-2. Choose **Speculative decoding**: **Off**, **MTP · Qwen Flash-Next**, or
-   **DFlash2 · Qwen3.8-27B**. MTP uses Flash-Next's matching shared Q8_0 sidecar;
+2. Choose the **Model family**, then **Speculative decoding**: **Off**, **MTP**
+   for Flash-Next, or **DFlash2** for Qwen3.8-27B. MTP uses Flash-Next's matching shared Q8_0 sidecar;
    DFlash2 uses a matching Qwen3.8-27B DFlash2 draft. Selecting a file does not
    change the mode. The picker shows local files; Gufo still decides which
    models and tensor formats it supports.
@@ -36,7 +36,7 @@ launcher opens at **http://127.0.0.1:8090**. Keep its terminal open.
 4. Check the **Gufo executable**. It defaults to this checkout's
    `build/release/gufo.exe`; another built copy can be selected. Leave that
    executable alongside its runtime DLLs and kernel libraries.
-5. Adjust settings, click **Save settings**, then **Start Gufo**. Wait for
+5. Adjust settings, click **Save preset** (or **Save as…** for a new name), then **Start Gufo**. Wait for
    **Ready**, and connect your chat client to the displayed API address and model
    name. The defaults are `http://127.0.0.1:8080/v1` and `gufo`.
 
@@ -51,18 +51,44 @@ Changing the thinking controls does not rewrite your sampler settings. API
 clients can override the server's generation defaults per request.
 
 Settings live in `%LOCALAPPDATA%\Gufo\launcher.json`. Saving is explicit and
-works while the engine is running. Changes apply on the next launch; **Start**
-does not overwrite the saved configuration. Reopening the launcher restores
-the form without automatically loading a model. Choosing or entering a different
-model clears the previous sidecar selections and resets speculative decoding to
-Off. Older saved MTP checkbox settings restore as MTP or Off without rewriting
-the file until you explicitly save.
+works while the engine is running. **Start** uses the current form without saving
+it. Reopening the launcher restores the last saved preset without loading a model.
+
+The **Launch preset** selector loads a complete model configuration: model and
+sidecar paths, API model name, context, sessions, sampling, reasoning, and
+speculative options. **Save preset** updates it; **Save as…** creates an independent
+copy. **Rename** keeps its identity and **Delete** removes only the preset, never
+model files. At least one preset must remain. Switching or deleting with unsaved
+edits offers Save, Discard, or Cancel. Selecting a preset alone does not write to
+disk. Preset names must be unique, and up to 100 presets can be saved.
+
+The executable, models folder, and API port are shared across presets. **Save
+preset** and **Save as…** also save these shared values. The form describes the
+next launch; the Server panel separately identifies the running preset and
+whether it launched with unsaved changes. Saving, renaming, or deleting a preset
+does not change a running process. Concurrent edits from a stale browser tab are
+rejected; reload that tab before saving again.
+
+Choosing or entering a different main model clears sidecars and resets speculative
+decoding to Off. Loading a preset restores all its fields together, including its
+sidecars. Changing the model family limits available speculative modes without
+rewriting sampler values. **Use family defaults** explicitly applies the family's
+curated defaults: Flash-Next's thinking sampler, or Qwen3.8-27B's model-default
+thinking controls (leaving sampling unchanged). The **Other / existing
+configuration** family preserves the existing options for unclassified models.
+Family selection guides the controls; Gufo still validates artifact compatibility.
+
+Version 1 settings, including the older MTP checkbox, appear as a **Default**
+preset in memory. They are not rewritten on load. The next explicit save writes
+version 2 and preserves the original as `launcher.json.bak` (an existing backup
+is never replaced). Corrupt files likewise remain untouched until an explicit
+save, which preserves a backup before replacement.
 
 The button at the top right of the bar switches between the light paper palette
 and a dark navy one; cards, fields, the status pill, metrics and the file picker
 all follow it. Until you press it, the launcher follows your operating-system
 theme. The choice is remembered in that browser's local storage, not in
-`launcher.json`, so it is not part of **Save settings** and never reaches the
+`launcher.json`, so it is not part of **Save preset** and never reaches the
 engine.
 
 **Stop** releases the launched Gufo process. Closing a browser tab keeps it
@@ -117,3 +143,34 @@ Run the focused tests with the GUI environment:
 
 The tests cover persistence, file selection, argument validation, real child
 processes and local HTTP controls. They do not load a model or require a GPU.
+
+The JavaScript DOM tests use the actual Flask-rendered templates and browser
+modules. Install their isolated test dependency and run them with Node.js 22+:
+
+```powershell
+npm install --prefix build/gui-test-js --no-save --package-lock=false jsdom@26.1.0
+node --experimental-vm-modules --test tests/tools/gui_dom_test.mjs
+```
+
+Set `GUI_TEST_PYTHON` to a Python with the GUI requirements if the launcher
+environment is elsewhere. These tests cover preset switching, sidecar restoration,
+file selection, and runtime display; they do not verify browser layout.
+
+## Module boundaries
+
+- `server.py` owns local HTTP controls, security, and the running configuration
+  snapshot. `launcher_process.py` and `windows_job.py` own process lifetime.
+- `settings.py` owns common defaults and validation; `models.py` owns curated
+  family definitions exposed to both backend validation and the browser.
+- `presets.py` owns preset operations, schema migration, and atomic JSON writes.
+- `command.py` builds native Gufo arguments; `files.py` handles browsing and
+  lightweight artifact checks. Neither launches a process.
+- Browser modules separate form editing, presets, file picking, and runtime
+  display. `app.js` wires them together through direct calls and callbacks.
+  `theme.js` remains independent and runs before first paint.
+
+To add another text-model family, define its supported modes, reasoning levels,
+and explicit defaults in `models.py`. Existing controls are reused. A genuinely
+new option also needs validation, command construction, a small template section,
+and focused tests. The family definitions describe UI choices, not detected
+runtime capabilities. The GUI continues to manage one `serve llm` process.

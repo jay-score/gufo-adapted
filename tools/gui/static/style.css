@@ -163,6 +163,13 @@ fieldset:disabled { opacity: .5; }
 .save-state { font-size: 12px; font-weight: 600; }
 .save-state small { display: block; font-size: 11px; font-weight: 400; color: var(--muted); margin-top: 3px; }
 .actions { display: flex; gap: 9px; }
+.presets-card { display: flex; flex-wrap: wrap; align-items: end; gap: 12px 20px; margin-bottom: 20px; }
+.preset-selector { flex: 1; min-width: 180px; }
+.preset-selector label { margin-top: 0; }
+.presets-card > .hint { flex-basis: 100%; margin: 0; }
+.preset-actions { flex-wrap: wrap; }
+.small-dialog { max-width: 460px; }
+.small-dialog .actions { flex-wrap: wrap; }
 .actions .primary { min-width: 132px; }
 .primary span { margin-left: 14px; }
 .runtime-heading { display: flex; justify-content: space-between; align-items: center; }

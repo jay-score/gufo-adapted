@@ -14,9 +14,13 @@ import webbrowser
 from flask import Flask, abort, jsonify, render_template, request, send_file
 from werkzeug.exceptions import HTTPException
 
-from launcher_config import (DEFAULTS, ROOT, browse_directory, build_command,
-                             load_settings, save_settings, settings_path, validate_settings)
+from command import build_command
+from files import browse_directory
 from launcher_process import ProcessManager
+from models import MODEL_FAMILIES, SPECULATIVE_MODES
+from presets import (change_preset, find_preset, load_document, new_document,
+                     resolved_settings, save_document)
+from settings import ROOT, settings_path, validate_settings
 
 
 def create_app(config_path, manager, exit_event, ui_port=8090):
@@ -25,11 +29,12 @@ def create_app(config_path, manager, exit_event, ui_port=8090):
     token = secrets.token_urlsafe(32)
     action_lock = threading.Lock()
     shutting_down = False
+    running = None
     try:
-        saved = load_settings(config_path)
+        document = load_document(config_path)
         load_error = ""
     except (ValueError, OSError) as exc:
-        saved, load_error = dict(DEFAULTS), str(exc)
+        document, load_error = new_document(), str(exc)
 
     @app.before_request
     def local_requests_only():
@@ -74,16 +79,18 @@ def create_app(config_path, manager, exit_event, ui_port=8090):
     @app.get("/api/settings")
     def settings():
         with action_lock:
-            return jsonify(settings=saved, path=str(config_path), warning=load_error,
+            return jsonify(document=document, settings=resolved_settings(document),
+                           families=MODEL_FAMILIES, modes=SPECULATIVE_MODES,
+                           path=str(config_path), warning=load_error,
                            saved=config_path.exists() and not load_error, home=str(Path.home()))
 
-    @app.post("/api/settings")
+    @app.post("/api/presets")
     def save():
-        nonlocal saved, load_error
+        nonlocal document, load_error
         with action_lock:
-            saved = save_settings(config_path, request.get_json())
+            document = save_document(config_path, change_preset(document, request.get_json()))
             load_error = ""
-            return jsonify(settings=saved)
+            return jsonify(document=document)
 
     @app.get("/api/browse")
     def browse():
@@ -97,23 +104,33 @@ def create_app(config_path, manager, exit_event, ui_port=8090):
 
     @app.get("/api/status")
     def status():
-        return jsonify(manager.snapshot())
+        with action_lock:
+            return jsonify(manager.snapshot() | {"running": running})
 
     @app.post("/api/start")
     def start():
+        nonlocal running
         with action_lock:
             if shutting_down or exit_event.is_set():
                 abort(503, "The launcher is shutting down.")
-            values = validate_settings(request.get_json())
+            payload = request.get_json()
+            if not isinstance(payload, dict) or set(payload) != {"settings", "preset_id"}:
+                raise ValueError("Provide launch settings and the selected preset.")
+            preset = find_preset(document, payload["preset_id"])
+            values = validate_settings(payload["settings"])
             if values["port"] == ui_port:
                 raise ValueError("The Gufo API and launcher need different ports (defaults: 8080 and 8090).")
             command = build_command(values, check_files=True)
-            return jsonify(manager.start(command, values["port"], values["served_model_name"]))
+            state = manager.start(command, values["port"], values["served_model_name"])
+            running = {"preset_id": preset["id"], "preset_name": preset["name"],
+                       "modified": values != resolved_settings(document, preset["id"]),
+                       "settings": values}
+            return jsonify(state | {"running": running})
 
     @app.post("/api/stop")
     def stop():
         with action_lock:
-            return jsonify(manager.stop())
+            return jsonify(manager.stop() | {"running": running})
 
     @app.post("/api/exit")
     def exit_launcher():
