@@ -90,6 +90,9 @@ public:
       std::function<void(ContinuationState&, const ContinuationSnapshot&)>;
   using SnapshotCapacity = std::function<std::size_t()>;
   using SnapshotEventSink = std::function<void(const SnapshotEvent&)>;
+  /// Optional request-owned identity for just the first N tokens.
+  using InputIdentityAt =
+      std::function<std::span<const std::uint8_t>(std::size_t)>;
 
   struct SnapshotSupport {
     SnapshotRestore restore;
@@ -177,6 +180,9 @@ public:
     bool restored_from_disk_{false};
     std::size_t reserved_snapshot_bytes_{0};
     std::vector<std::uint8_t> input_identity_;
+    InputIdentityAt input_identity_at_;
+    [[nodiscard]] std::span<const std::uint8_t> IdentityAt(
+        std::size_t count) const;
     ContinuationLookup lookup_;
   };
 
@@ -194,7 +200,7 @@ public:
       const CancellationCheck& is_cancelled = {},
       std::span<const std::uint8_t> input_identity = {},
       const std::function<void(ContinuationState&)>& prepare_state = {},
-      bool reuse_prompt = true);
+      bool reuse_prompt = true, InputIdentityAt input_identity_at = {});
 
   [[nodiscard]] std::size_t capacity() const noexcept;
   [[nodiscard]] std::size_t snapshot_capacity_bytes() const noexcept;
@@ -217,7 +223,8 @@ private:
       std::size_t reservation_bytes, std::vector<ContinuationToken> tokens,
       std::shared_ptr<const ContinuationSnapshot> snapshot,
       std::vector<std::uint8_t> input_identity,
-      std::vector<ContinuationToken> live_tokens, bool release_state = true);
+      std::vector<ContinuationToken> live_tokens,
+      std::vector<std::uint8_t> live_identity, bool release_state = true);
   void Invalidate(std::size_t index, std::size_t reservation_bytes) noexcept;
 
   struct Impl;

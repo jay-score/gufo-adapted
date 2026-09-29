@@ -2,6 +2,7 @@
 
 | Experiment | Decision / evidence |
 | --- | --- |
+| Image identity scoped to the cached prefix | Retained on Windows, September 29: appending screenshots reuses unchanged text/image state. A matched C1 HTTP tool sequence reduced screenshot TTFT from 12.56/11.21 s to 2.36/0.83 s; full-logit hashes and teacher-forced perplexity match the pre-change baseline with AR and MTP. [Evidence](artifacts/image-prefix-cache.json). |
 | Full-width MTP RMSNorm and split projection | Retained after independent CPU stage audit; one 10240-wide normalization, embedding projection shared across HC branches. |
 | Full Q8 vocabulary head | Retained; private Q4 shortlist removed. Sampled top-64 proposals use exact target verification. |
 | Batched MTP transformer and heads | Retained; independent body/head comparisons, private KV/recurrent/rollback/RNG state. |

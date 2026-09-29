@@ -41,12 +41,14 @@ if (ENGINE_ENABLE_HIP)
   add_executable(qwen38_flash_next_snapshot_test EXCLUDE_FROM_ALL snapshot_test.cpp)
   target_link_libraries(qwen38_flash_next_snapshot_test PRIVATE
     gufo_qwen38_flash_next)
+  add_executable(qwen38_flash_next_image_prefix_test EXCLUDE_FROM_ALL image_prefix_test.cpp)
+  target_link_libraries(qwen38_flash_next_image_prefix_test PRIVATE gufo_qwen38_flash_next)
   add_executable(qwen38_flash_next_rollback_test EXCLUDE_FROM_ALL rollback_test.cpp)
   target_link_libraries(qwen38_flash_next_rollback_test PRIVATE
     gufo_qwen38_flash_next)
   add_custom_target(qwen38_flash_next_model_tests
     DEPENDS qwen38_flash_next_session_test qwen38_flash_next_snapshot_test
-      qwen38_flash_next_rollback_test)
+      qwen38_flash_next_rollback_test qwen38_flash_next_image_prefix_test)
 
   add_executable(qwen38_flash_next_gpu_probe EXCLUDE_FROM_ALL gpu_probe.cpp
     mtp_audit.cpp)

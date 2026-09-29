@@ -22,6 +22,19 @@ top 64 logits; upstream draft-sampler equivalence is not claimed.
 
 ## Vision
 
+September 29 Windows image-prefix cache qualification: a text prefix followed
+by two 512x512 synthetic screenshots retains byte-identical full logits and
+teacher-forced perplexity versus the recorded pre-change baseline, with AR and
+MTP. The focused test checks live extension, snapshot restore, greedy/seeded
+decoding and rejection of a changed earlier image. This is cache consistency
+validation, not additional encoder quality qualification.
+[Raw hashes and HTTP measurements](artifacts/image-prefix-cache.json).
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/windows/build.ps1 -Preset gpu-test -Target qwen38_flash_next_image_prefix_test -Jobs 4
+.\build\gpu-test\qwen38_flash_next_image_prefix_test.exe "$MODEL" "$MTP" "$MMPROJ" screenshot-a.png screenshot-b.png
+```
+
 **One Gufo encoder comparison fails:** relative L2 **6.47%** versus official
 Transformers BF16, above the **5%** limit, on a 1024×1024 synthetic texture.
 Both use the same converted GGUF weights. Against FP32, Gufo and Transformers

@@ -519,7 +519,104 @@ void TestImageIdentityIsolation() {
   }
 }
 
+void TestImagePrefixIdentity() {
+  using Cache = gufo::server::ContinuationCache;
+  using Tokens = std::vector<gufo::server::ContinuationToken>;
+  std::vector<std::size_t> invalidations(1);
+  Cache cache(1, [&] { return std::make_unique<FakeState>(0, &invalidations); },
+              {.restore =
+                   [](auto& state, const auto& snapshot) {
+                     dynamic_cast<FakeState&>(state).value =
+                         dynamic_cast<const FakeSnapshot&>(snapshot).value;
+                   },
+               .capacity_bytes = [] { return std::size_t{1024}; }});
+  const Tokens text{1, 2}, first{1, 2, 248056, 4},
+      both{1, 2, 248056, 4, 5, 248056, 7};
+  const std::vector<std::uint8_t> a{1}, ab{1, 2}, changed{9};
+  const Cache::InputIdentityAt identity =
+      [&](std::size_t count) -> std::span<const std::uint8_t> {
+    if (count <= 2)
+      return {};
+    return count <= 5 ? std::span<const std::uint8_t>(a)
+                      : std::span<const std::uint8_t>(ab);
+  };
+  {
+    auto lease = cache.Acquire(text);
+    Expect(lease.TryReserveSnapshot(8, text.size()), "text snapshot admitted");
+    lease.Commit(text, std::make_shared<FakeSnapshot>(10), text);
+  }
+  {
+    auto lease = cache.Acquire(first, {}, a, {}, true, identity);
+    Expect(lease.cache_hit() && lease.cached_tokens() == 2,
+           "first image retains the text prefix");
+    Expect(lease.HasSnapshotFor(text), "snapshot uses its own prefix identity");
+    // The snapshot is before the image; live state is after it.
+    Expect(lease.TryReserveSnapshot(8, text.size()), "snapshot admitted");
+    auto moved = std::move(lease);
+    moved.Commit(text, std::make_shared<FakeSnapshot>(10), first);
+  }
+  {
+    auto lease = cache.Acquire(both, {}, ab, {}, true, identity);
+    Expect(lease.cache_hit() && lease.cached_tokens() == 4,
+           "appended image retains the live image prefix");
+    // Cancellation drops live state but retains the earlier snapshot.
+  }
+  {
+    auto lease = cache.Acquire(both, {}, ab, {}, true, identity);
+    Expect(lease.cache_hit() && lease.cached_tokens() == 2,
+           "appended image restores a text snapshot");
+    Expect(lease.TryReserveSnapshot(8, first.size()),
+           "image snapshot admitted");
+    lease.PublishSnapshot(first, std::make_shared<FakeSnapshot>(20));
+    Expect(lease.HasSnapshotFor(first), "published image prefix identity");
+  }
+  {
+    auto lease = cache.Acquire(both, {}, ab, {}, true, identity);
+    Expect(lease.cache_hit() && lease.cached_tokens() == 4 &&
+               dynamic_cast<FakeState&>(lease.state()).value == 20,
+           "appended image restores an image snapshot");
+  }
+  {
+    auto lease = cache.Acquire(both, {}, changed);
+    Expect(!lease.cache_hit() && lease.lookup().miss_reason == "input_changed",
+           "changed earlier image cannot reuse its old state");
+  }
+  {
+    auto lease = cache.Acquire(both);
+    Expect(!lease.cache_hit(), "image removal cannot reuse its old state");
+  }
+  {
+    auto lease = cache.Acquire(both, {}, ab, {}, false, identity);
+    Expect(!lease.cache_hit() && lease.lookup().miss_reason == "disabled",
+           "explicit bypass still prevents prefix reuse");
+  }
+  // A second request can fork the image checkpoint while the first is active.
+  std::vector<std::size_t> fork_invalidations(2);
+  std::size_t next = 0;
+  Cache fork_cache(
+      2,
+      [&] { return std::make_unique<FakeState>(next++, &fork_invalidations); },
+      {.restore =
+           [](auto& state, const auto& snapshot) {
+             dynamic_cast<FakeState&>(state).value =
+                 dynamic_cast<const FakeSnapshot&>(snapshot).value;
+           },
+       .capacity_bytes = [] { return std::size_t{1024}; }});
+  {
+    auto lease = fork_cache.Acquire(first, {}, a, {}, true, identity);
+    Expect(lease.TryReserveSnapshot(8, first.size()), "fork snapshot admitted");
+    lease.Commit(first, std::make_shared<FakeSnapshot>(20));
+  }
+  auto original = fork_cache.Acquire(first, {}, a, {}, true, identity);
+  auto extended = fork_cache.Acquire(both, {}, ab, {}, true, identity);
+  Expect(original.cache_hit() && extended.cache_hit() &&
+             extended.cached_tokens() == first.size() &&
+             &original.state() != &extended.state(),
+         "appended images fork an active snapshot into independent state");
+}
+
 int main() {
+  TestImagePrefixIdentity();
   TestImageIdentityIsolation();
   TestColdMissThenExactExtensionHit();
   TestDivergenceInvalidatesOldState();

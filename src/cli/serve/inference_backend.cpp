@@ -57,6 +57,10 @@ void SetError(std::string* error, std::string message) {
 
 struct QwenImageContext final : TextPromptContext {
   std::shared_ptr<const models::qwen::vision::Prompt> prompt;
+  [[nodiscard]] std::span<const std::uint8_t> IdentityBefore(
+      std::size_t token_count) const override {
+    return prompt->IdentityBefore(token_count);
+  }
 };
 
 tokenization::ChatTemplateOptions QwenChatOptions(const ChatRequest& request) {

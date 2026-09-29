@@ -36,6 +36,13 @@ void Sha256Hasher::Update(std::span<const std::uint8_t> bytes) {
   }
 }
 
+std::array<std::uint8_t, 32> Sha256Hasher::Digest() const {
+  Sha256Hasher copy;
+  if (EVP_MD_CTX_copy_ex(copy.context_.get(), context_.get()) != 1)
+    throw std::runtime_error("cannot copy SHA-256 prefix");
+  return copy.Finish();
+}
+
 std::array<std::uint8_t, 32> Sha256Hasher::Finish() {
   std::array<std::uint8_t, 32> result{};
   unsigned int size = 0;

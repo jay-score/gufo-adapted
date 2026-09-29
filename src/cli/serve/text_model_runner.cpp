@@ -529,6 +529,9 @@ struct TextRunnerPool::Request::Impl {
     prompt_snapshot_attempted = prefill_offset > count;
     auto& state = dynamic_cast<TextRunnerState&>(lease.state());
     if (lease.cache_hit()) {
+      // A restored snapshot can carry the previous request's image layout.
+      // Reattach the complete new request before processing its suffix.
+      runner->SetPromptContext(state, context);
       runner->PreparePrefixReuse(
           state,
           std::span<const TextRunnerToken>(prompt).first(prefill_offset));
@@ -1347,7 +1350,12 @@ TextRunnerPool::Request TextRunnerPool::Acquire(
         text_state.SetCancellationCheck(is_cancelled);
         impl_->validated.runner->SetPromptContext(text_state, context);
       },
-      reuse_prompt);
+      reuse_prompt,
+      context
+          ? ContinuationCache::InputIdentityAt{[context](std::size_t count) {
+              return context->IdentityBefore(count);
+            }}
+          : ContinuationCache::InputIdentityAt{});
   if (!lease) {
     return {};
   }

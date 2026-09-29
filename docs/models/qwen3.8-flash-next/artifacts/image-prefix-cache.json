@@ -1,0 +1,693 @@
+{
+  "date": "2026-09-29",
+  "platform": "Windows 11 x64 / AMD Strix Halo gfx1151",
+  "toolchain": "TheRock ROCm 10.0.0, TheRock clang; CMake gpu-test RelWithDebInfo",
+  "source_base": "76593d81f17d",
+  "http_baseline_version": "d5260045aff8-dirty",
+  "http_candidate_version": "76593d81f17d-dirty",
+  "baseline_note": "Installed server binary retained before editing. Commits between its revision and source base change GUI and Qwen27B device-weight placement, not the Flash-Next model path. The numerical baseline probe was linked before changing production source.",
+  "baseline_exe_sha256": "feff53742cca40054e8ec6c1a548fc9109882cc99ff72bdadb20f96082aef456",
+  "candidate_exe_sha256": "398f1a7787fcfab1699a1e85b4d85b87f92b93875c671c8f0bfe217f9695672b",
+  "model_artifacts": [
+    {
+      "kind": "model",
+      "file": "Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf",
+      "bytes": 10946624,
+      "mtime_ns": 1787843533620325000
+    },
+    {
+      "kind": "mtp_model",
+      "file": "mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf",
+      "bytes": 2786568256,
+      "mtime_ns": 1790466217079268200
+    },
+    {
+      "kind": "mmproj",
+      "file": "mmproj-BF16.gguf",
+      "bytes": 907542944,
+      "mtime_ns": 1790527821313060700
+    }
+  ],
+  "images": [
+    {
+      "name": "a.png",
+      "width": 512,
+      "height": 512,
+      "sha256": "d701019e7fc79fdb8a5066c07718957dd513b0ce02432dede29fd8d9989966fb"
+    },
+    {
+      "name": "b.png",
+      "width": 512,
+      "height": 512,
+      "sha256": "dc19ae2e21a9ba616a208f1944aad7cc47c2045ff200972bbcf2bfc7672d4efd"
+    }
+  ],
+  "http_settings": {
+    "sessions": 1,
+    "context": 200000,
+    "speculative": "mtp",
+    "draft_tokens": 7,
+    "mtp_policy": "length",
+    "mtp_draft_vocab": "full",
+    "disk_cache": false,
+    "temperature": 0,
+    "seed": 47,
+    "thinking": false,
+    "max_tokens": 32
+  },
+  "measurement_scope": "One paired sequential HTTP tool-call sequence. Text-only initial prompt followed by two appended screenshot messages. First image includes lazy encoder startup. Identical JSON requests and response choices across builds; model load excluded from request timings.",
+  "http_baseline": [
+    {
+      "stage": 0,
+      "usage": {
+        "prompt_tokens": 14565,
+        "completion_tokens": 3,
+        "total_tokens": 14568,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "cached_tokens": 0,
+        "prompt_tokens_per_second": 1374.6964212069836,
+        "completion_tokens_per_second": 32.07108663255729,
+        "draft_tokens": 3,
+        "draft_tokens_accepted": 2,
+        "gufo": {
+          "cache_hit": false,
+          "cache_miss_reason": "no_checkpoint",
+          "cache_common_prefix_tokens": 0,
+          "cache_checkpoint_tokens": 0,
+          "cache_restore_bytes": 0,
+          "cache_snapshot_bytes": 519172424,
+          "cache_disk_queued_bytes": 0,
+          "cache_shared_bytes": 0,
+          "cache_restore_ms": 0,
+          "cache_snapshot_ms": 153.5979,
+          "cache_disk_enqueue_ms": 0,
+          "cache_disk_hit": false,
+          "cache_shared_prefix_snapshots": 0,
+          "cache_shared_prefix_bytes": 0,
+          "cache_shared_prefix_ms": 0,
+          "prefill_tokens": 14565,
+          "prefill_chunks": 9,
+          "active_decode_prefill_chunks": 0,
+          "max_prefill_chunk_tokens": 2048,
+          "queue_depth_at_submit": 1,
+          "client_queue_depth_at_submit": 1,
+          "resident_requests_at_admission": 1,
+          "requested_logical_concurrency": 1,
+          "physical_execution_width": 1,
+          "queue_ms": 38.7777,
+          "prefill_ms": 10595.066499999999,
+          "decode_ms": 93.5422,
+          "ttft_ms": 10787.7912,
+          "mean_inter_token_ms": 46.6023,
+          "max_inter_token_ms": 93.1843,
+          "execution_plan": "serial-c1"
+        }
+      },
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Understood."
+          },
+          "finish_reason": "stop"
+        }
+      ]
+    },
+    {
+      "stage": 1,
+      "usage": {
+        "prompt_tokens": 14885,
+        "completion_tokens": 11,
+        "total_tokens": 14896,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "cached_tokens": 0,
+        "prompt_tokens_per_second": 1333.25386656609,
+        "completion_tokens_per_second": 43.283587375200625,
+        "draft_tokens": 12,
+        "draft_tokens_accepted": 8,
+        "gufo": {
+          "cache_hit": false,
+          "cache_miss_reason": "input_changed",
+          "cache_common_prefix_tokens": 0,
+          "cache_checkpoint_tokens": 0,
+          "cache_restore_bytes": 0,
+          "cache_snapshot_bytes": 527959668,
+          "cache_disk_queued_bytes": 0,
+          "cache_shared_bytes": 0,
+          "cache_restore_ms": 0,
+          "cache_snapshot_ms": 149.2721,
+          "cache_disk_enqueue_ms": 0,
+          "cache_disk_hit": false,
+          "cache_shared_prefix_snapshots": 0,
+          "cache_shared_prefix_bytes": 0,
+          "cache_shared_prefix_ms": 0,
+          "prefill_tokens": 14885,
+          "prefill_chunks": 9,
+          "active_decode_prefill_chunks": 0,
+          "max_prefill_chunk_tokens": 2048,
+          "queue_depth_at_submit": 1,
+          "client_queue_depth_at_submit": 1,
+          "resident_requests_at_admission": 1,
+          "requested_logical_concurrency": 1,
+          "physical_execution_width": 1,
+          "queue_ms": 1244.1858,
+          "prefill_ms": 11164.4154,
+          "decode_ms": 254.1379,
+          "ttft_ms": 12558.3275,
+          "mean_inter_token_ms": 25.36464,
+          "max_inter_token_ms": 108.2434,
+          "execution_plan": "serial-c1"
+        }
+      },
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "The screenshot shows a red and yellow checkerboard pattern."
+          },
+          "finish_reason": "stop"
+        }
+      ]
+    },
+    {
+      "stage": 2,
+      "usage": {
+        "prompt_tokens": 15213,
+        "completion_tokens": 11,
+        "total_tokens": 15224,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "cached_tokens": 0,
+        "prompt_tokens_per_second": 1382.7382727856575,
+        "completion_tokens_per_second": 40.77860443011344,
+        "draft_tokens": 13,
+        "draft_tokens_accepted": 8,
+        "gufo": {
+          "cache_hit": false,
+          "cache_miss_reason": "input_changed",
+          "cache_common_prefix_tokens": 0,
+          "cache_checkpoint_tokens": 0,
+          "cache_restore_bytes": 0,
+          "cache_snapshot_bytes": 536966560,
+          "cache_disk_queued_bytes": 0,
+          "cache_shared_bytes": 0,
+          "cache_restore_ms": 0,
+          "cache_snapshot_ms": 157.9734,
+          "cache_disk_enqueue_ms": 0,
+          "cache_disk_hit": false,
+          "cache_shared_prefix_snapshots": 0,
+          "cache_shared_prefix_bytes": 0,
+          "cache_shared_prefix_ms": 0,
+          "prefill_tokens": 15213,
+          "prefill_chunks": 9,
+          "active_decode_prefill_chunks": 0,
+          "max_prefill_chunk_tokens": 2048,
+          "queue_depth_at_submit": 1,
+          "client_queue_depth_at_submit": 1,
+          "resident_requests_at_admission": 1,
+          "requested_logical_concurrency": 1,
+          "physical_execution_width": 1,
+          "queue_ms": 48.1663,
+          "prefill_ms": 11002.0821,
+          "decode_ms": 269.7493,
+          "ttft_ms": 11208.7777,
+          "mean_inter_token_ms": 26.94515,
+          "max_inter_token_ms": 112.6575,
+          "execution_plan": "serial-c1"
+        }
+      },
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "The screenshot shows a blue and yellow checkerboard pattern."
+          },
+          "finish_reason": "stop"
+        }
+      ]
+    }
+  ],
+  "http_candidate": [
+    {
+      "stage": 0,
+      "usage": {
+        "prompt_tokens": 14565,
+        "completion_tokens": 3,
+        "total_tokens": 14568,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "cached_tokens": 0,
+        "prompt_tokens_per_second": 1385.2027817040246,
+        "completion_tokens_per_second": 34.22766416728657,
+        "draft_tokens": 3,
+        "draft_tokens_accepted": 2,
+        "gufo": {
+          "cache_hit": false,
+          "cache_miss_reason": "no_checkpoint",
+          "cache_common_prefix_tokens": 0,
+          "cache_checkpoint_tokens": 0,
+          "cache_restore_bytes": 0,
+          "cache_snapshot_bytes": 519172424,
+          "cache_disk_queued_bytes": 0,
+          "cache_shared_bytes": 0,
+          "cache_restore_ms": 0,
+          "cache_snapshot_ms": 155.8561,
+          "cache_disk_enqueue_ms": 0,
+          "cache_disk_hit": false,
+          "cache_shared_prefix_snapshots": 0,
+          "cache_shared_prefix_bytes": 0,
+          "cache_shared_prefix_ms": 0,
+          "prefill_tokens": 14565,
+          "prefill_chunks": 9,
+          "active_decode_prefill_chunks": 0,
+          "max_prefill_chunk_tokens": 2048,
+          "queue_depth_at_submit": 1,
+          "client_queue_depth_at_submit": 1,
+          "resident_requests_at_admission": 1,
+          "requested_logical_concurrency": 1,
+          "physical_execution_width": 1,
+          "queue_ms": 40.0009,
+          "prefill_ms": 10514.706000000002,
+          "decode_ms": 87.6484,
+          "ttft_ms": 10710.8448,
+          "mean_inter_token_ms": 43.67700000000001,
+          "max_inter_token_ms": 87.3324,
+          "execution_plan": "serial-c1"
+        }
+      },
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Understood."
+          },
+          "finish_reason": "stop"
+        }
+      ]
+    },
+    {
+      "stage": 1,
+      "usage": {
+        "prompt_tokens": 14885,
+        "completion_tokens": 11,
+        "total_tokens": 14896,
+        "prompt_tokens_details": {
+          "cached_tokens": 14568
+        },
+        "cached_tokens": 14568,
+        "prompt_tokens_per_second": 309.40980616305296,
+        "completion_tokens_per_second": 46.828776538612665,
+        "draft_tokens": 12,
+        "draft_tokens_accepted": 8,
+        "gufo": {
+          "cache_hit": true,
+          "cache_restore_bytes": 0,
+          "cache_snapshot_bytes": 527959668,
+          "cache_disk_queued_bytes": 0,
+          "cache_shared_bytes": 0,
+          "cache_restore_ms": 0,
+          "cache_snapshot_ms": 109.4644,
+          "cache_disk_enqueue_ms": 0,
+          "cache_disk_hit": false,
+          "cache_shared_prefix_snapshots": 0,
+          "cache_shared_prefix_bytes": 0,
+          "cache_shared_prefix_ms": 0,
+          "prefill_tokens": 317,
+          "prefill_chunks": 2,
+          "active_decode_prefill_chunks": 0,
+          "max_prefill_chunk_tokens": 310,
+          "queue_depth_at_submit": 1,
+          "client_queue_depth_at_submit": 1,
+          "resident_requests_at_admission": 1,
+          "requested_logical_concurrency": 1,
+          "physical_execution_width": 1,
+          "queue_ms": 1221.2141,
+          "prefill_ms": 1024.5312,
+          "decode_ms": 234.8983,
+          "ttft_ms": 2355.4494,
+          "mean_inter_token_ms": 23.441429999999997,
+          "max_inter_token_ms": 93.6215,
+          "execution_plan": "serial-c1"
+        }
+      },
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "The screenshot shows a red and yellow checkerboard pattern."
+          },
+          "finish_reason": "stop"
+        }
+      ]
+    },
+    {
+      "stage": 2,
+      "usage": {
+        "prompt_tokens": 15213,
+        "completion_tokens": 11,
+        "total_tokens": 15224,
+        "prompt_tokens_details": {
+          "cached_tokens": 14896
+        },
+        "cached_tokens": 14896,
+        "prompt_tokens_per_second": 483.50994665375276,
+        "completion_tokens_per_second": 42.64952827683111,
+        "draft_tokens": 13,
+        "draft_tokens_accepted": 8,
+        "gufo": {
+          "cache_hit": true,
+          "cache_restore_bytes": 0,
+          "cache_snapshot_bytes": 536966560,
+          "cache_disk_queued_bytes": 0,
+          "cache_shared_bytes": 0,
+          "cache_restore_ms": 0,
+          "cache_snapshot_ms": 131.5031,
+          "cache_disk_enqueue_ms": 0,
+          "cache_disk_hit": false,
+          "cache_shared_prefix_snapshots": 0,
+          "cache_shared_prefix_bytes": 0,
+          "cache_shared_prefix_ms": 0,
+          "prefill_tokens": 317,
+          "prefill_chunks": 2,
+          "active_decode_prefill_chunks": 0,
+          "max_prefill_chunk_tokens": 310,
+          "queue_depth_at_submit": 1,
+          "client_queue_depth_at_submit": 1,
+          "resident_requests_at_admission": 1,
+          "requested_logical_concurrency": 1,
+          "physical_execution_width": 1,
+          "queue_ms": 46.7856,
+          "prefill_ms": 655.6225,
+          "decode_ms": 257.9161,
+          "ttft_ms": 834.1709,
+          "mean_inter_token_ms": 25.767450000000004,
+          "max_inter_token_ms": 105.2548,
+          "execution_plan": "serial-c1"
+        }
+      },
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "The screenshot shows a blue and yellow checkerboard pattern."
+          },
+          "finish_reason": "stop"
+        }
+      ]
+    }
+  ],
+  "numerical_probe": {
+    "context": 8192,
+    "teacher": "The screenshot shows a colored pattern.",
+    "baseline": [
+      {
+        "mtp": 0,
+        "stage": 0,
+        "path": "warm",
+        "full_logits_sha256": "9398a811aba42da267258752c25ece20be4643ebab4f72014d8e3ddff6c893ae",
+        "perplexity_printed": "90.10"
+      },
+      {
+        "mtp": 0,
+        "stage": 0,
+        "path": "cold",
+        "full_logits_sha256": "9398a811aba42da267258752c25ece20be4643ebab4f72014d8e3ddff6c893ae",
+        "perplexity_printed": "90.10"
+      },
+      {
+        "mtp": 0,
+        "stage": 1,
+        "path": "warm",
+        "full_logits_sha256": "c1ebb4b8c0cd1ee5e7e8caeb6c4bc3bf6378d5dcb589109c30c138c31d001127",
+        "perplexity_printed": "15.74"
+      },
+      {
+        "mtp": 0,
+        "stage": 1,
+        "path": "cold",
+        "full_logits_sha256": "c1ebb4b8c0cd1ee5e7e8caeb6c4bc3bf6378d5dcb589109c30c138c31d001127",
+        "perplexity_printed": "15.74"
+      },
+      {
+        "mtp": 0,
+        "stage": 2,
+        "path": "warm",
+        "full_logits_sha256": "62187fe37d66c5f07d9fff1362ca4f96a25779ca032377eb1718f5b55104ace6",
+        "perplexity_printed": "16.72"
+      },
+      {
+        "mtp": 0,
+        "stage": 2,
+        "path": "cold",
+        "full_logits_sha256": "62187fe37d66c5f07d9fff1362ca4f96a25779ca032377eb1718f5b55104ace6",
+        "perplexity_printed": "16.72"
+      },
+      {
+        "mtp": 1,
+        "stage": 0,
+        "path": "warm",
+        "full_logits_sha256": "9398a811aba42da267258752c25ece20be4643ebab4f72014d8e3ddff6c893ae",
+        "perplexity_printed": "90.10"
+      },
+      {
+        "mtp": 1,
+        "stage": 0,
+        "path": "cold",
+        "full_logits_sha256": "9398a811aba42da267258752c25ece20be4643ebab4f72014d8e3ddff6c893ae",
+        "perplexity_printed": "90.10"
+      },
+      {
+        "mtp": 1,
+        "stage": 1,
+        "path": "warm",
+        "full_logits_sha256": "c1ebb4b8c0cd1ee5e7e8caeb6c4bc3bf6378d5dcb589109c30c138c31d001127",
+        "perplexity_printed": "15.74"
+      },
+      {
+        "mtp": 1,
+        "stage": 1,
+        "path": "cold",
+        "full_logits_sha256": "c1ebb4b8c0cd1ee5e7e8caeb6c4bc3bf6378d5dcb589109c30c138c31d001127",
+        "perplexity_printed": "15.74"
+      },
+      {
+        "mtp": 1,
+        "stage": 2,
+        "path": "warm",
+        "full_logits_sha256": "62187fe37d66c5f07d9fff1362ca4f96a25779ca032377eb1718f5b55104ace6",
+        "perplexity_printed": "16.72"
+      },
+      {
+        "mtp": 1,
+        "stage": 2,
+        "path": "cold",
+        "full_logits_sha256": "62187fe37d66c5f07d9fff1362ca4f96a25779ca032377eb1718f5b55104ace6",
+        "perplexity_printed": "16.72"
+      }
+    ],
+    "candidate": [
+      {
+        "mtp": 0,
+        "stage": 0,
+        "path": "warm",
+        "full_logits_sha256": "9398a811aba42da267258752c25ece20be4643ebab4f72014d8e3ddff6c893ae",
+        "perplexity_printed": "90.10"
+      },
+      {
+        "mtp": 0,
+        "stage": 0,
+        "path": "cold",
+        "full_logits_sha256": "9398a811aba42da267258752c25ece20be4643ebab4f72014d8e3ddff6c893ae",
+        "perplexity_printed": "90.10"
+      },
+      {
+        "mtp": 0,
+        "stage": 1,
+        "path": "warm",
+        "full_logits_sha256": "c1ebb4b8c0cd1ee5e7e8caeb6c4bc3bf6378d5dcb589109c30c138c31d001127",
+        "perplexity_printed": "15.74"
+      },
+      {
+        "mtp": 0,
+        "stage": 1,
+        "path": "cold",
+        "full_logits_sha256": "c1ebb4b8c0cd1ee5e7e8caeb6c4bc3bf6378d5dcb589109c30c138c31d001127",
+        "perplexity_printed": "15.74"
+      },
+      {
+        "mtp": 0,
+        "stage": 1,
+        "path": "restored",
+        "full_logits_sha256": "c1ebb4b8c0cd1ee5e7e8caeb6c4bc3bf6378d5dcb589109c30c138c31d001127",
+        "perplexity_printed": "15.74"
+      },
+      {
+        "mtp": 0,
+        "stage": 2,
+        "path": "warm",
+        "full_logits_sha256": "62187fe37d66c5f07d9fff1362ca4f96a25779ca032377eb1718f5b55104ace6",
+        "perplexity_printed": "16.72"
+      },
+      {
+        "mtp": 0,
+        "stage": 2,
+        "path": "cold",
+        "full_logits_sha256": "62187fe37d66c5f07d9fff1362ca4f96a25779ca032377eb1718f5b55104ace6",
+        "perplexity_printed": "16.72"
+      },
+      {
+        "mtp": 0,
+        "stage": 2,
+        "path": "restored",
+        "full_logits_sha256": "62187fe37d66c5f07d9fff1362ca4f96a25779ca032377eb1718f5b55104ace6",
+        "perplexity_printed": "16.72"
+      },
+      {
+        "mtp": 0,
+        "stage": 2,
+        "path": "partial-image",
+        "full_logits_sha256": "62187fe37d66c5f07d9fff1362ca4f96a25779ca032377eb1718f5b55104ace6",
+        "perplexity_printed": "16.72"
+      },
+      {
+        "mtp": 0,
+        "stage": 2,
+        "path": "cancelled-resumed",
+        "full_logits_sha256": "62187fe37d66c5f07d9fff1362ca4f96a25779ca032377eb1718f5b55104ace6",
+        "perplexity_printed": "16.72"
+      },
+      {
+        "mtp": 0,
+        "stage": 2,
+        "path": "cleared-image",
+        "full_logits_sha256": "287437e3ab4ffc3efc03659d8c38268bfe255990cef342b5ab61b52d9ccf35d2",
+        "perplexity_printed": "1543.71"
+      },
+      {
+        "mtp": 0,
+        "stage": 2,
+        "path": "plain",
+        "full_logits_sha256": "287437e3ab4ffc3efc03659d8c38268bfe255990cef342b5ab61b52d9ccf35d2",
+        "perplexity_printed": "1543.71"
+      },
+      {
+        "mtp": 1,
+        "stage": 0,
+        "path": "warm",
+        "full_logits_sha256": "9398a811aba42da267258752c25ece20be4643ebab4f72014d8e3ddff6c893ae",
+        "perplexity_printed": "90.10"
+      },
+      {
+        "mtp": 1,
+        "stage": 0,
+        "path": "cold",
+        "full_logits_sha256": "9398a811aba42da267258752c25ece20be4643ebab4f72014d8e3ddff6c893ae",
+        "perplexity_printed": "90.10"
+      },
+      {
+        "mtp": 1,
+        "stage": 1,
+        "path": "warm",
+        "full_logits_sha256": "c1ebb4b8c0cd1ee5e7e8caeb6c4bc3bf6378d5dcb589109c30c138c31d001127",
+        "perplexity_printed": "15.74"
+      },
+      {
+        "mtp": 1,
+        "stage": 1,
+        "path": "cold",
+        "full_logits_sha256": "c1ebb4b8c0cd1ee5e7e8caeb6c4bc3bf6378d5dcb589109c30c138c31d001127",
+        "perplexity_printed": "15.74"
+      },
+      {
+        "mtp": 1,
+        "stage": 1,
+        "path": "restored",
+        "full_logits_sha256": "c1ebb4b8c0cd1ee5e7e8caeb6c4bc3bf6378d5dcb589109c30c138c31d001127",
+        "perplexity_printed": "15.74"
+      },
+      {
+        "mtp": 1,
+        "stage": 2,
+        "path": "warm",
+        "full_logits_sha256": "62187fe37d66c5f07d9fff1362ca4f96a25779ca032377eb1718f5b55104ace6",
+        "perplexity_printed": "16.72"
+      },
+      {
+        "mtp": 1,
+        "stage": 2,
+        "path": "cold",
+        "full_logits_sha256": "62187fe37d66c5f07d9fff1362ca4f96a25779ca032377eb1718f5b55104ace6",
+        "perplexity_printed": "16.72"
+      },
+      {
+        "mtp": 1,
+        "stage": 2,
+        "path": "restored",
+        "full_logits_sha256": "62187fe37d66c5f07d9fff1362ca4f96a25779ca032377eb1718f5b55104ace6",
+        "perplexity_printed": "16.72"
+      },
+      {
+        "mtp": 1,
+        "stage": 2,
+        "path": "partial-image",
+        "full_logits_sha256": "62187fe37d66c5f07d9fff1362ca4f96a25779ca032377eb1718f5b55104ace6",
+        "perplexity_printed": "16.72"
+      },
+      {
+        "mtp": 1,
+        "stage": 2,
+        "path": "cancelled-resumed",
+        "full_logits_sha256": "62187fe37d66c5f07d9fff1362ca4f96a25779ca032377eb1718f5b55104ace6",
+        "perplexity_printed": "16.72"
+      },
+      {
+        "mtp": 1,
+        "stage": 2,
+        "path": "cleared-image",
+        "full_logits_sha256": "287437e3ab4ffc3efc03659d8c38268bfe255990cef342b5ab61b52d9ccf35d2",
+        "perplexity_printed": "1543.71"
+      },
+      {
+        "mtp": 1,
+        "stage": 2,
+        "path": "plain",
+        "full_logits_sha256": "287437e3ab4ffc3efc03659d8c38268bfe255990cef342b5ab61b52d9ccf35d2",
+        "perplexity_printed": "1543.71"
+      }
+    ],
+    "contract": "All full-logit float bytes must match (not only top-1). No numerical tolerance relaxed.",
+    "additional_checks": [
+      "Partial-image snapshot continuation: exact full logits.",
+      "Cancelled append then restored continuation: exact full logits.",
+      "Text snapshot replaces stale image attachment: exact full logits.",
+      "Greedy and seeded decoding match cold execution for AR and MTP.",
+      "Changed earlier image rejects stale live state and snapshot."
+    ]
+  },
+  "limits": [
+    "No general throughput claim; one paired screenshot sequence.",
+    "Linux runtime and Qwen27B real-model execution were not run for this change.",
+    "Disk identity matching remains whole-request; Flash-Next payload version increased to 15."
+  ],
+  "cpu_checks": [
+    "continuation_cache_test",
+    "text_model_runner_test",
+    "continuation_disk_store_test",
+    "qwen27b_vision_test",
+    "openai_chat_test",
+    "http_server_test"
+  ],
+  "snapshot_regression": "qwen38_flash_next_snapshot_test: snapshot round trips exact=1; 4095-token prompt, MTP Q8_0, snapshot 231864268 bytes."
+}

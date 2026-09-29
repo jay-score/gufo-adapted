@@ -2620,13 +2620,16 @@ bool Executor::RestoreSnapshot(Session& session,
     AssignError(error_msg, e.what());
     return false;
   }
-  if (!layout.images.empty() && layout != session.VisionLayout()) {
+  // Restore only constrains positions already computed. The attached request
+  // may extend the snapshot with later images and must keep that full layout.
+  if (layout.SamePrefix({}, h.position) &&
+      !session.VisionLayout().SamePrefix({}, h.position))
+    session.ConfigureVision(nullptr, nullptr, stream_);
+  if (!layout.SamePrefix(session.VisionLayout(), h.position)) {
     AssignError(error_msg,
                 "image snapshot layout does not match its prompt attachment");
     return false;
   }
-  if (layout.images.empty())
-    session.ConfigureVision(nullptr, nullptr, stream_);
   // The session's queued work targets buffers the copies overwrite.
   if (!Check(hipStreamSynchronize(stream_), "restore drain", error_msg)) {
     return false;
@@ -2652,7 +2655,6 @@ bool Executor::RestoreSnapshot(Session& session,
     session.Reset();
     return false;
   }
-  session.RestoreVisionLayout(layout, stream_);
   session.position_ = h.position;
   session.blocks_ = h.blocks;
   session.mtp_.position = h.mtp_position;

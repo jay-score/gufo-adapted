@@ -33,12 +33,16 @@ struct RopeLayout {
   [[nodiscard]] std::int32_t Delta() const;
   [[nodiscard]] std::uint32_t PrefixLength() const;
   void Validate(std::uint32_t max_context) const;
+  [[nodiscard]] bool SamePrefix(const RopeLayout& other,
+                                std::size_t token_count) const;
   bool operator==(const RopeLayout&) const = default;
 };
 
 struct PreparedImage {
   core::Image pixels;  ///< resized RGB8; temporal repetition happens on GPU
   ImageGrid grid;
+  /// Cumulative fingerprint through this image (including its full pixels).
+  std::vector<std::uint8_t> prefix_identity;
 };
 
 struct Prompt {
@@ -48,6 +52,10 @@ struct Prompt {
   /// SHA-256 covers decoded pixels, grid placement, preprocessing version,
   /// and the model-specific encoder identity. Tokens remain a separate key.
   std::vector<std::uint8_t> cache_identity;
+  /// Images starting before the boundary affect the cached state. An image
+  /// partially inside the prefix still contributes all of its pixels.
+  [[nodiscard]] std::span<const std::uint8_t> IdentityBefore(
+      std::size_t token_count) const;
 };
 
 [[nodiscard]] core::Image ResizeImage(const core::Image& image);

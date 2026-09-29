@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "src/core/crypto/sha256.hpp"
 #include "src/models/qwen/vision/prompt.hpp"
 
 #if defined(ENGINE_ENABLE_HIP)
@@ -19,7 +20,29 @@ namespace {
 using namespace gufo::models::qwen::vision;
 
 void TestPositionLayout() {
+  gufo::crypto::Sha256Hasher identity;
+  const std::array<std::uint8_t, 1> a{'a'};
+  const std::array<std::uint8_t, 2> bc{'b', 'c'};
+  identity.Update(a);
+  const auto digest = identity.Digest();
+  assert(identity.Digest() == digest);
+  identity.Update(bc);
+  assert(identity.FinishHex() ==
+         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
   const RopeLayout layout{{{5, 2, 3}, {15, 3, 2}}};
+  const RopeLayout first{{{5, 2, 3}}};
+  assert(first.SamePrefix(layout, 15));
+  assert(!first.SamePrefix(layout, 16));
+  assert(layout.SamePrefix({}, 5));
+  assert(!layout.SamePrefix({}, 6));
+  const RopeLayout moved{{{6, 2, 3}}};
+  assert(!first.SamePrefix(moved, 6));
+  Prompt prompt;
+  prompt.images = {{{}, {5, 2, 3}, {1}}, {{}, {15, 3, 2}, {1, 2}}};
+  assert(prompt.IdentityBefore(5).empty());
+  assert(prompt.IdentityBefore(6).size() == 1);
+  assert(prompt.IdentityBefore(15).size() == 1);
+  assert(prompt.IdentityBefore(16).size() == 2);
   layout.Validate(64);
   assert((layout.Position(4) == std::array<std::int32_t, 3>{4, 4, 4}));
   assert((layout.Position(5) == std::array<std::int32_t, 3>{5, 5, 5}));
