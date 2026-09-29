@@ -8,7 +8,7 @@
   <title>Gufo · Local launcher</title>
   <link rel="icon" href="/logo.jpg">
   <link rel="stylesheet" href="/static/style.css">
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js" type="module"></script>
 </head>
 <body>
   <header class="topbar">
@@ -28,9 +28,13 @@
     </div>
     <div id="notice" class="notice" role="alert" hidden></div>
     <form id="settings-form">
+      {% include "presets.html" %}
       <div class="columns">
         <section class="card files-card" aria-labelledby="files-heading">
           <div class="section-title"><span class="section-number">01</span><h2 id="files-heading">Model files</h2></div>
+          <label for="model_family">Model family</label>
+          <select id="model_family" name="model_family"></select>
+          <p id="family-hint" class="hint"></p>
           <label for="models_dir">Models folder</label>
           <div class="path-row"><input id="models_dir" name="models_dir" type="text" spellcheck="false"><button type="button" data-browse="models_dir" data-kind="folder">Browse</button></div>
           <p class="hint">Use your existing library. Files stay where they are.</p>
@@ -39,12 +43,12 @@
           <p id="model-filename" class="selected-file"></p>
           <div class="divider"></div>
           <label for="speculative">Speculative decoding</label>
-          <select id="speculative" name="speculative"><option value="off">Off</option><option value="mtp">MTP · Qwen Flash-Next</option><option value="dflash2">DFlash2 · Qwen3.8-27B</option></select>
-          <div id="mtp-files" hidden><label for="mtp_model">MTP sidecar</label>
+          <select id="speculative" name="speculative"></select>
+          <div data-speculative-file="mtp_model" hidden><label for="mtp_model">MTP sidecar</label>
             <div class="path-row"><input id="mtp_model" name="mtp_model" type="text" spellcheck="false" placeholder="Matching shared Q8_0 sidecar"><button type="button" data-browse="mtp_model" data-kind="gguf" aria-label="Choose MTP sidecar">Choose</button></div>
             <p id="mtp_model-filename" class="selected-file"></p>
           </div>
-          <div id="dflash-files" hidden><label for="dflash_model">DFlash2 draft</label>
+          <div data-speculative-file="dflash_model" hidden><label for="dflash_model">DFlash2 draft</label>
             <div class="path-row"><input id="dflash_model" name="dflash_model" type="text" spellcheck="false" placeholder="Matching Qwen3.8-27B DFlash2 draft"><button type="button" data-browse="dflash_model" data-kind="gguf" aria-label="Choose DFlash2 draft">Choose</button></div>
             <p id="dflash_model-filename" class="selected-file"></p>
             <p class="hint">Uses Gufo's adaptive DFlash2 defaults.</p>
@@ -66,7 +70,7 @@
               <div><label for="context">Context tokens</label><input id="context" name="context" type="number" min="0" max="4294967295" step="1" required><p class="hint">0 uses the model's native context.</p></div>
               <div><label for="max_tokens">Max output tokens</label><input id="max_tokens" name="max_tokens" type="number" min="-1" max="4294967295" step="1" required><p class="hint">-1 continues until EOS or context full.</p></div>
               <div><label for="think">Thinking</label><select id="think" name="think"><option value="on">On</option><option value="off">Off</option><option value="auto">Model default</option></select></div>
-              <div><label for="reasoning_effort">Default thinking level</label><select id="reasoning_effort" name="reasoning_effort" aria-describedby="thinking-hint"><option value="auto">Auto (model default)</option><option value="low">Low</option><option value="medium">Medium</option><option value="xhigh">Xhigh</option></select></div>
+              <div><label for="reasoning_effort">Default thinking level</label><select id="reasoning_effort" name="reasoning_effort" aria-describedby="thinking-hint"></select></div>
               <div><label for="port">API port</label><input id="port" name="port" type="number" min="1" max="65535" step="1" required></div>
               <div><label for="served_model_name">API model name</label><input id="served_model_name" name="served_model_name" type="text" required></div>
             </div>
@@ -83,6 +87,7 @@
               <div><label for="seed">Seed</label><input id="seed" name="seed" type="number" min="-1" max="9007199254740991" step="1" required></div>
             </div>
             <p class="hint">Temperature 0 is greedy; seed -1 is random. Initial values suit Flash-Next with thinking. Clients may override these defaults.</p>
+            <button type="button" id="family-defaults" class="quiet" hidden>Use family defaults</button>
           </section>
         </div>
       </div>
@@ -94,23 +99,16 @@
           <div><label for="frequency_penalty">Frequency penalty</label><input id="frequency_penalty" name="frequency_penalty" type="number" min="-2" max="2" step="any" required></div>
           <div><label for="presence_penalty">Presence penalty</label><input id="presence_penalty" name="presence_penalty" type="number" min="-2" max="2" step="any" required></div>
         </div>
-        <fieldset id="mtp-options"><legend>MTP options · Flash-Next</legend>
-          <div class="field-grid advanced-grid">
-            <div><label for="draft_tokens">Max draft tokens</label><input id="draft_tokens" name="draft_tokens" type="number" min="1" max="7" step="1" required></div>
-            <div><label for="mtp_policy">Draft policy</label><select id="mtp_policy" name="mtp_policy"><option value="length">Length (default)</option><option value="survival">Survival</option></select></div>
-            <div><label for="mtp_draft_vocab">Draft vocabulary</label><select id="mtp_draft_vocab" name="mtp_draft_vocab"><option value="full">Full (default)</option><option value="latin">Latin / code</option></select></div>
-          </div>
-          <label class="check-label"><input id="prompt_lookup" name="prompt_lookup" type="checkbox"> Prompt lookup</label>
-          <p class="hint">Survival and prompt lookup target single-session decoding. Latin vocabulary is intended for English/code and may slow drafting in other languages.</p>
-        </fieldset>
+        {% include "mtp-options.html" %}
       </details>
       <section class="launch-bar" aria-label="Launch controls">
-        <div class="save-state"><span id="saved-state">Loading settings…</span><small>Changes apply to the next launch.</small></div>
-        <div class="actions"><button type="button" id="save-button">Save settings</button><button type="button" id="stop-button" class="stop" disabled>Stop</button><button type="submit" id="start-button" class="primary" disabled>Start Gufo <span aria-hidden="true">↗</span></button></div>
+        <div class="save-state"><span id="saved-state">Loading settings…</span><small id="next-launch-note">Changes apply to the next launch.</small></div>
+        <div class="actions"><button type="button" id="stop-button" class="stop" disabled>Stop</button><button type="submit" id="start-button" class="primary" disabled>Start Gufo <span aria-hidden="true">↗</span></button></div>
       </section>
     </form>
     <section class="card runtime" aria-labelledby="runtime-heading">
       <div class="runtime-heading"><h2 id="runtime-heading">Server</h2><span id="status" class="status stopped" role="status">Stopped</span></div>
+      <p id="running-preset" class="hint"></p>
       <div class="connection"><span>API base URL</span><code id="api-url">http://127.0.0.1:8080/v1</code><button type="button" id="copy-url" class="quiet">Copy</button><span id="active-model"></span></div>
       <p class="hint" id="runtime-note">Start Gufo to connect your OpenAI-compatible client.</p>
       <section class="performance" aria-labelledby="performance-heading">
@@ -129,6 +127,7 @@
     </section>
     <footer><span>Gufo · Made for Strix Halo</span><span id="settings-location"></span></footer>
   </main>
+  {% include "preset-dialogs.html" %}
   <dialog id="file-dialog" aria-labelledby="picker-title">
     <div class="dialog-heading"><h2 id="picker-title">Choose a file</h2><button type="button" id="close-picker" class="quiet" aria-label="Close file picker">✕</button></div>
     <div id="picker-roots" class="roots"></div>

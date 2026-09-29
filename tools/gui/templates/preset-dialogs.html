@@ -1,0 +1,32 @@
+<dialog id="preset-name-dialog" class="small-dialog" aria-labelledby="preset-name-title">
+  <form method="dialog">
+    <h2 id="preset-name-title">Save as a new preset</h2>
+    <label for="preset-name">Preset name</label>
+    <input id="preset-name" type="text" maxlength="80" required autofocus>
+    <div class="dialog-footer actions">
+      <button value="save" class="primary">Save</button>
+      <button value="cancel" formnovalidate>Cancel</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="unsaved-dialog" class="small-dialog" aria-labelledby="unsaved-title">
+  <form method="dialog">
+    <h2 id="unsaved-title">Unsaved changes</h2>
+    <p>Save your changes before leaving this preset?</p>
+    <div class="dialog-footer actions">
+      <button value="cancel" autofocus>Cancel</button>
+      <button value="discard">Discard</button>
+      <button value="save" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="delete-dialog" class="small-dialog" aria-labelledby="delete-title">
+  <form method="dialog">
+    <h2 id="delete-title">Delete preset?</h2>
+    <p>Delete <strong id="delete-preset-name"></strong>? Model files and the running server will stay as they are.</p>
+    <div class="dialog-footer actions">
+      <button value="cancel" autofocus>Cancel</button>
+      <button value="delete" class="stop">Delete</button>
+    </div>
+  </form>
+</dialog>

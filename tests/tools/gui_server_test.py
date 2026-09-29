@@ -6,10 +6,10 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools/gui"))
-from launcher_config import DEFAULTS
+from settings import DEFAULTS
 from launcher_process import ProcessManager
 from server import create_app
 
@@ -32,9 +32,17 @@ class ServerTest(unittest.TestCase):
         token = re.search(r'name="gufo-token" content="([^"]+)"', page.text)[1]
         self.headers = {"X-Gufo-Token": token}
 
+    def save(self, settings):
+        document = self.client.get("/api/settings", headers=self.headers).json["document"]
+        return self.client.post("/api/presets", json={"action": "save", "id": "default",
+                                "settings": settings, "revision": document["revision"]}, headers=self.headers)
+
+    def start(self, settings):
+        return self.client.post("/api/start", json={"settings": settings, "preset_id": "default"}, headers=self.headers)
+
     def test_control_and_file_routes_require_same_origin_and_runtime_token(self):
         for method, path in (("get", "/api/browse"), ("get", "/api/settings"),
-                             ("post", "/api/start"), ("post", "/api/stop"), ("post", "/api/exit")):
+                             ("post", "/api/presets"), ("post", "/api/start"), ("post", "/api/stop"), ("post", "/api/exit")):
             for headers in ({}, self.headers | {"Origin": "https://example.com"},
                             {"X-Gufo-Token": "stale token"}):
                 with self.subTest(path=path, headers=headers):
@@ -47,7 +55,7 @@ class ServerTest(unittest.TestCase):
 
     def test_save_restore_preview_and_browse(self):
         settings = DEFAULTS | {"context": 8192, "models_dir": str(self.root)}
-        saved = self.client.post("/api/settings", json=settings, headers=self.headers)
+        saved = self.save(settings)
         self.assertEqual(saved.status_code, 200)
         self.assertTrue(self.config.is_file())
         app = create_app(self.config, self.manager, self.exiting)
@@ -59,9 +67,9 @@ class ServerTest(unittest.TestCase):
         (self.root / "model.gguf").touch()
         files = self.client.get("/api/browse", query_string={"path": str(self.root)}, headers=self.headers)
         self.assertEqual(files.json["entries"][0]["name"], "model.gguf")
-        invalid = self.client.post("/api/settings", json=settings | {"temperature": None}, headers=self.headers)
+        invalid = self.save(settings | {"temperature": None})
         self.assertEqual(invalid.status_code, 400)
-        self.assertEqual(self.client.post("/api/settings", data="x" * 40000,
+        self.assertEqual(self.client.post("/api/presets", data="x" * 40000,
                                          content_type="application/json", headers=self.headers).status_code, 413)
 
     def test_launch_uses_explicit_argv_and_does_not_overwrite_saved_settings(self):
@@ -71,17 +79,17 @@ class ServerTest(unittest.TestCase):
         mtp.write_bytes(b"GGUF")
         settings = DEFAULTS | {"executable": str(exe), "model": str(model),
                                "speculative": "mtp", "mtp_model": str(mtp), "prompt_lookup": True}
-        started = self.client.post("/api/start", json=settings, headers=self.headers)
+        started = self.start(settings)
         self.assertEqual(started.status_code, 200)
         command, port, name = self.manager.start.call_args.args
         self.assertEqual(command[command.index("--model") + 1], str(model))
         self.assertIn("--prompt-lookup", command)
         self.assertEqual((port, name), (8080, "gufo"))
         self.assertFalse(self.config.exists())
-        invalid = self.client.post("/api/start", json=settings | {"port": 8090}, headers=self.headers)
+        invalid = self.start(settings | {"port": 8090})
         self.assertEqual(invalid.status_code, 400)
         model.unlink()
-        invalid = self.client.post("/api/start", json=settings, headers=self.headers)
+        invalid = self.start(settings)
         self.assertEqual(invalid.status_code, 400)
         self.client.post("/api/stop", headers=self.headers)
         self.manager.stop.assert_called_once()
@@ -101,11 +109,11 @@ class ServerTest(unittest.TestCase):
         model.write_bytes(b"GGUF")
         draft.write_bytes(b"GGUF")
         saved = DEFAULTS | {"speculative": "mtp", "context": 200000}
-        self.client.post("/api/settings", json=saved, headers=self.headers)
+        self.save(saved)
         before = self.config.read_bytes()
         settings = saved | {"executable": str(exe), "model": str(model),
                             "speculative": "dflash2", "dflash_model": str(draft), "prompt_lookup": True}
-        started = self.client.post("/api/start", json=settings, headers=self.headers)
+        started = self.start(settings)
         self.assertEqual(started.status_code, 200)
         command = self.manager.start.call_args.args[0]
         self.assertEqual(command[command.index("--speculative") + 1], "dflash2")
@@ -132,6 +140,32 @@ class ServerTest(unittest.TestCase):
         self.manager.stop.return_value = {"state": "stopped"}
         self.assertEqual(self.client.post("/api/exit", headers=self.headers).status_code, 200)
         self.assertTrue(self.exiting.wait(1))
+
+    def test_preset_edits_do_not_change_running_snapshot(self):
+        exe, model = self.root / "gufo.exe", self.root / "main.gguf"
+        exe.touch()
+        model.write_bytes(b"GGUF")
+        settings = DEFAULTS | {"executable": str(exe), "model": str(model)}
+        self.save(settings)
+        running = self.start(settings | {"context": 8192}).json["running"]
+        self.assertTrue(running["modified"])
+        self.assertEqual(running["preset_name"], "Default")
+        self.save(settings | {"context": 65536})
+        state = self.client.get("/api/status", headers=self.headers).json
+        self.assertEqual(state["running"], running)
+        self.manager.start.assert_called_once()
+        self.manager.stop.assert_not_called()
+
+    def test_failed_save_does_not_replace_memory_and_stale_tabs_cannot_save(self):
+        self.save(DEFAULTS)
+        before = self.client.get("/api/settings", headers=self.headers).json["document"]
+        with patch("presets.os.replace", side_effect=OSError("disk full")):
+            self.assertEqual(self.save(DEFAULTS | {"context": 8192}).status_code, 400)
+        self.assertEqual(self.client.get("/api/settings", headers=self.headers).json["document"], before)
+        stale = self.client.post("/api/presets", json={"action": "delete", "id": "default", "revision": 0},
+                                 headers=self.headers)
+        self.assertEqual(stale.status_code, 400)
+        self.assertIn("another tab", stale.json["error"])
 
 
 if __name__ == "__main__":

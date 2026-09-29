@@ -1,0 +1,45 @@
+"""Build native Gufo arguments from validated launch settings."""
+
+from pathlib import Path
+
+from files import check_gguf
+from settings import validate_settings
+
+
+CLI_FIELDS = (
+    "context", "max_tokens", "think", "served_model_name", "temperature",
+    "top_k", "top_p", "min_p", "seed", "repeat_penalty", "repeat_last_n",
+    "frequency_penalty", "presence_penalty",
+)
+
+
+def build_command(values, *, check_files=False):
+    settings = validate_settings(values)
+    if check_files:
+        if not settings["executable"] or not Path(settings["executable"]).is_file():
+            raise ValueError("Select gufo.exe from a built Gufo directory, with its runtime DLLs.")
+        check_gguf(settings["model"], "Model", sharded=True)
+        if settings["mmproj"]:
+            check_gguf(settings["mmproj"], "Vision projector")
+        if settings["speculative"] == "mtp":
+            check_gguf(settings["mtp_model"], "MTP sidecar")
+        elif settings["speculative"] == "dflash2":
+            check_gguf(settings["dflash_model"], "DFlash2 draft")
+    command = [settings["executable"], "serve", "--host", "127.0.0.1",
+               "--port", str(settings["port"]), "--sessions", str(settings["sessions"]),
+               "llm", "--model", settings["model"]]
+    for key in CLI_FIELDS:
+        command.extend(["--" + key.replace("_", "-"), str(settings[key])])
+    if settings["think"] != "off" and settings["reasoning_effort"] != "auto":
+        command.extend(["--reasoning-effort", settings["reasoning_effort"]])
+    if settings["mmproj"]:
+        command.extend(["--mmproj", settings["mmproj"]])
+    command.extend(["--speculative", settings["speculative"]])
+    if settings["speculative"] == "mtp":
+        for key in ("mtp_model", "draft_tokens", "mtp_policy", "mtp_draft_vocab"):
+            command.extend(["--" + key.replace("_", "-"), str(settings[key])])
+        if settings["prompt_lookup"]:
+            command.append("--prompt-lookup")
+    elif settings["speculative"] == "dflash2":
+        command.extend(["--dflash-model", settings["dflash_model"]])
+    return command
