@@ -54,13 +54,16 @@ Settings live in `%LOCALAPPDATA%\Gufo\launcher.json`. Saving is explicit and
 works while the engine is running. **Start** uses the current form without saving
 it. Reopening the launcher restores the last saved preset without loading a model.
 
-The **Launch preset** selector loads a complete model configuration: model and
+Choose a **Launch preset**, then click **Load preset** to apply its complete model configuration: model and
 sidecar paths, API model name, context, sessions, sampling, reasoning, and
 speculative options. **Save preset** updates it; **Save as…** creates an independent
-copy. **Rename** keeps its identity and **Delete** removes only the preset, never
+copy. Save, Rename, and Delete act on the loaded preset, identified below the buttons.
+**Rename** keeps its identity and **Delete** removes only the preset, never
 model files. At least one preset must remain. Switching or deleting with unsaved
-edits offers Save, Discard, or Cancel. Selecting a preset alone does not write to
-disk. Preset names must be unique, and up to 100 presets can be saved.
+edits offers Save, Discard, or Cancel. Selecting a preset leaves the form unchanged
+until you click **Load preset**. Loading does not save or start the server; only
+choosing Save in the unsaved-edits prompt writes changes to disk. Preset names
+must be unique, and up to 100 presets can be saved.
 
 The executable, models folder, and API port are shared across presets. **Save
 preset** and **Save as…** also save these shared values. The form describes the

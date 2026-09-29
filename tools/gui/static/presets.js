@@ -12,6 +12,7 @@ function ask(dialog) {
 export function createPresets(initial, form, action, onChange) {
   let document = initial.document;
   let selectedId = document.selected_preset;
+  let pendingId = selectedId;
   let hasSaved = initial.saved;
   let renderedRevision = -1;
 
@@ -24,7 +25,8 @@ export function createPresets(initial, form, action, onChange) {
       $("preset-select").replaceChildren(...document.presets.map((preset) => new Option(preset.name, preset.id)));
       renderedRevision = document.revision;
     }
-    $("preset-select").value = selectedId;
+    $("preset-select").value = pendingId;
+    $("loaded-preset").textContent = `Loaded preset: ${selected().name}`;
     $("delete-preset").disabled = document.presets.length === 1;
     $("saved-state").textContent = dirty() ? "Unsaved changes" : hasSaved ? "Preset saved" : "Not saved yet";
   }
@@ -50,14 +52,17 @@ export function createPresets(initial, form, action, onChange) {
     return choice === "discard" || (choice === "save" && await save());
   }
 
-  $("preset-select").addEventListener("change", () => {
-    const next = $("preset-select").value;
-    $("preset-select").value = selectedId;
+  for (const event of ["input", "change"]) {
+    $("preset-select").addEventListener(event, () => { pendingId = $("preset-select").value; });
+  }
+  $("load-preset").addEventListener("click", () => {
+    const next = pendingId;
     action(async () => {
       if (!await mayLeave()) return;
-      selectedId = next;
+      selectedId = pendingId = next;
       form.apply(savedValues());
       onChange();
+      notice(`Preset "${selected().name}" loaded for the next launch.`, true);
     });
   });
   $("save-button").addEventListener("click", () => action(save));
@@ -71,7 +76,7 @@ export function createPresets(initial, form, action, onChange) {
       await change({ action: operation, id: selectedId, name: $("preset-name").value,
                      ...(operation === "create" ? { settings: form.values() } : {}) });
       if (operation === "create") {
-        selectedId = document.selected_preset;
+        selectedId = pendingId = document.selected_preset;
         form.apply(savedValues());
       }
       onChange();
@@ -84,7 +89,7 @@ export function createPresets(initial, form, action, onChange) {
     $("delete-preset-name").textContent = selected().name;
     if (await ask($("delete-dialog")) !== "delete") return;
     await change({ action: "delete", id: selectedId });
-    selectedId = document.selected_preset;
+    selectedId = pendingId = document.selected_preset;
     form.apply(savedValues());
     onChange();
     notice("Preset deleted. Model files and the running server are unchanged.", true);

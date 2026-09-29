@@ -4,10 +4,12 @@
     <select id="preset-select" aria-describedby="preset-hint"></select>
   </div>
   <div class="actions preset-actions">
+    <button type="button" id="load-preset">Load preset</button>
     <button type="button" id="save-button">Save preset</button>
     <button type="button" id="save-as-preset">Save as…</button>
     <button type="button" id="rename-preset" class="quiet">Rename</button>
     <button type="button" id="delete-preset" class="quiet">Delete</button>
   </div>
-  <p id="preset-hint" class="hint">Presets remember model files and launch options. The executable, models folder, and API port are shared. Saving also saves those shared settings.</p>
+  <p id="loaded-preset" class="hint"></p>
+  <p id="preset-hint" class="hint">Choose a preset and click Load preset to apply its model files and launch options. Save, Rename, and Delete act on the loaded preset. The executable, models folder, and API port are shared. Saving also saves those shared settings.</p>
 </section>

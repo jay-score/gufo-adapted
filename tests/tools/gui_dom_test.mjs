@@ -57,6 +57,7 @@ async function setup(t) {
 
 function edit(env, id, value) {
   env.$(id).value = value;
+  env.$(id).dispatchEvent(new env.window.Event("input", { bubbles: true }));
   env.$(id).dispatchEvent(new env.window.Event("change", { bubbles: true }));
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -110,23 +111,35 @@ test("preset switching supports cancel, discard, and save without starting the s
   presets.render();
   edit(env, "context", "8192");
   edit(env, "preset-select", "second");
+  presets.render(); // Runtime refreshes must preserve the pending choice.
+  assert.equal(env.$("preset-select").value, "second");
+  assert.equal(presets.id, "default");
+  assert.equal(form.values().context, 8192);
+  assert.equal(env.$("unsaved-dialog").open, false);
+  env.$("load-preset").click();
   assert.equal(env.$("unsaved-dialog").open, true);
   env.$("unsaved-dialog").close("cancel"); await tick();
   assert.equal(presets.id, "default");
   assert.equal(form.values().context, 8192);
-  edit(env, "preset-select", "second");
+  assert.equal(env.$("preset-select").value, "second");
+  env.$("load-preset").click();
   env.$("unsaved-dialog").close("discard"); await tick();
   assert.equal(presets.id, "second");
+  assert.equal(env.$("loaded-preset").textContent, "Loaded preset: Second");
   assert.equal(form.values().mtp_model, "C:\\sidecar.gguf");
   assert.equal(form.values().mmproj, "C:\\projector.gguf");
   assert.equal(presets.dirty(), false);
-  edit(env, "preset-select", "default"); await tick();
+  edit(env, "preset-select", "default");
+  env.$("load-preset").click(); await tick();
   edit(env, "context", "16384");
   edit(env, "preset-select", "second");
+  env.$("load-preset").click();
   env.$("unsaved-dialog").close("save"); await tick();
   assert.equal(presets.id, "second");
   assert.equal(requests.length, 1);
+  assert.equal(requests[0][1].id, "default");
   assert.equal(requests[0][1].settings.context, 16384);
+  assert.equal(env.$("preset-select").value, "second");
   assert.deepEqual(errors, []);
 });
 
@@ -218,6 +231,9 @@ test("save as, rename, failed save, and delete keep the correct draft", async (t
 
 test("application initializes and previews edits without launching or saving", async (t) => {
   const env = await setup(t);
+  env.initial.document.presets.push({ id: "second", name: "Second", settings: {
+    ...env.initial.document.presets[0].settings, context: 65536,
+  } });
   const requests = [];
   env.window.fetch = async (url, options) => {
     requests.push(url);
@@ -233,8 +249,20 @@ test("application initializes and previews edits without launching or saving", a
   assert.equal(env.$("start-button").disabled, false);
   assert.equal(env.$("preset-select").selectedOptions[0].textContent, "Default");
   edit(env, "context", "8192");
+  edit(env, "preset-select", "second");
   await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(env.$("preset-select").value, "second");
+  assert.equal(env.$("loaded-preset").textContent, "Loaded preset: Default");
   assert.equal(env.$("command").textContent, "gufo --context 8192");
   assert.equal(env.$("saved-state").textContent, "Unsaved changes");
+  env.$("load-preset").click();
+  assert.equal(env.$("unsaved-dialog").open, true);
+  env.$("unsaved-dialog").close("discard"); await tick();
+  assert.equal(env.$("settings-form").inert, false);
+  assert.equal(env.$("preset-select").value, "second");
+  assert.equal(env.$("loaded-preset").textContent, "Loaded preset: Second");
+  assert.equal(env.$("context").value, "65536");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(env.$("command").textContent, "gufo --context 65536");
   assert.deepEqual([...new Set(requests)].sort(), ["/api/preview", "/api/settings", "/api/status"]);
 });
