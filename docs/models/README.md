@@ -2,7 +2,8 @@
 
 Linux x86-64 / AMD Strix Halo gfx1151 is the production target. Build with
 `nix build`; Python/reference toolchains are development-only. Model weights
-are downloaded separately and are not part of the runtime package.
+are downloaded separately and are not part of the runtime package. To add
+support for a new model, follow [Adding a Model to Gufo](../ADDING_MODELS.md).
 
 | Model | Weights / supported inputs | Guide |
 | --- | --- | --- |
