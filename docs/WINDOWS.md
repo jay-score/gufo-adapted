@@ -113,6 +113,34 @@ records the selected paths. `GUFO_*` environment
 variables (`GUFO_PLATFORM_TUNING`, diagnostics) reach the server; the script
 lists any set in the calling shell.
 
+## Qwen27B weight memory
+
+Qwen3.8-27B uploads GGUF shards into `hipMalloc` device allocations on
+Windows. The existing `hip::WeightUpload` pipeline reads the retained file
+descriptors through bounded staging buffers (16 workers, 16 MiB each),
+without creating a second full-model copy in host RAM. Tensor encodings,
+offsets and inference arithmetic are unchanged. Linux retains its registered
+host-memory path. DFlash2 already uploads its private weights to device
+memory and shares the target's embedding/output pointers.
+
+This is a correctness workaround, not an optional tuning switch. On
+September 28, 2026, with TheRock 10.0.0 and Radeon 8060S/gfx1151, registering
+a 17,559,178,144-byte host buffer (the UD-Q4_K_XL file size) returned success,
+but the next `hipStreamCreateWithFlags` stalled. Creating the stream first
+instead produced `hipErrorLaunchFailure` (719) when synchronizing a GPU read.
+A standalone probe reproduced both failures without loading a model;
+64 MiB registration and a device upload of the same large buffer passed.
+The precise driver defect or size limit remains unidentified.
+
+Low dedicated-VRAM use in this failure was not CPU-only inference: HIP was
+trying to access registered host memory. The server never reached readiness.
+Do not infer support from registration success or a small-allocation probe;
+test full-sized weights, GPU access and model output. Use a matching BF16
+projector for vision; F16 is not interchangeable.
+
+The [Qwen27B quality record](models/qwen3.8-27b/QUALITY.md#windows-device-upload)
+records the upload control, exact logits and AR/DFlash2 text/vision checks.
+
 ## How the port works
 
 - `compat/win32/include` shadows the POSIX headers Gufo uses (`unistd.h`,

@@ -16,6 +16,10 @@
 #include "src/models/qwen/hip/executor.hpp"
 #include "src/models/qwen/hip/ops/gemm.hpp"
 
+#if defined(_WIN32)
+#include "src/core/hip/weight_upload.hpp"
+#endif
+
 namespace gufo::hip {
 namespace {
 
@@ -24,11 +28,42 @@ void ReleaseWeightRegions(std::vector<QwenGpuWeightRegion>& regions) noexcept {
     if (region.host_copy != nullptr) {
       (void)hipHostUnregister(region.host_copy);
       (void)munmap(region.host_copy, region.size);
+    } else if (region.device_data != nullptr) {
+      (void)hipFree(region.device_data);
     }
     region = {};
   }
 }
 
+#if defined(_WIN32)
+bool UploadDeviceRegions(std::span<const core::GgufMappedRegion> sources,
+                         std::vector<QwenGpuWeightRegion>& regions,
+                         std::string* error) {
+  // Model-sized host registrations can succeed on Windows but hang the next
+  // HIP stream creation. Use bounded disk staging into device allocations.
+  // Destroy the uploader (draining its workers) before the caller frees any
+  // destinations, including when allocation or a queued read fails.
+  auto upload = WeightUpload::Create(sources, error);
+  if (!upload)
+    return false;
+  for (std::size_t i = 0; i < sources.size(); ++i) {
+    auto& region = regions[i];
+    region.host_data = sources[i].data;
+    region.size = sources[i].size;
+    const auto status = hipMalloc(&region.device_data, region.size);
+    if (status != hipSuccess) {
+      if (error)
+        *error = "Failed to allocate Qwen GGUF shard " + std::to_string(i) +
+                 ": " + hipGetErrorString(status);
+      return false;
+    }
+    if (!upload->Copy(static_cast<std::uint32_t>(i), 0, region.size,
+                      region.device_data, error))
+      return false;
+  }
+  return upload->Finish(error);
+}
+#else
 void CopyMappedWeights(const core::GgufMappedRegion& source, void* copy) {
   constexpr std::size_t kChunkBytes = 16ULL << 20;
   const auto chunks =
@@ -95,6 +130,7 @@ void CopyMappedWeights(const core::GgufMappedRegion& source, void* copy) {
                  .size = source.size};
   return hipSuccess;
 }
+#endif
 
 [[nodiscard]] bool CreateWeightRegions(
     const core::GgufReader& reader,
@@ -108,6 +144,17 @@ void CopyMappedWeights(const core::GgufMappedRegion& source, void* copy) {
   }
 
   weight_regions.resize(source_regions.size());
+#if defined(_WIN32)
+  try {
+    if (UploadDeviceRegions(source_regions, weight_regions, error_msg))
+      return true;
+  } catch (const std::exception& e) {
+    if (error_msg)
+      *error_msg = e.what();
+  }
+  ReleaseWeightRegions(weight_regions);
+  return false;
+#else
   for (std::size_t i = 0; i < source_regions.size(); ++i) {
     const auto& source = source_regions[i];
     auto& destination = weight_regions[i];
@@ -131,6 +178,7 @@ void CopyMappedWeights(const core::GgufMappedRegion& source, void* copy) {
     }
   }
   return true;
+#endif
 }
 
 [[nodiscard]] bool RemapTensor(

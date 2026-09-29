@@ -53,6 +53,48 @@ conversion errors. Flash-Next has a separate [vision limit](../qwen3.8-flash-nex
 
 ## Reproduce
 
+### Windows device upload
+
+September 28, 2026: native Windows/gfx1151 with TheRock 10.0.0, UD-Q4_K_XL,
+BF16 projector and Q4_K_M DFlash2. The Windows loader uses bounded uploads
+into device memory to avoid the [large host-registration failure](../../WINDOWS.md#qwen27b-weight-memory).
+
+- Device-allocation checks and 1,878,568,960 bytes of embedding, output and
+  first/last-layer weights match the original GGUF exactly.
+- Three fixed prose/code histories produce **27/27 byte-identical full-logit
+  rows** (248,320 logits per row) against a synchronous device-copy control.
+  Both have continuation perplexity **3.6879261563836652** on 24 labels.
+  This short check isolates upload changes; the original registered-host
+  Windows loader cannot supply logits because it hangs. The control is not
+  an independent model-accuracy oracle.
+- Twelve HTTP smoke cases pass in each of AR and DFlash2: text, streaming,
+  sampled output, reasoning override, single/multiple images, image cache
+  replay/history, function calls, and Responses image/tool-result input.
+- The existing upload test passes byte equality, partial EOF, range bounds
+  and failed-read draining. Linux GPU validation was not run on this host.
+
+[Identities, settings and results](artifacts/windows-device-upload.json).
+Raw logs and logits remain in the local ignored `build/qwen27b-windows-test/`
+directory. This is bounded Q4 qualification, not a context/concurrency sweep
+or validation of the other local quantizations.
+
+Capture the same small numerical fixture on two builds (Windows example):
+
+```powershell
+.\build\gpu-test\qwen27b_target_test.exe $Model --capture-logits baseline.bin
+# Rebuild the candidate with the same toolchain and model, then:
+.\build\gpu-test\qwen27b_target_test.exe $Model --capture-logits candidate.bin
+Get-FileHash baseline.bin,candidate.bin -Algorithm SHA256
+```
+
+The command prints token histories, row hashes and continuation perplexity;
+the binary contains all 27 FP32 logit rows in case/row/vocabulary order.
+Require identical token histories and full-file hashes for an upload-only
+change. The normal target-test invocation additionally checks replay,
+verification and concurrency; capture mode does not run that larger suite.
+
+### Model suites
+
 Run only the affected [model suite](../../../tools/qwen27b/check.py):
 
 ```sh

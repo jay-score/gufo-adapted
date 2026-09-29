@@ -1,0 +1,131 @@
+{
+  "date": "2026-09-28",
+  "source_base": "d5260045aff8afbd26da82e7bbca778f42fd4060",
+  "scope": "Windows Qwen27B device-upload fix; no arithmetic changes. Bounded smoke and upload equivalence, not independent model accuracy.",
+  "platform": {
+    "os": "Windows 11 x64 (10.0.26200)",
+    "gpu": "Radeon 8060S / gfx1151",
+    "therock": "10.0.0",
+    "clang": "23.0.0git, 8f497e0992fb7513f7f78a6f6b6f1056c375e961",
+    "build": "RelWithDebInfo"
+  },
+  "artifacts": {
+    "Qwen3.8-27B-UD-Q4_K_XL.gguf": {
+      "bytes": 17559178144,
+      "sha256": "3f227079003add2511437e5b1e94812e363385225bf6a9b47b0054a72bc8b01e"
+    },
+    "mmproj-BF16.gguf": {
+      "bytes": 931146432,
+      "sha256": "83ee4f4f205fa514161778c41df1ea14144faa0f713510893b63c2395f5c2d53"
+    },
+    "Qwen3.8-27B-DFlash2-Q4_K_M.gguf": {
+      "bytes": 1143006816,
+      "sha256": "1a25c56858e1ebe93f2718ac1d49d1151f9323325c1bbfd6209370f4db131ebd"
+    }
+  },
+  "control": {
+    "description": "Temporary Windows MapRegisteredRegion implementation: hipMalloc(source.size), synchronous hipMemcpy from the original mapped GGUF, hipFree ownership; original Linux branch unchanged. No tensor conversion or kernel changes. Checkpoint base plus capture mode.",
+    "loader_patch": "diff --git a/src/models/qwen/hip/model_loader.cpp b/src/models/qwen/hip/model_loader.cpp\nindex f4bf772..d0c69c5 100644\n--- a/src/models/qwen/hip/model_loader.cpp\n+++ b/src/models/qwen/hip/model_loader.cpp\n@@ -24,6 +24,8 @@ void ReleaseWeightRegions(std::vector<QwenGpuWeightRegion>& regions) noexcept {\n     if (region.host_copy != nullptr) {\n       (void)hipHostUnregister(region.host_copy);\n       (void)munmap(region.host_copy, region.size);\n+    } else if (region.device_data != nullptr) {\n+      (void)hipFree(region.device_data);\n     }\n     region = {};\n   }\n@@ -68,6 +70,22 @@ void CopyMappedWeights(const core::GgufMappedRegion& source, void* copy) {\n \n [[nodiscard]] hipError_t MapRegisteredRegion(\n     const core::GgufMappedRegion& source, QwenGpuWeightRegion& destination) {\n+#if defined(_WIN32)\n+  void* device = nullptr;\n+  auto status = hipMalloc(&device, source.size);\n+  if (status != hipSuccess)\n+    return status;\n+  status = hipMemcpy(device, source.data, source.size, hipMemcpyHostToDevice);\n+  if (status != hipSuccess) {\n+    (void)hipFree(device);\n+    return status;\n+  }\n+  destination = {.host_data = source.data,\n+                 .device_data = device,\n+                 .host_copy = nullptr,\n+                 .size = source.size};\n+  return hipSuccess;\n+#else\n   void* host_copy = mmap(nullptr, source.size, PROT_READ | PROT_WRITE,\n                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);\n   if (host_copy == MAP_FAILED)\n@@ -94,6 +112,7 @@ void CopyMappedWeights(const core::GgufMappedRegion& source, void* copy) {\n                  .host_copy = owned_copy.release(),\n                  .size = source.size};\n   return hipSuccess;\n+#endif\n }\n \n [[nodiscard]] bool CreateWeightRegions(\n",
+    "target_test_sha256": "8eb55c0d84dcc384cf7f9ac090df433a58eec8b4e2f4723579c451329dbf2298"
+  },
+  "candidate": {
+    "description": "Windows hipMalloc allocations with existing bounded WeightUpload file-to-device pipeline. Linux retains host registration.",
+    "target_test_sha256": "87ac595d35a536e3d4f0463f5d8a013e188aafc92c994fbac25b3534dcbfa8a5",
+    "server_sha256": "fdb85ddf5358bc51844c37f8224da673d71f505bc5462f45bdaa409fb97b9c4d"
+  },
+  "numerical": {
+    "command": "build/gpu-test/qwen27b_target_test.exe <Q4_MODEL> --capture-logits <control-or-candidate>.bin",
+    "context": 128,
+    "speculation": "off",
+    "sampling": "none; predetermined teacher-forced tokens",
+    "vision": "not loaded",
+    "fixtures": "tests/models/qwen27b/target_test.cpp kTexts (three prose/code histories)",
+    "token_histories": [
+      "capture case=0 prompt=24 tokens=31931,4779,14908,449,10042,1785,2873,1754,1817,1141,1765,2534,3433,13,21101,2336,3972,13822,310,6745,4779,13,357,2081,14109,13273,948,279,10897,2081,369,33829,",
+      "capture case=1 prompt=29 tokens=32,5257,10583,279,7803,506,35915,321,33060,506,50614,39229,791,6258,13,12908,5257,10583,799,6258,2843,506,75211,39229,791,6258,13,1946,1423,948,781,3258,11,9150,279,25704,1754,",
+      "capture case=2 prompt=24 tokens=4075,361,8759,345,29,523,20865,3959,313,569,25,1744,4336,2654,345,5,869,8,313,413,318,1767,606,8390,8,460,867,26,795,13787,589,60,"
+    ],
+    "token_histories_sha256": "83a90923cc5a75d15a5c27757e2938e4553d25b8fa1fd81c7c0d964d9fa65c0f",
+    "rows": 27,
+    "vocabulary": 248320,
+    "labels": 24,
+    "full_logit_bytes": 26818560,
+    "required": "exact bytes, zero non-finite values",
+    "full_logit_equality": true,
+    "full_logits_sha256": "4a4972a1669fea578b24575b4b7f8a05bdc38b8ce9a0169ac5d82441ecd0da88",
+    "control_mean_nll": 1.305064282821349,
+    "candidate_mean_nll": 1.305064282821349,
+    "control_perplexity": 3.687926156383665,
+    "candidate_perplexity": 3.687926156383665,
+    "device_allocation_and_exact_weight_bytes_checked": 1878568960
+  },
+  "http": {
+    "command": "gufo serve llm --model <Q4_MODEL> --mmproj <BF16_PROJECTOR> --host 127.0.0.1 --port <PRIVATE_PORT> --served-model-name qwen27b-windows-test --context 8192 --sessions 1 --think off --temperature 0 --seed 47 --max-tokens 128 --request-timeout-ms 180000 --speculative off",
+    "draft_options": "--speculative dflash2 --dflash-model <Q4_K_M_DRAFT> --draft-tokens 7",
+    "cases_per_mode": 12,
+    "ar_passed": 12,
+    "dflash_passed": 12,
+    "ar_ready_seconds": 7.55929110001307,
+    "dflash_ready_seconds": 9.549802000052296,
+    "greedy_content_comparisons": [
+      {
+        "case": "arithmetic",
+        "equal": true
+      },
+      {
+        "case": "prose_stream",
+        "equal": true
+      },
+      {
+        "case": "reasoning_override",
+        "equal": true
+      },
+      {
+        "case": "red_image",
+        "equal": true
+      },
+      {
+        "case": "image_cached_replay",
+        "equal": true
+      },
+      {
+        "case": "blue_image_stream",
+        "equal": true
+      },
+      {
+        "case": "image_history",
+        "equal": true
+      },
+      {
+        "case": "two_images_order",
+        "equal": true
+      },
+      {
+        "case": "tool_call",
+        "equal": true
+      },
+      {
+        "case": "image_in_tool_result",
+        "equal": true
+      },
+      {
+        "case": "responses_image",
+        "equal": true
+      }
+    ],
+    "sampled_case": "temperature=0.7, top_p=0.9, top_k=40, seed=47; within-mode generation works; no cross-mode same-seed equality requirement",
+    "vision_fixture": "256x256 solid red/blue PNGs; single/multiple images, history, immediate cache replay, Responses function_call_output image"
+  },
+  "checks": [
+    "hip_weight_upload_test: pass (2.04 s)",
+    "check-format.py with clang-format 21.1.8: pass (482 files)",
+    "check-docs.py: pass"
+  ],
+  "limits": [
+    "Original registered-host Windows loader hangs; no before-fix model logits available.",
+    "Control tests upload equivalence only; no independent model-accuracy claim.",
+    "Short 24-label continuation perplexity, not a full corpus evaluation.",
+    "Linux GPU/CI, larger contexts/concurrency, other model quantizations were not exercised."
+  ],
+  "local_logs": "build/qwen27b-windows-test (ignored); initial smoke harness corrected for C1 cache replacement and Responses-only tool-result image schema before final runs."
+}

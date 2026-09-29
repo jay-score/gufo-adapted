@@ -54,8 +54,9 @@ struct QwenSampledVerificationResult {
 };
 
 struct QwenGpuWeightRegion {
-  // Original reader address for tensor offsets; host_copy owns GPU-visible
-  // immutable bytes, backed by transparent huge pages when available.
+  // Original reader address for tensor offsets. Linux owns registered bytes
+  // through host_copy; Windows owns a device allocation through device_data
+  // and leaves host_copy null. Both retain the original GGUF encodings.
   const void* host_data{nullptr};
   void* device_data{nullptr};
   void* host_copy{nullptr};

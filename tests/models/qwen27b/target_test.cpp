@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <span>
@@ -72,6 +74,49 @@ std::string Fingerprint(std::span<const float> values) {
       {reinterpret_cast<const std::uint8_t*>(values.data()),
        values.size_bytes()});
 }
+
+#if defined(_WIN32)
+void CheckDeviceWeights(const gufo::core::GgufReader& reader,
+                        const gufo::hip::QwenGpuModel& model) {
+  std::string error;
+  const auto source =
+      gufo::models::QwenModelWeights::LoadFromGguf(reader, &error);
+  Expect(source.has_value(), error);
+  const auto& target = model.GetWeights();
+  const std::array pairs{std::pair{&source->token_embd, &target.token_embd},
+                         std::pair{&source->output, &target.output},
+                         std::pair{&source->layers.front().ffn_gate,
+                                   &target.layers.front().ffn_gate},
+                         std::pair{&source->layers.back().ffn_down,
+                                   &target.layers.back().ffn_down}};
+  std::vector<std::uint8_t> buffer(1U << 20);
+  std::size_t checked = 0;
+  for (const auto& [host, device] : pairs) {
+    Expect(host->type == device->type &&
+               host->EncodedSizeBytes() == device->EncodedSizeBytes(),
+           "upload changed tensor encoding");
+    hipPointerAttribute_t attributes{};
+    Expect(hipPointerGetAttributes(&attributes, device->data) == hipSuccess &&
+               attributes.type == hipMemoryTypeDevice,
+           "Windows Qwen weights must reside in device allocations");
+    for (std::size_t offset = 0; offset < host->EncodedSizeBytes();) {
+      const auto size =
+          std::min(buffer.size(), host->EncodedSizeBytes() - offset);
+      Expect(hipMemcpy(buffer.data(),
+                       static_cast<const std::uint8_t*>(device->data) + offset,
+                       size, hipMemcpyDeviceToHost) == hipSuccess,
+             "cannot read uploaded weight bytes");
+      Expect(std::memcmp(buffer.data(),
+                         static_cast<const std::uint8_t*>(host->data) + offset,
+                         size) == 0,
+             "uploaded weight bytes differ from GGUF");
+      checked += size;
+      offset += size;
+    }
+  }
+  std::cout << "device weight bytes exact=" << checked << '\n';
+}
+#endif
 
 void CheckPrefillReplay(
     const std::shared_ptr<const gufo::hip::QwenGpuModel>& model) {
@@ -511,13 +556,16 @@ std::vector<Case> Capture(const char* path, bool check_replay,
   std::string error;
   auto owner = gufo::core::GgufReader::OpenFile(path, &error);
   Expect(owner != nullptr, error);
-  auto executor = Executor::CreateFromGguf(
-      std::shared_ptr<const gufo::core::GgufReader>(std::move(owner)), &error,
-      128);
+  const auto reader =
+      std::shared_ptr<const gufo::core::GgufReader>(std::move(owner));
+  auto executor = Executor::CreateFromGguf(reader, &error, 128);
   Expect(executor != nullptr, error);
   Expect(executor->GetConfig().hidden_size == 5120 &&
              executor->GetConfig().vocab_size == 248320,
          "quality fixture requires Qwen3.8 27B");
+#if defined(_WIN32)
+  CheckDeviceWeights(*reader, *executor->GetSharedModel());
+#endif
   if (mode == CheckMode::kPrefill) {
     CheckPrefillReplay(executor->GetSharedModel());
     return {};
@@ -654,6 +702,42 @@ double LogNormalizer(std::span<const float> logits) {
   return maximum + std::log(sum);
 }
 
+void WriteCapture(const std::vector<Case>& cases, const char* path) {
+  std::ofstream output(path, std::ios::binary);
+  Expect(output.good(), "cannot open logit capture");
+  double nll = 0;
+  std::size_t labels = 0, rows = 0;
+  std::cout << std::setprecision(17);
+  for (std::size_t c = 0; c < cases.size(); ++c) {
+    const auto& sample = cases[c];
+    std::cout << "capture case=" << c << " prompt=" << sample.prompt_size
+              << " tokens=";
+    for (const auto token : sample.tokens)
+      std::cout << token << ',';
+    std::cout << '\n';
+    for (std::size_t r = 0; r < sample.logits.size(); ++r) {
+      const auto& logits = sample.logits[r];
+      output.write(reinterpret_cast<const char*>(logits.data()),
+                   static_cast<std::streamsize>(logits.size() * sizeof(float)));
+      std::cout << "capture case=" << c << " row=" << r
+                << " vocab=" << logits.size()
+                << " sha256=" << Fingerprint(logits) << '\n';
+      ++rows;
+      if (sample.prompt_size + r < sample.tokens.size()) {
+        nll += LogNormalizer(logits) -
+               logits[sample.tokens[sample.prompt_size + r]];
+        ++labels;
+      }
+    }
+  }
+  output.close();
+  Expect(output.good(), "cannot write logit capture");
+  Expect(labels != 0, "logit capture requires continuation labels");
+  std::cout << "capture rows=" << rows << " labels=" << labels
+            << " mean_nll=" << nll / labels
+            << " perplexity=" << std::exp(nll / labels) << '\n';
+}
+
 void CompareReference(const std::vector<Case>& candidate,
                       const std::vector<Case>& reference) {
   Expect(candidate.size() == reference.size(), "reference case count differs");
@@ -703,6 +787,10 @@ int main(int argc, const char* const* argv) {
     if (model == nullptr) {
       std::cout << "Set GUFO_QWEN27B_MODEL for the Qwen27B target check.\n";
       return 77;
+    }
+    if (argc == 4 && std::string_view(argv[2]) == "--capture-logits") {
+      WriteCapture(Capture(model, false), argv[3]);
+      return 0;
     }
     if (argc == 3 && std::string_view(argv[2]) == "--prefill-only") {
       (void)Capture(model, true, CheckMode::kPrefill);

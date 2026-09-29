@@ -458,6 +458,14 @@ on Windows 11 x64 / gfx1151 (see `docs/WINDOWS.md`):
    `compat/win32/hip_include/cmath` works around the MSVC 14.5x
    `isgreater` collision — include new HIP TUs in the same build or
    they will fail on Windows first.
+   Validate weight placement at the real model's size. Unified physical
+   memory does not make Linux host-registration strategies portable to
+   Windows: a model-sized `hipHostRegister` can return success and still
+   hang the next stream creation or fail a GPU read. Qwen27B uses
+   `hipMalloc` plus the bounded `hip::WeightUpload` pipeline on Windows;
+   keep the source reader alive for tensor metadata, drain uploads before
+   freeing destinations on failure, and verify unchanged bytes and logits.
+   See [the reproduced Windows memory failure](WINDOWS.md#qwen27b-weight-memory).
 5. GUI + API: `launch-gui.bat` wraps `tools/windows/gui.ps1` (Flask/
    Waitress panel at `http://127.0.0.1:8090`, engine at
    `http://127.0.0.1:8080/v1`). Keep the panel thin; settings live in
