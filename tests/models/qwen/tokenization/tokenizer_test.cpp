@@ -330,6 +330,62 @@ void TestCorpusConformance() {
   }
 }
 
+void TestBpeMergeOrdering() {
+  using gufo::tokenization::QwenTokenizer;
+  using gufo::tokenization::TokenId;
+  const std::vector<std::string> vocab{"a",  "b",   "c",   "aa",  "ab",
+                                       "bc", "aab", "abc", "aaaa"};
+  const std::vector<std::string> merges{"a a",  "a b",  "b c",
+                                        "aa b", "ab c", "aa aa"};
+  const auto tokenizer = QwenTokenizer::CreateFromVocabulary(vocab, merges);
+  Expect(tokenizer != nullptr, "merge-order vocabulary loads");
+  Expect(tokenizer->Encode("aaa") == std::vector<TokenId>({3, 0}),
+         "equal-rank overlapping pairs merge leftmost first");
+  Expect(tokenizer->Encode("aab") == std::vector<TokenId>({6}),
+         "a replaced pair cannot consume a symbol from a prior merge");
+  Expect(tokenizer->Encode("abc") == std::vector<TokenId>({7}),
+         "new adjacent pairs participate in subsequent merges");
+  Expect(tokenizer->Encode("aabc") == std::vector<TokenId>({3, 5}),
+         "rank takes precedence over the position of a newly offered pair");
+  Expect(tokenizer->Encode("aaaa") == std::vector<TokenId>({8}),
+         "neighboring merges can form a further merge");
+  std::vector<TokenId> expected(1024, 8);
+  expected.insert(expected.end(), {3, 0});
+  Expect(tokenizer->Encode(std::string(4099, 'a')) == expected,
+         "a long piece retains exact merge ordering and its unmerged tail");
+
+  const auto incomplete = QwenTokenizer::CreateFromVocabulary(
+      std::vector<std::string>{"a", "b", "c", "bc"},
+      std::vector<std::string>{"a b", "b c"});
+  Expect(incomplete != nullptr, "incomplete merge vocabulary loads");
+  Expect(incomplete->Encode("abc") == std::vector<TokenId>({0, 1, 2}),
+         "a ranked pair missing its result stops merging as before");
+}
+
+void TestRepeatedAndOverlappingSpecialTokens() {
+  using gufo::tokenization::QwenTokenizer;
+  using gufo::tokenization::TokenId;
+  const std::vector<std::string> vocab{"a",       "b",   "<x>",
+                                       "<x>more", "<y>", "<x>more<y>"};
+  const auto tokenizer = QwenTokenizer::CreateFromVocabulary(
+      vocab, {}, {{"<x>", 2}, {"<x>more", 3}, {"<y>", 4}, {"<x>more<y>", 5}});
+  Expect(tokenizer != nullptr, "overlapping-special vocabulary loads");
+  Expect(tokenizer->Encode("<x>more<y>a<y><x>moreb<x>") ==
+             std::vector<TokenId>({5, 0, 4, 3, 1, 2}),
+         "longest special wins and occurrences inside it are skipped");
+
+  std::string conversation;
+  std::vector<TokenId> expected;
+  for (unsigned i = 0; i < 1024; ++i) {
+    conversation += "<x>a<y>b";
+    expected.insert(expected.end(), {2, 0, 4, 1});
+  }
+  Expect(tokenizer->Encode(conversation) == expected,
+         "repeated delimiters retain their exact order and intervening text");
+  Expect(tokenizer->Encode("<x>more<y>") == std::vector<TokenId>({5}),
+         "special occurrence cursors are private to each Encode call");
+}
+
 }  // namespace
 
 int main() {
@@ -340,6 +396,8 @@ int main() {
   TestUnicodeContractionBoundary();
   TestEmptyAndSpecialEdgeCases();
   TestCorpusConformance();
+  TestBpeMergeOrdering();
+  TestRepeatedAndOverlappingSpecialTokens();
   std::cout << "All QwenTokenizer tests passed successfully!\n";
   return 0;
 }
