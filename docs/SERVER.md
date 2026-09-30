@@ -201,7 +201,7 @@ reasoning replay, greedy/seeded sampling, and explicit cache bypass. Use
 `--prefix-repetitions 5500` for a roughly 50K-token prefix.
 For persistence, enable `--cache-disk` before the check, restart the same server,
 and add `--restore /tmp/cache-check.json`.
-Use `--image /path/to/image.png` for Qwen image conversations.
+Use `--image /path/to/image.png` for Qwen image conversations. Add `--append-image` to introduce the image after a cached text turn, and `--reasoning-effort high` to check a specific thinking effort.
 Each case continues for a third turn; repeat `--case NAME` to select only the
 cases needed for a change.
 The check requires exact snapshot and matched-history replay. It separately
