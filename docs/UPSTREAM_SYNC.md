@@ -67,7 +67,8 @@ an integration.
 
 Review incoming fixes in dependency order before considering features. Read the
 patch, prerequisites and later corrections, then check the
-[fork behavior inventory](#fork-behavior-to-preserve). The existing
+[fork behavior inventory](#fork-behavior-to-preserve) and
+[workflow policy](#github-actions-during-upstream-updates). The existing
 [upstream review skill](../.agents/skills/gufo-upstream-review/SKILL.md) describes
 this review in more detail.
 
@@ -123,6 +124,31 @@ passed against an incoming update. Update it when fork behavior changes.
 | Fast sampling, speculation and platform tuning retain numerical correctness | [sampling](../src/core/sampling.cpp), [Flash-Next executor](../src/models/qwen38_flash_next/kernels/rocm/executor.cpp) | Distribution, rejection/residual, RNG, EOS, rollback and snapshot checks plus matched-token logits/perplexity; constrained output must cover local top-candidate paths |
 | Simple GUI, explicit save/preset loading, existing config and owned process-tree shutdown | [GUI behavior](../tools/gui/README.md), [process ownership](../tools/gui/launcher_process.py), [Job Objects](../tools/gui/windows_job.py) | GUI Python and DOM checks; Stop/Exit, launcher death, retryable failures; opening the GUI must not load a model |
 | Guided setup preserves consent, verified downloads and rerun recovery | [setup](../tools/windows/setup.ps1), [launcher](../tools/windows/gui.ps1) | `windows_setup_test.py`, `windows_launcher_test.py`; retain installed tools and existing launcher settings |
+| Fork CI retains Windows and Linux coverage without importing official release automation by default | [CI](../.github/workflows/ci.yml), [workflow policy](#github-actions-during-upstream-updates) | Preserve both CPU jobs, launcher/setup and sync safety checks, and triggers targeting `windows-port`; review newly added workflows before promotion |
+
+## GitHub Actions during upstream updates
+
+Keep `ci.yml` and both its jobs: Windows CPU/launcher checks protect the port,
+while Linux CPU/repository checks protect shared behavior and future upstream
+integration. These jobs do not run GPU benchmarks or full model sweeps. Preserve
+the fork's `windows-port` push and PR triggers when resolving upstream CI changes.
+
+Inspect every added or changed file under `.github/workflows/` during upstream
+review. Prioritize fixes to existing checks over adding release or feature
+automation. Apply these decisions to incoming official workflows:
+
+| Workflow | Fork policy | Reason and adaptation needed |
+| --- | --- | --- |
+| `ci.yml` | Keep and adapt fixes | Preserve both platforms' coverage and fork-specific checks rather than replacing the file wholesale with official CI |
+| `release-please.yml` | Exclude by default; include only as a deliberately reviewed release setup | The inspected official version schedules daily release PR creation, automatically merges release PRs, publishes releases and dispatches builds to `gufo-org/toolboxes`. It requires GitHub App variables/secrets and access to `gufo` and `toolboxes`. A fork release setup must use its own destinations, credentials and validation requirements, including Windows checks |
+| `pr-title.yml` | Optional | Lightweight Conventional Commit title validation. The inspected official trigger targets `main`; adapt it to `windows-port` if adopted, and include its checker script |
+
+Recheck workflow contents at each selected official SHA; these descriptions are
+not a guarantee that future versions behave identically. For checkpoint merges,
+review workflow additions explicitly and document exclusions in the integration
+record. Optional workflows can remain disabled individually until intentionally
+configured. GitHub's enabled/disabled settings are separate from tracked YAML;
+check those settings when enabling Actions or promoting an update.
 
 ## Validation and promotion
 
