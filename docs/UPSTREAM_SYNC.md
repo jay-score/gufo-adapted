@@ -10,6 +10,12 @@ Prepare updates in a separate worktree, validate them, then promote through a
 reviewed PR. The helper prepares a branch and report; it never merges,
 cherry-picks, commits, pushes, changes remotes or starts Gufo.
 
+Invoke `$gufo-upstream-sync` to start this process with the
+[upstream sync skill](../.agents/skills/gufo-upstream-sync/SKILL.md). It prepares
+the comparison and isolated worktree, prioritizes fixes, and applies changes
+when the request authorizes integration. For assessment without worktree
+preparation, use `$gufo-upstream-review`.
+
 ## Sources and first-time setup
 
 | Remote | Source | Use |
