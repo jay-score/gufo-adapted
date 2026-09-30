@@ -17,6 +17,7 @@ benchmark/tuning executables; Python tools run from this source tree.
 | `h3/` | MiniMax inventory and quality-artifact commands |
 | `audio/` | Audio reference and quality tools |
 | `ci/` | Repository, dependency, and documentation checks |
+| [`upstream-sync.py`](upstream-sync.py) | Official upstream review report and isolated worktree preparation; [fix-first workflow](../docs/UPSTREAM_SYNC.md) |
 | [`gui/`](gui/README.md) | Optional local web launcher: model files, saved settings, process controls and logs |
 | `gufo/` | Shared Python helpers and model-specific reference implementations |
 

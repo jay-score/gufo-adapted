@@ -6,8 +6,10 @@ description: Review recent gufo-org/gufo main commits for this Windows fork, com
 # Gufo Upstream Review
 
 Evaluate [official Gufo main history](https://github.com/gufo-org/gufo/commits/main/)
-against the current fork. Prioritize useful fixes and features that can preserve
+against the current fork. Prioritize fixes over feature updates while preserving
 native Windows behavior and Linux compatibility with manageable maintenance cost.
+Assess features separately. To initiate worktree preparation and a fix-first
+integration workflow, use [gufo-upstream-sync](../gufo-upstream-sync/SKILL.md).
 
 Review only unless the user also authorizes integration. Fetching history and
 inspecting patches are part of review; merging, cherry-picking, changing toolchains,

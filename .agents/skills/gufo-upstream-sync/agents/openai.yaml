@@ -1,0 +1,3 @@
+interface:
+  display_name: "Gufo Upstream Sync"
+  short_description: "Start a fix-first upstream sync for the Windows fork"
