@@ -83,6 +83,35 @@ test("restoring a preset keeps sidecars; changing its model clears them", async 
   assert.equal(form.values().speculative, "off");
 });
 
+test("reasoning preservation and disk caching restore independently of thinking", async (t) => {
+  const env = await setup(t);
+  const { createSettingsForm } = await env.use("settings-form.js");
+  const { settings, families, modes } = env.initial;
+  const form = createSettingsForm(settings, families, modes, () => {});
+  assert.equal(env.$("preserve_thinking").checked, true);
+  assert.equal(env.$("cache_disk").checked, false);
+  assert.equal(env.$("disk-cache-options").disabled, true);
+  edit(env, "think", "off");
+  assert.equal(env.$("preserve_thinking").disabled, false);
+  env.$("preserve_thinking").click();
+  env.$("cache_disk").click();
+  assert.equal(form.values().preserve_thinking, false);
+  assert.equal(form.values().cache_disk, true);
+  assert.equal(env.$("disk-cache-options").disabled, false);
+  edit(env, "cache_disk_dir", "");
+  assert.throws(() => form.valid());
+  edit(env, "cache_disk_dir", "C:\\cache folder");
+  edit(env, "cache_disk_staging_gib", "8");
+  const cached = form.values();
+  form.apply(settings);
+  assert.equal(env.$("disk-cache-options").disabled, true);
+  assert.equal(env.$("preserve_thinking").checked, true);
+  form.apply(cached);
+  assert.equal(form.values().cache_disk_staging_gib, 8);
+  assert.equal(env.$("preserve_thinking").checked, false);
+  assert.equal(env.$("disk-cache-options").disabled, false);
+});
+
 test("preset switching supports cancel, discard, and save without starting the server", async (t) => {
   const env = await setup(t);
   const { createSettingsForm } = await env.use("settings-form.js");

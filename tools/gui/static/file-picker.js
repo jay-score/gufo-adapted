@@ -57,7 +57,7 @@ export function initFilePicker(homeFolder) {
 
   document.querySelectorAll("[data-browse]").forEach((button) => button.addEventListener("click", () => {
     pickerTarget = button.dataset.browse; pickerKind = button.dataset.kind;
-    $("picker-title").textContent = pickerKind === "folder" ? "Choose your models folder" : (button.getAttribute("aria-label") || "Choose a file");
+    $("picker-title").textContent = button.getAttribute("aria-label") || (pickerKind === "folder" ? "Choose a folder" : "Choose a file");
     $("select-folder").hidden = pickerKind !== "folder";
     $("picker-roots").replaceChildren();
     const homeButton = document.createElement("button");

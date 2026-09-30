@@ -40,6 +40,10 @@ class ConfigTest(unittest.TestCase):
                        {"temperature": float("nan")}, {"temperature": 2.1}, {"top_p": 1.1}, {"top_p": 0},
                        {"top_k": 2.5}, {"seed": 2**60}, {"max_tokens": 0}, {"repeat_penalty": 0},
                        {"think": "yes"}, {"mtp": "false"}, {"speculative": "unknown"},
+                       {"preserve_thinking": "true"}, {"cache_disk": 1},
+                       {"cache_disk": True, "cache_disk_dir": ""}, {"cache_disk_dir": "relative"},
+                       {"cache_disk_gib": 0}, {"cache_disk_gib": 1.5},
+                       {"cache_disk_staging_gib": -1}, {"cache_disk_staging_gib": True},
                        {"dflash_model": "relative.gguf"}, {"model": "relative.gguf"},
                        {"served_model_name": "line\nbreak"}, {"extra_args": "--anything"}):
             with self.subTest(change=change), self.assertRaises(ValueError):
@@ -123,6 +127,35 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(command[command.index("--speculative") + 1], "off")
             self.assertNotIn("--dflash-model", command)
             self.assertNotIn("--mtp-model", command)
+
+    def test_reasoning_and_disk_cache_arguments(self):
+        command = build_command({})
+        self.assertEqual(command[command.index("--preserve-thinking") + 1], "on")
+        self.assertNotIn("--cache-disk", command)
+        with tempfile.TemporaryDirectory(prefix="gufo cache ") as directory:
+            root = Path(directory)
+            exe, model = root / "gufo.exe", root / "model.gguf"
+            exe.touch()
+            model.write_bytes(b"GGUF")
+            cache = root / "new cache" / "snapshots"
+            settings = DEFAULTS | {"executable": str(exe), "model": str(model),
+                                  "preserve_thinking": False, "think": "off",
+                                  "cache_disk": True, "cache_disk_dir": str(cache),
+                                  "cache_disk_gib": 16, "cache_disk_staging_gib": 8}
+            command = build_command(settings, check_files=True)
+            for flag, value in (("--preserve-thinking", "off"), ("--cache-disk", str(cache)),
+                                ("--cache-disk-bytes", str(16 * 1024**3)),
+                                ("--cache-disk-staging-bytes", str(8 * 1024**3))):
+                self.assertEqual(command[command.index(flag) + 1], value)
+            self.assertFalse(cache.exists())  # Preview/validation must not create folders.
+            automatic = build_command(settings | {"cache_disk_staging_gib": 0})
+            self.assertEqual(automatic[automatic.index("--cache-disk-staging-bytes") + 1], "0")
+            disabled = build_command(settings | {"cache_disk": False, "preserve_thinking": True})
+            self.assertEqual(disabled[disabled.index("--preserve-thinking") + 1], "on")
+            self.assertFalse(any(arg.startswith("--cache-disk") for arg in disabled))
+            for invalid in (model, model / "child"):
+                with self.assertRaisesRegex(ValueError, "folder, not a file"):
+                    build_command(settings | {"cache_disk_dir": str(invalid)}, check_files=True)
 
     def test_folder_picker_groups_shards_without_loading_weights(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -38,6 +38,29 @@ class PresetsTest(unittest.TestCase):
             self.assertEqual(load_document(path), document)
             self.assertEqual(path.with_name("launcher.json.bak").read_bytes(), original)
 
+    def test_cache_defaults_upgrade_in_memory_and_save_per_preset(self):
+        fields = ("preserve_thinking", "cache_disk", "cache_disk_dir", "cache_disk_gib", "cache_disk_staging_gib")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "launcher.json"
+            legacy = new_document()
+            for key in fields:
+                del legacy["presets"][0]["settings"][key]
+            original = json.dumps(legacy).encode()
+            path.write_bytes(original)
+            document = load_document(path)
+            values = resolved_settings(document)
+            self.assertTrue(values["preserve_thinking"])
+            self.assertFalse(values["cache_disk"])
+            self.assertEqual(path.read_bytes(), original)
+            changed = values | {"preserve_thinking": False, "cache_disk": True,
+                                "cache_disk_dir": str(Path(directory) / "cache"),
+                                "cache_disk_gib": 16, "cache_disk_staging_gib": 8}
+            document = self.change(document, action="create", name="Disk cache", settings=changed)
+            save_document(path, document)
+            restored = load_document(path)
+            self.assertEqual(resolved_settings(restored), changed)
+            self.assertEqual(resolved_settings(restored, "default"), values)
+
     def test_lifecycle_keeps_ids_and_shared_settings_separate(self):
         original = new_document()
         values = DEFAULTS | {"context": 65536, "port": 8088, "model_family": "qwen38_27b",

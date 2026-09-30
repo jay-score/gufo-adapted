@@ -72,10 +72,11 @@
               <div><label for="think">Thinking</label><select id="think" name="think"><option value="on">On</option><option value="off">Off</option><option value="auto">Model default</option></select></div>
               <div><label for="reasoning_effort">Default thinking level</label><select id="reasoning_effort" name="reasoning_effort" aria-describedby="thinking-hint"></select></div>
               <div><label for="port">API port</label><input id="port" name="port" type="number" min="1" max="65535" step="1" required></div>
-              <div><label for="served_model_name">API model name</label><input id="served_model_name" name="served_model_name" type="text" required></div>
+              <div><label for="served_model_name">API model name</label><input id="served_model_name" name="served_model_name" type="text" required><p class="hint">Use this name in your chat client. The API listens on localhost.</p></div>
             </div>
             <p id="thinking-hint" class="hint">Auto uses the model default (Qwen: xhigh). Clients can override the level per request. The level is ignored while Thinking is Off.</p>
-            <p class="hint">Use this name in your chat client. The API listens on localhost.</p>
+            <label class="check-label"><input id="preserve_thinking" name="preserve_thinking" type="checkbox"> Preserve reasoning in history</label>
+            <p class="hint">On by default. Keeps reasoning supplied by your client in later prompts, helping cache reuse. Independent of generating new thoughts. Chat Completions clients can override this per request.</p>
           </section>
           <section class="card" aria-labelledby="sampling-heading">
             <div class="section-title"><span class="section-number">03</span><h2 id="sampling-heading">Sampling defaults</h2></div>
@@ -91,7 +92,19 @@
           </section>
         </div>
       </div>
-      <details class="card advanced"><summary>More options <span>Sessions, repetition penalties &amp; MTP</span></summary>
+      <details class="card advanced"><summary>More options <span>Disk cache, sessions, repetition penalties &amp; MTP</span></summary>
+        <label class="check-label"><input id="cache_disk" name="cache_disk" type="checkbox"> Enable disk continuation cache</label>
+        <p class="hint">Off by default. Reuses compatible snapshots after an engine restart. RAM caching works independently. Stop and Exit do not wait for pending disk writes; already written snapshots remain reusable.</p>
+        <fieldset id="disk-cache-options"><legend>Disk cache settings</legend>
+          <label for="cache_disk_dir">Cache folder</label>
+          <div class="path-row"><input id="cache_disk_dir" name="cache_disk_dir" type="text" spellcheck="false" required><button type="button" data-browse="cache_disk_dir" data-kind="folder" aria-label="Choose disk cache folder">Choose</button></div>
+          <p class="hint">Gufo creates the folder on launch if needed. You can type a new folder path.</p>
+          <div class="field-grid">
+            <div><label for="cache_disk_gib">Disk limit (GiB)</label><input id="cache_disk_gib" name="cache_disk_gib" type="number" min="1" max="65536" step="1" required></div>
+            <div><label for="cache_disk_staging_gib">RAM staging limit (GiB)</label><input id="cache_disk_staging_gib" name="cache_disk_staging_gib" type="number" min="0" max="65536" step="1" required><p class="hint">0 is automatic, up to 1 GiB. This is a limit, not an upfront allocation.</p></div>
+          </div>
+          <p class="hint">Snapshots larger than either limit are skipped. For Flash-Next/MTP at 262K context, use 8 GiB staging if RAM permits; check the process log for required snapshot sizes.</p>
+        </fieldset>
         <div class="field-grid advanced-grid">
           <div><label for="sessions">Sessions</label><input id="sessions" name="sessions" type="number" min="1" max="64" step="1" required><p class="hint">Each session reserves its own context memory.</p></div>
           <div><label for="repeat_penalty">Repetition penalty</label><input id="repeat_penalty" name="repeat_penalty" type="number" min="0.000001" max="100" step="any" required><p class="hint">1 disables the penalty.</p></div>

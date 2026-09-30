@@ -100,8 +100,31 @@ Windows, Stop terminates the owned process tree and waits for it to exit.
 A Windows Job Object also terminates that tree if the launcher crashes or its
 terminal is closed abruptly. Failed shutdowns remain visible and can be retried
 with Stop; Exit launcher does not report success while shutdown has failed.
-Termination does not flush Gufo's optional disk continuation cache. The GUI
-does not enable that cache.
+Termination does not flush pending disk continuation cache writes. Snapshots
+already written remain reusable.
+
+## Reasoning preservation and disk caching
+
+**Preserve reasoning in history** defaults to on, matching Qwen's template
+default. The GUI explicitly passes `--preserve-thinking on` or `off`. This is
+independent of generating new thoughts with **Thinking**. It preserves reasoning
+supplied by the client; it cannot recover reasoning omitted from the request.
+Chat Completions clients may override it with
+`chat_template_kwargs.preserve_thinking`.
+
+**More options → Enable disk continuation cache** defaults to off. When enabled,
+the GUI passes `--cache-disk`, `--cache-disk-bytes`, and
+`--cache-disk-staging-bytes`. The suggested folder is `%LOCALAPPDATA%\Gufo\cache`
+on Windows (`~/.cache/gufo` otherwise); Gufo creates it when needed. The disk
+limit defaults to 8 GiB and the RAM staging limit to 0 (automatic, at most 1 GiB).
+Large snapshots need larger limits: Flash-Next/MTP at 262K context needs 8 GiB
+staging if RAM permits. See [server cache behavior](../../docs/SERVER.md#hip-execution)
+for skip behavior and budget details. Stop/Exit do not drain pending writes.
+
+These controls are saved per preset. Existing presets receive the defaults in
+memory without rewriting the saved file. Use **Save preset** to persist changes;
+they apply on the next engine launch. RAM continuation caching remains active
+with disk caching off.
 
 ## Options and checks
 
@@ -119,7 +142,7 @@ Restart the launcher after updating its code to load the new panel.
   `gui.ps1 -Port 8091` changes the control panel's port; the form sets Gufo's port.
 - `gui.ps1 -Config C:\path\launcher.json` uses another settings file.
 - `gui.ps1 -NoBrowser` starts without opening a browser.
-- More options exposes sessions, penalties and Flash-Next MTP options. MTP
+- More options exposes disk caching, sessions, penalties and Flash-Next MTP options. MTP
   options are passed only when MTP is enabled. Latin draft vocabulary is
   intended for English/code; survival and lookup target single-session use.
 - DFlash2 uses the engine's adaptive defaults. MTP options, including its draft

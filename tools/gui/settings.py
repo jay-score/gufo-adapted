@@ -8,7 +8,7 @@ from models import MODEL_FAMILIES, REASONING_LEVELS, SPECULATIVE_MODES, validate
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PATH_FIELDS = ("executable", "models_dir", "model", "mtp_model", "dflash_model", "mmproj")
+PATH_FIELDS = ("executable", "models_dir", "model", "mtp_model", "dflash_model", "mmproj", "cache_disk_dir")
 DEFAULTS = {
     "executable": str(ROOT / "build" / "release" / ("gufo.exe" if os.name == "nt" else "gufo")),
     "models_dir": str(Path.home()),
@@ -21,6 +21,12 @@ DEFAULTS = {
     "max_tokens": 2048,
     "think": "on",
     "reasoning_effort": "auto",
+    "preserve_thinking": True,
+    "cache_disk": False,
+    "cache_disk_dir": str(Path(os.environ["LOCALAPPDATA"]) / "Gufo" / "cache"
+                          if os.environ.get("LOCALAPPDATA") else Path.home() / ".cache" / "gufo"),
+    "cache_disk_gib": 8,
+    "cache_disk_staging_gib": 0,
     "port": 8080,
     "served_model_name": "gufo",
     "sessions": 1,
@@ -44,6 +50,7 @@ INTEGER_LIMITS = {
     "port": (1, 65535), "sessions": (1, 64), "top_k": (0, 2**31 - 1),
     "seed": (-1, 2**53 - 1), "repeat_last_n": (0, 2**32 - 1),
     "draft_tokens": (1, 7),
+    "cache_disk_gib": (1, 65536), "cache_disk_staging_gib": (0, 65536),
 }
 FLOAT_LIMITS = {
     "temperature": (0, 2), "top_p": (0, 1), "min_p": (0, 1),
@@ -103,5 +110,7 @@ def validate_settings(values):
         raise ValueError("top_p: must be greater than zero; 1 disables it.")
     if not result["served_model_name"]:
         raise ValueError("served_model_name: enter the model name your API client will use.")
+    if result["cache_disk"] and not result["cache_disk_dir"]:
+        raise ValueError("cache_disk_dir: choose a folder when disk caching is enabled.")
     validate_model_settings(result)
     return result

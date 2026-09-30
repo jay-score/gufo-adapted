@@ -25,11 +25,20 @@ def build_command(values, *, check_files=False):
             check_gguf(settings["mtp_model"], "MTP sidecar")
         elif settings["speculative"] == "dflash2":
             check_gguf(settings["dflash_model"], "DFlash2 draft")
+        if settings["cache_disk"]:
+            directory = Path(settings["cache_disk_dir"])
+            if any(path.exists() and not path.is_dir() for path in (directory, *directory.parents)):
+                raise ValueError("Disk cache: choose a folder, not a file.")
     command = [settings["executable"], "serve", "--host", "127.0.0.1",
                "--port", str(settings["port"]), "--sessions", str(settings["sessions"]),
                "llm", "--model", settings["model"]]
     for key in CLI_FIELDS:
         command.extend(["--" + key.replace("_", "-"), str(settings[key])])
+    command.extend(["--preserve-thinking", "on" if settings["preserve_thinking"] else "off"])
+    if settings["cache_disk"]:
+        command.extend(["--cache-disk", settings["cache_disk_dir"],
+                        "--cache-disk-bytes", str(settings["cache_disk_gib"] * 1024**3),
+                        "--cache-disk-staging-bytes", str(settings["cache_disk_staging_gib"] * 1024**3)])
     if settings["think"] != "off" and settings["reasoning_effort"] != "auto":
         command.extend(["--reasoning-effort", settings["reasoning_effort"]])
     if settings["mmproj"]:

@@ -35,6 +35,7 @@ export function createSettingsForm(initial, families, modes, onEdit) {
       }
     }
     $("reasoning_effort").disabled = $("think").value === "off";
+    $("disk-cache-options").disabled = !$("cache_disk").checked;
     $("family-hint").textContent = family.hint;
     $("family-defaults").hidden = !Object.keys(family.defaults).length;
     for (const key of ["model", "mtp_model", "dflash_model", "mmproj"]) {
