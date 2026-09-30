@@ -5,6 +5,9 @@ distribution for gfx1151 (Ryzen AI Max+ 395 / Radeon 8060S). No WSL. Platform
 adaptations live in `compat/win32`, Windows-only files and `_WIN32` branches.
 The fork also changes shared engine code; Linux CI remains necessary.
 
+Follow the [upstream sync workflow](UPSTREAM_SYNC.md) to import official fixes
+while preserving Windows behavior. Prioritize fixes over feature updates.
+
 ## Guided setup
 
 After cloning, double-click [setup-windows.bat](../setup-windows.bat) in the

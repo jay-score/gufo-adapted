@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check upstream sync worktree safety
+        run: python tests/tools/upstream_sync_test.py
       - name: Check optional GUI launcher
         shell: pwsh
         run: |
@@ -61,6 +63,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check upstream sync worktree safety
+        run: python3 tests/tools/upstream_sync_test.py
 
       - name: Compute CMake compiler cache key
         id: ccache-key
