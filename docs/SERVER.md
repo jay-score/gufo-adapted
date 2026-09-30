@@ -153,7 +153,12 @@ also accounts for tokenization changes where adjacent user/tool turns join.
 Qwen requests retain this checkpoint with thinking enabled or disabled.
 Warm continuations checkpoint the reused frontier and prefill the new suffix
 together. A second full-prompt checkpoint enables exact retries without
-prefill; both checkpoints share the existing snapshot-memory budget.
+prefill; both checkpoints share the existing snapshot-memory budget. With
+`preserve_thinking: false`, the fallback precedes the first assistant in the
+current tool cycle, whose reasoning a later user turn can remove. Newly added
+images receive a stable checkpoint when they precede that boundary. Images in
+tool results remain ordered correctly even when the stable boundary is earlier.
+The Windows `prompt_checkpoint` tuning override is preserved.
 Exact live continuations reuse generated tokens. The server reports cached
 and newly processed tokens separately; resuming from the checkpoint processes
 the short suffix. System instructions, tool definitions and image identities

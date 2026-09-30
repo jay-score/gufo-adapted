@@ -251,9 +251,10 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
                const tokenization::ChatTemplateOptions& options,
                std::string_view encoder_identity, std::uint32_t max_context) {
   std::vector<std::size_t> offsets;
+  std::size_t stable_prefix_bytes = 0;
   std::string error;
   const auto rendered = tokenization::QwenChatTemplate::Render(
-      messages, tools, options, &error, &offsets);
+      messages, tools, options, &error, &offsets, &stable_prefix_bytes);
   if (!rendered)
     throw std::invalid_argument(error);
   Prompt prompt;
@@ -261,12 +262,26 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
   tok_options.add_bos = false;
   tok_options.add_eos = false;
   tok_options.parse_special_tokens = true;
-  const auto append = [&](std::string_view text) {
+  bool found_stable_prefix = false;
+  const auto append = [&](std::string_view text, std::size_t byte_offset) {
     auto tokens = tokenizer.Encode(text, tok_options);
     if (tokens.size() > max_context - prompt.tokens.size()) {
       throw std::length_error(
           "prompt exceeds the " + std::to_string(max_context) +
           "-token context; increase --context or shorten the conversation");
+    }
+    // Resolve the renderer boundary within this text segment. Tool-result
+    // images may follow it; their expanded image tokens are not a text suffix.
+    if (!found_stable_prefix && stable_prefix_bytes >= byte_offset &&
+        stable_prefix_bytes - byte_offset <= text.size()) {
+      const auto suffix = tokenizer.Encode(
+          text.substr(stable_prefix_bytes - byte_offset), tok_options);
+      if (suffix.size() > tokens.size() ||
+          !std::ranges::equal(suffix, std::span(tokens).last(suffix.size())))
+        throw std::logic_error("Qwen stable prefix is not a token boundary");
+      prompt.stable_prefix_tokens =
+          prompt.tokens.size() + tokens.size() - suffix.size();
+      found_stable_prefix = true;
     }
     prompt.tokens.insert(prompt.tokens.end(), tokens.begin(), tokens.end());
   };
@@ -288,7 +303,8 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
       if (index >= offsets.size())
         throw std::logic_error("image rendering lost a part");
       append(
-          std::string_view(*rendered).substr(cursor, offsets[index] - cursor));
+          std::string_view(*rendered).substr(cursor, offsets[index] - cursor),
+          cursor);
       auto pixels = ResizeImage(core::DecodeImage(*image.bytes));
       const ImageGrid grid{static_cast<std::uint32_t>(prompt.tokens.size()),
                            pixels.height / kResizeFactor,
@@ -310,7 +326,9 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
       cursor = offsets[index++] + std::string_view("<|image_pad|>").size();
     }
   }
-  append(std::string_view(*rendered).substr(cursor));
+  append(std::string_view(*rendered).substr(cursor), cursor);
+  if (!found_stable_prefix)
+    throw std::logic_error("Qwen stable prefix is outside rendered text");
   prompt.rope.Validate(max_context);
   if (!prompt.images.empty()) {
     const auto digest = identity.Finish();

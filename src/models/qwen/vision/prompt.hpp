@@ -47,6 +47,8 @@ struct PreparedImage {
 
 struct Prompt {
   std::vector<tokenization::TokenId> tokens;
+  /// Frontier unchanged when a new user turn removes tool-cycle reasoning.
+  std::size_t stable_prefix_tokens{0};
   RopeLayout rope;
   std::vector<PreparedImage> images;
   /// SHA-256 covers decoded pixels, grid placement, preprocessing version,

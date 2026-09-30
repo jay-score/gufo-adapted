@@ -529,7 +529,14 @@ struct TextRunnerPool::Request::Impl {
     // Freeze it before prefill, then process the entire new suffix together.
     // Cold requests still checkpoint before mutable assistant framing.
     auto count = cache_prefix_tokens == 0 ? prompt.size() : cache_prefix_tokens;
-    if (retain_fallback && lease.cache_hit() && prefill_offset <= count)
+    // Newly consumed images need a fallback after their embeddings. Otherwise
+    // rewritten assistant framing would force those images through prefill
+    // again.
+    const bool new_images =
+        context && !std::ranges::equal(context->IdentityBefore(prefill_offset),
+                                       context->IdentityBefore(count));
+    if (retain_fallback && lease.cache_hit() && prefill_offset <= count &&
+        !new_images)
       count = prefill_offset;
     if (lease.restored_from_disk() && prefill_offset == prompt.size())
       count = prompt.size();

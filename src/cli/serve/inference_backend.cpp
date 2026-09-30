@@ -71,14 +71,6 @@ tokenization::ChatTemplateOptions QwenChatOptions(const ChatRequest& request) {
   return options;
 }
 
-std::size_t StablePromptPrefix(std::span<const TextRunnerToken> tokens,
-                               std::span<const TextRunnerToken> generation) {
-  if (generation.empty() || tokens.size() <= generation.size() ||
-      !std::ranges::equal(tokens.last(generation.size()), generation))
-    return 0;
-  return tokens.size() - generation.size();
-}
-
 TextPreparedPrompt PrepareQwenPrompt(
     const ChatRequest& request, const tokenization::QwenTokenizer& tokenizer,
     const std::shared_ptr<models::qwen::vision::Encoder>& encoder,
@@ -95,22 +87,13 @@ TextPreparedPrompt PrepareQwenPrompt(
           options,
           encoder && has_images ? encoder->identity() : std::string_view{},
           max_context));
-  // Agent clients may discard an interrupted assistant entirely and append
-  // the next user turn directly after tool results. Preserve a checkpoint
-  // before the generation suffix even when reasoning itself is retained.
-  // With Tuning::prompt_checkpoint (src/core/platform/tuning.hpp) every
-  // prompt keeps it: clients
-  // re-send the previous assistant turn in many forms (without its
-  // reasoning, reformatted), each changing the prompt right where the suffix
-  // was, and the recurrent state cannot rewind even one token.
-  std::size_t cache_prefix = 0;
-  if (gufo::platform::PlatformTuning().prompt_checkpoint ||
-      !options.preserve_thinking || !request.tools.empty()) {
-    const auto generation = tokenizer.Encode(
-        tokenization::GenerationPrompt(options.enable_thinking),
-        {.add_bos = false, .add_eos = false, .parse_special_tokens = true});
-    cache_prefix = StablePromptPrefix(prompt->tokens, generation);
-  }
+  // Keep the fork's platform-tuning override while using the renderer's
+  // earlier boundary when a new user turn can remove tool-cycle reasoning.
+  const auto cache_prefix =
+      gufo::platform::PlatformTuning().prompt_checkpoint ||
+              !options.preserve_thinking || !request.tools.empty()
+          ? prompt->stable_prefix_tokens
+          : 0;
   if (prompt->images.empty())
     return {std::move(prompt->tokens), {}, cache_prefix};
   if (!encoder)
