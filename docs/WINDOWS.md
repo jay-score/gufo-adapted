@@ -55,6 +55,35 @@ Optional commands from the repository root:
 the currently checked-out source; it does not pull, reset or switch Git branches.
 The manual scripts below remain available for developers.
 
+## Updating and rebuilding
+
+Use **Exit** in the GUI to close Gufo and the launcher, then double-click
+[update-windows.bat](../update-windows.bat). It pulls the current branch from its
+configured Git upstream using a fast-forward-only update, then runs
+`tools\windows\build.ps1` to rebuild
+`build\release\gufo.exe` and stage its runtime DLLs and kernel libraries. For the
+documented clone, this updates `windows-port` from `origin/windows-port` on GitHub.
+It checks the rebuilt executable with `--version` before reporting success.
+Open [launch-gui.bat](../launch-gui.bat) afterward to start the app.
+
+The updater reuses the tools detected by setup, including paths saved in
+`build\windows-setup.json`. Run setup first if prerequisites are missing.
+Optional overrides work from a terminal:
+
+```powershell
+.\update-windows.bat -Jobs 4
+.\update-windows.bat -Rocm D:\TheRock\build -Vcpkg D:\vcpkg -Ninja D:\tools\ninja.exe
+```
+
+Local changes and untracked files must be committed, stashed or moved before
+updating; ignored build files and local settings can stay in place. A detached
+HEAD, missing tracking branch, Git failure or diverged history stops the update
+before rebuilding. The script does not switch branches or reset local commits.
+If compilation fails after a successful pull, the updated source stays in place;
+fix the reported issue and rerun. The batch window stays open on errors.
+Existing GUI settings and executable selections are preserved; select this
+checkout's `build\release\gufo.exe` in the GUI before restarting Gufo.
+
 ## Prerequisites
 
 | Piece | Default location | Notes |
