@@ -39,7 +39,8 @@ class Stub {
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="gufo update & spaces ")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # Native process paths expand Windows 8.3 aliases used by CI's TEMP.
+        self.root = Path(self.temporary.name).resolve()
         self.checkout = self.root / "checkout"
         self.checkout.mkdir()
         self.shell = shutil.which("powershell.exe")

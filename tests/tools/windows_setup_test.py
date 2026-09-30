@@ -25,7 +25,8 @@ class WindowsSetupTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="gufo setup ")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # Native process paths expand Windows 8.3 aliases used by CI's TEMP.
+        self.root = Path(self.temporary.name).resolve()
         self.shells = [path for name in ("powershell.exe", "pwsh.exe")
                        if (path := shutil.which(name))]
         self.assertTrue(self.shells)
