@@ -18,6 +18,8 @@
 #include <utility>
 #include <vector>
 
+#include "src/cli/serve/continuation_disk_store.hpp"
+
 namespace {
 
 using gufo::server::ChatRequest;
@@ -1312,6 +1314,95 @@ void TestSnapshotCaptureFailureReleasesReservationAndKeepsRequestSuccessful() {
   extension.Invalidate();
 }
 
+/// Evicting a retained prefix because the entry table is full is not routine:
+/// it means the server is configured below its workload and is doing avoidable
+/// full re-prefills. It must be visible, unlike exact replacement.
+void TestEntryCapacityEvictionIsLogged() {
+  auto stats = std::make_shared<FakeStats>();
+  auto runner = std::make_shared<SnapshotRunner>(stats);
+  // One session, so the cache holds two entries and a third distinct prefix
+  // must displace one of them.
+  TextRunnerPool pool(runner, 1);
+
+  const std::array<std::vector<TextRunnerToken>, 3> prefixes{
+      std::vector<TextRunnerToken>{1, 2, 3},
+      std::vector<TextRunnerToken>{4, 5, 6},
+      std::vector<TextRunnerToken>{7, 8, 9}};
+  for (const auto& prefix : prefixes) {
+    auto request = pool.Acquire(prefix);
+    Expect(request.Prefill(prefix.size()).decode_ready,
+           "each distinct prefix reaches its snapshot boundary");
+    (void)request.SelectNext();
+    request.Advance();
+    Expect(request.Commit().snapshot_bytes == sizeof(FakeSnapshot),
+           "each distinct prefix retains a snapshot");
+  }
+
+  // The first prefix was evicted, so it can no longer be reused.
+  auto evicted = pool.Acquire(prefixes.front());
+  Expect(!evicted.cache_hit(),
+         "the oldest retained prefix is gone once the entries are full");
+  evicted.Invalidate();
+}
+
+void TestSnapshotCacheCapacityIsReportedAtStartup() {
+  auto stats = std::make_shared<FakeStats>();
+  auto runner = std::make_shared<SnapshotRunner>(stats);
+  TextRunnerPool pool(runner, 2);
+  auto request = pool.Acquire({1, 2, 3});
+  Expect(request.Prefill(3).decode_ready,
+         "request reaches its snapshot boundary after startup");
+  (void)request.Commit();
+}
+
+void TestDiskLruEvictionIsLogged() {
+  TemporaryDirectory directory;
+  auto stats = std::make_shared<FakeStats>();
+  auto runner = std::make_shared<PersistentSnapshotRunner>(stats, "artifact-A");
+  std::size_t file_bytes = 0;
+  {
+    gufo::server::ContinuationDiskStore store({
+        .directory = directory.path(),
+        .capacity_bytes = 4096,
+        .staging_capacity_bytes = 4096,
+    });
+    const std::array<std::vector<TextRunnerToken>, 2> prefixes{
+        std::vector<TextRunnerToken>{1, 2, 3},
+        std::vector<TextRunnerToken>{4, 5, 6}};
+    for (const auto& prefix : prefixes) {
+      auto state = runner->CreateState();
+      Expect(runner->Prefill(*state, prefix, 0, prefix.size()).decode_ready,
+             "disk fixture reaches its snapshot boundary");
+      auto snapshot = runner->Snapshot(*state);
+      const auto saved = store.Save(*runner, prefix, *snapshot);
+      Expect(saved.stored && saved.file_bytes > 0,
+             "disk fixture stores a retained prefix");
+      file_bytes = saved.file_bytes;
+    }
+    Expect(store.entry_count() == 2 && store.retained_bytes() == file_bytes * 2,
+           "disk fixture retains two equal-sized checkpoints");
+  }
+
+  // Shrinking the budget at startup forces a synchronous LRU removal through
+  // the pool's real logging sink, without depending on writer-thread timing.
+  const TextRunnerDiskCacheOptions disk_cache{
+      .directory = directory.path(),
+      .capacity_bytes = file_bytes,
+      .staging_capacity_bytes = 4096,
+  };
+  {
+    TextRunnerPool pool(runner, 1, disk_cache);
+  }
+  gufo::server::ContinuationDiskStore remaining({
+      .directory = directory.path(),
+      .capacity_bytes = file_bytes,
+      .staging_capacity_bytes = 4096,
+  });
+  Expect(
+      remaining.entry_count() == 1 && remaining.retained_bytes() == file_bytes,
+      "the smaller disk budget evicts exactly one retained checkpoint");
+}
+
 }  // namespace
 
 int main() {
@@ -1337,7 +1428,53 @@ int main() {
   auto* previous = std::clog.rdbuf(normal_log.rdbuf());
   TestSnapshotRetentionUsesPromptBoundary();
   std::clog.rdbuf(previous);
-  Expect(normal_log.str().empty(), "routine cache replacement stays quiet");
+  Expect(normal_log.str().find("action=removed") == std::string::npos &&
+             normal_log.str().find("action=skipped") == std::string::npos,
+         "routine cache replacement stays quiet");
+
+  std::ostringstream eviction_log;
+  previous = std::clog.rdbuf(eviction_log.rdbuf());
+  TestEntryCapacityEvictionIsLogged();
+  std::clog.rdbuf(previous);
+  Expect(
+      eviction_log.str().find("action=removed") != std::string::npos &&
+          eviction_log.str().find("reason=entry_capacity") != std::string::npos,
+      "evicting a retained prefix for entry capacity is reported");
+
+  std::ostringstream startup_log;
+  previous = std::clog.rdbuf(startup_log.rdbuf());
+  TestSnapshotCacheCapacityIsReportedAtStartup();
+  std::clog.rdbuf(previous);
+  const std::string_view startup_event = "event=snapshot_cache_configured";
+  const auto startup_position = startup_log.str().find(startup_event);
+  Expect(
+      startup_log.str().find(
+          "event=snapshot_cache_configured sessions=2 snapshot_entries=4 "
+          "retained_conversations=2 capacity_bytes=256") != std::string::npos &&
+          startup_log.str().find(startup_event,
+                                 startup_position + startup_event.size()) ==
+              std::string::npos,
+      "retained snapshot capacity is reported once at startup");
+
+  std::ostringstream mutable_log;
+  previous = std::clog.rdbuf(mutable_log.rdbuf());
+  {
+    TextRunnerPool pool(
+        std::make_shared<FakeRunner>(std::make_shared<FakeStats>()), 2);
+  }
+  std::clog.rdbuf(previous);
+  Expect(mutable_log.str().find(startup_event) == std::string::npos,
+         "mutable-state runners do not advertise snapshot cache capacity");
+
+  std::ostringstream disk_eviction_log;
+  previous = std::clog.rdbuf(disk_eviction_log.rdbuf());
+  TestDiskLruEvictionIsLogged();
+  std::clog.rdbuf(previous);
+  Expect(disk_eviction_log.str().find(
+             "[INFO] [cache] event=disk_cache action=removed reason=lru") !=
+                 std::string::npos &&
+             disk_eviction_log.str().find(" tokens=3") != std::string::npos,
+         "disk LRU eviction is reported at info level with its token count");
   TestPersistentSnapshotRestoresAcrossPools();
   TestSharedPrefixIsLearnedAndRestoredAcrossConversations();
   TestMeasuredStateIsReconciledWithClaim();

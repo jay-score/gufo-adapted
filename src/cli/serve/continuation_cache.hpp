@@ -211,6 +211,10 @@ public:
       std::size_t stable_prefix_tokens = 0);
 
   [[nodiscard]] std::size_t capacity() const noexcept;
+  /// Entries available to hold a retained prefix. Exceeds capacity()
+  /// because a request can retain a fallback checkpoint as well as its
+  /// own, so this is not the number of conversations that fit.
+  [[nodiscard]] std::size_t entry_capacity() const noexcept;
   [[nodiscard]] std::size_t snapshot_capacity_bytes() const noexcept;
   [[nodiscard]] std::size_t retained_snapshot_bytes() const noexcept;
   [[nodiscard]] std::size_t reserved_snapshot_bytes() const noexcept;

@@ -743,9 +743,20 @@ agent conversation. A disconnected SSE stream may never deliver its terminal
 usage chunk; proxy counters can then show zero despite generated tokens.
 The server's cancellation log retains the actual token counts.
 
-Routine cache replacement is quiet; failed captures, disk corruption and cache
-capacity refusals produce warnings. Cache capacity is a budget, not allocated
-memory.
+Exact cache replacement and memory evictions to fit the byte budget are quiet.
+Memory evictions because the entry table is full produce
+`event=snapshot action=removed reason=entry_capacity` warnings; disk LRU
+evictions produce `event=disk_cache action=removed reason=lru` info logs.
+Failed captures, disk corruption and cache capacity refusals produce warnings.
+Cache capacity is a budget, not allocated memory.
+
+Snapshot-capable runners emit `event=snapshot_cache_configured` once at pool
+startup, reporting `sessions`, `snapshot_entries`, `retained_conversations` and
+`capacity_bytes`. Requests can retain both a fallback checkpoint and their own
+checkpoint, so `retained_conversations` estimates about one conversation per
+session. It is not a guarantee: the byte budget and checkpoint sizes can reduce
+retention further. These diagnostics do not change cache capacity or eviction
+policy.
 
 Loading logs report elapsed time, model, context and session capacity,
 speculative mode and memory. `rss_mib` is process resident memory;
