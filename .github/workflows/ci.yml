@@ -55,6 +55,8 @@ jobs:
           python tests/tools/windows_launcher_test.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/tools/windows_setup_test.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/tools/windows_update_test.py
 
   build-and-test:
     name: CPU contracts & repository checks

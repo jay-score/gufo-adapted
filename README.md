@@ -71,6 +71,11 @@ desktop shortcut to it. The [GUI](tools/gui/README.md) opens at
 `http://127.0.0.1:8090`; opening it does not load a model. Use **Stop** to unload
 Gufo or **Exit** to close both processes.
 
+To update this checkout from GitHub and rebuild `build\release\gufo.exe`, use
+**Exit** in the GUI, then double-click **[update-windows.bat](update-windows.bat)**.
+It uses the current branch's configured remote and the existing build tools. See the
+[update instructions](docs/WINDOWS.md#updating-and-rebuilding) for details.
+
 See [guided setup details](docs/WINDOWS.md#guided-setup) for logs, preview mode,
 and custom dependency paths, or use the [manual build instructions](docs/WINDOWS.md#prerequisites).
 
