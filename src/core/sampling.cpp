@@ -204,6 +204,21 @@ bool SamplingConfig::can_use_unmodified_argmax() const noexcept {
   return !constraint && temperature == 0.0F && !penalties_enabled();
 }
 
+bool SamplerState::CanSelectArgmax(TokenId token) const {
+  if (pending_sample_ || config_.temperature != 0.0F ||
+      config_.penalties_enabled())
+    return false;
+  if (!config_.constraint)
+    return true;
+  if (token >= config_.constraint->vocabulary->size())
+    throw std::out_of_range("target argmax exceeds the constraint vocabulary");
+  // Keep full masks for closed JSON outputs: subsequent sampled requests
+  // reuse them. Tool/prose grammars can reuse an already legal target argmax.
+  return !config_.constraint->grammar->stop_only_when_complete_ &&
+         config_.constraint->vocabulary->Allows(*config_.constraint->grammar,
+                                                constraint_state_, token);
+}
+
 SamplingDistribution::SamplingDistribution(std::vector<Probability> entries)
     : entries_(std::move(entries)) {
   if (entries_.empty()) {
@@ -417,6 +432,8 @@ SamplerState::SamplerState(SamplingConfig config,
 SamplerState::SamplerState(const SamplerState& other)
     : config_(other.config_),
       constraint_state_(other.constraint_state_),
+      constraint_mask_(other.constraint_mask_),
+      constraint_restricts_(other.constraint_restricts_),
       history_(other.history_),
       penalty_counts_(other.penalty_counts_),
       rng_state_(other.rng_state_),
@@ -428,6 +445,8 @@ SamplerState& SamplerState::operator=(const SamplerState& other) {
   }
   config_ = other.config_;
   constraint_state_ = other.constraint_state_;
+  constraint_mask_ = other.constraint_mask_;
+  constraint_restricts_ = other.constraint_restricts_;
   history_ = other.history_;
   penalty_counts_ = other.penalty_counts_;
   candidate_scratch_.clear();
@@ -440,7 +459,19 @@ SamplerState SamplerState::WithoutConstraint() const {
   auto copy = *this;
   copy.config_.constraint.reset();
   copy.constraint_state_.clear();
+  copy.constraint_mask_.reset();
   return copy;
+}
+
+bool SamplerState::NeedsConstraintMask() const {
+  if (!config_.constraint)
+    return false;
+  if (!constraint_mask_) {
+    constraint_mask_ = config_.constraint->Allowed(constraint_state_);
+    constraint_restricts_ = std::ranges::any_of(
+        *constraint_mask_, [](auto value) { return value == 0; });
+  }
+  return constraint_restricts_;
 }
 
 std::vector<float> SamplerState::ConstrainedLogits(
@@ -490,6 +521,7 @@ void SamplerState::CopyDrawStateFrom(const SamplerState& other) noexcept {
 void SamplerState::ResetHistory(std::span<const TokenId> tokens) {
   if (config_.constraint)
     constraint_state_ = config_.constraint->grammar->Start();
+  constraint_mask_.reset();
   pending_sample_.reset();
   penalty_counts_.clear();
   history_.assign(tokens.begin(), tokens.end());
@@ -507,7 +539,10 @@ void SamplerState::Accept(std::span<const TokenId> tokens) {
     for (const auto token : tokens)
       next = config_.constraint->vocabulary->Accept(
           *config_.constraint->grammar, next, token);
-    constraint_state_ = std::move(next);
+    if (next != constraint_state_) {
+      constraint_state_ = std::move(next);
+      constraint_mask_.reset();
+    }
   }
   if (config_.frequency_penalty != 0 || config_.presence_penalty != 0) {
     for (const auto token : tokens) {
@@ -529,7 +564,7 @@ void SamplerState::Accept(std::span<const TokenId> tokens) {
 
 SamplingDistribution SamplerState::Distribution(
     std::span<const float> logits) const {
-  if (config_.constraint) {
+  if (NeedsConstraintMask()) {
     if (config_.temperature == 0) {
       config_.Validate();
       return SamplingDistribution({{SampleConstrainedGreedy(logits), 1.0}},
@@ -561,7 +596,7 @@ SamplingDistribution SamplerState::Distribution(
 
 SamplingDistribution SamplerState::Distribution(
     std::span<const float> logits, std::span<const TokenId> token_ids) const {
-  if (config_.constraint) {
+  if (NeedsConstraintMask()) {
     const auto masked = ConstrainedLogits(logits, token_ids);
     return WithoutConstraint().Distribution(masked, token_ids);
   }

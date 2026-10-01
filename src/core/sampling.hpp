@@ -97,6 +97,12 @@ public:
   /// Draft q may remain unconstrained; target p always uses this request's
   /// grammar.
   [[nodiscard]] SamplerState WithoutConstraint() const;
+  /// An already validated finite, unmodified argmax can be selected without
+  /// downloading logits when it also satisfies the request grammar.
+  [[nodiscard]] bool CanSelectArgmax(TokenId token) const;
+  /// A lazy tool grammar can admit the entire vocabulary before a call.
+  /// Retain ordinary CPU/GPU sampling while its mask makes no restriction.
+  [[nodiscard]] bool NeedsConstraintMask() const;
   [[nodiscard]] std::span<const TokenId> history() const noexcept;
   [[nodiscard]] std::span<const TokenPenalty> penalties() const noexcept {
     return penalty_counts_;
@@ -154,6 +160,8 @@ private:
 
   SamplingConfig config_;
   JsonConstraint::State constraint_state_;
+  mutable std::shared_ptr<const std::vector<std::uint8_t>> constraint_mask_;
+  mutable bool constraint_restricts_{false};
   std::vector<TokenId> history_;
   std::vector<TokenPenalty> penalty_counts_;
   std::vector<Probability> candidate_scratch_;

@@ -48,6 +48,20 @@ video generation or duplicate suites for routine edits. A missing-model skip
 is not a quality pass. Broaden checks when shared behavior changes or failures
 expose risk.
 
+Text API functional/regression tests live in [tests/functional/](tests/functional/README.md).
+For shared text changes, run affected suites in both AR and speculative modes
+for the four target profiles listed there; verify loaded mode and actual drafts.
+Compare clean main with the rebased PR using identical production toolchains,
+settings and cache history. Include `long-context` and `cache` for continuation
+changes. Correctness and expected prefill/cache work are strict; timings are
+mandatory per request/phase at 5% and 3 ms, never averaged across requests.
+Run once, investigate flags, then alternate main/PR only for affected histories;
+use unchanged-main controls when needed and retain every result. Fix confirmed
+regressions before publishing. Noisy evidence stays visibly inconclusive and
+unqualified; do not widen margins or stop at reporting failures.
+Retain numerical quality tests and the standard speed benchmark. Keep these
+tests in `tests/functional/`, outside hosted model CI; avoid full sweeps.
+
 ## Profiling and kernels
 
 Apply [.agents/skills/optimize-kernel/SKILL.md](.agents/skills/optimize-kernel/SKILL.md).

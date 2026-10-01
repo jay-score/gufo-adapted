@@ -10,8 +10,8 @@ versioned contract: supported fields behave as documented, and unsupported
 fields return explicit errors.
 
 Chat Completions is the main API, including streaming, images and tools.
-Responses supports text and image inputs with optional streaming; Anthropic Messages exposes a
-synchronous text subset.
+Responses supports text, images and function tools with optional streaming.
+Anthropic Messages exposes a synchronous text subset.
 The reference protocols are:
 
 - https://developers.openai.com/api/reference/resources/responses/methods/create/
@@ -107,7 +107,8 @@ their own settings.
 Use `--think off` or request `"reasoning_effort": "none"` to disable thinking.
 DeepSeek maps `minimal`/`low` to `low`, `medium`/`high`/`xhigh` to `high`,
 and `max` to `max`.
-The SDK check `--suite sampling-defaults --sampling-preset qwen38` (or
+The [functional suite](../tests/functional/README.md) with
+`--suite sampling-defaults --sampling-preset qwen38` (or
 `deepseek4`) compares omitted and explicit settings, including C2 replay.
 
 Sources: [Qwen27B](https://huggingface.co/Qwen/Qwen3.8-27B#best-practices),
@@ -214,7 +215,7 @@ Qwen27B at full context needs larger staging and `--cache-disk-bytes` limits;
 use the required size reported in the skip log.
 
 For a focused cancellation check, run
-`python3 tools/serving/check-continuation.py --output /tmp/cache-check.json`
+`python3 tests/functional/continuation.py --output /tmp/cache-check.json`
 against a private server named `cache-test` on port 5815.
 It checks interruption during reasoning and visible output, with and without
 reasoning replay, greedy/seeded sampling, and explicit cache bypass. Use
@@ -514,12 +515,15 @@ request limits, cancellation, cache accounting and completion state.
 
 `POST /v1/responses` accepts `model`, `input` as text or message arrays,
 `instructions`, `max_output_tokens`, `stream`, `reasoning.effort`,
-`text.format`, and the shared sampling controls. Message content supports
+`text.format`, `tools`, `tool_choice`, `parallel_tool_calls`, and the shared
+sampling controls. Message content supports
 `input_text` and `input_image` with an `image_url` (HTTPS or a data URL).
 Clients supply the complete conversation, including prior Gufo `output` items
-when retaining reasoning. `store` and `background` must be false
-when present. Tools, server-side conversations and `previous_response_id`
-remain unsupported on this route; use Chat Completions for tools.
+when retaining reasoning. Replay `function_call` items with their `call_id`,
+then supply `function_call_output` items using the same ID. Function tools use
+the flat `{type:"function",name,parameters,strict}` shape.
+`store` and `background` must be false when present; server-side conversations
+and `previous_response_id` remain unsupported.
 
 Responses report `incomplete` with reason `max_output_tokens` when generation
 hits its limit. Otherwise they report `completed`. `stream: true` sends typed
@@ -619,9 +623,15 @@ repetition penalty. Speculative rejection discards tentative counts; seeded
 sampling replay retains independent request histories.
 
 Tool calls are emitted only for declared functions when `tool_choice` allows
-calling tools. An unmet `required` choice returns `tool_choice_unsatisfied`
-(HTTP 502, or an SSE error after streaming starts), unless a requested stop
-sequence interrupted generation first.
+calling tools. With `auto`, ordinary text and reasoning remain allowed; once a
+call starts, decoding constrains its name and argument format. Non-strict tools
+keep optional arguments optional. Untyped arguments retain native best-effort
+semantics; schemas that cannot use native tags fall back to JSON.
+`tool_choice: "required"` constrains decoding to a declared call,
+so the requirement is forced rather than checked afterwards. Where the backend
+cannot constrain sampling, an unmet `required` choice still returns
+`tool_choice_unsatisfied` (HTTP 502, or an SSE error after streaming starts).
+Stops and token limits terminate normally without emitting incomplete calls.
 
 Stop sequences match accepted output bytes, including reasoning and tool
 markup, before streaming or response parsing. Partial prefixes are buffered;
@@ -671,19 +681,25 @@ characters in names and enum/const strings. Patterns use ECMA-262 Unicode
 semantics; lookbehind, backreferences, inline flags and unbounded repetition
 of assertions are unsupported.
 
-In Chat Completions, function `strict:true` constrains tool arguments independently
-of `response_format`.
+Function `strict:true` constrains tool arguments independently of the response
+schema. Chat Completions defaults to non-strict tools. Responses attempts strict
+schema normalization when `strict` is omitted, falling back to `strict:false`
+when unsupported; explicit `strict:false` keeps best-effort arguments.
 With `tool_choice: "auto"`, the model may call a tool or give a final answer;
 the response schema constrains the latter. Use `"none"` for JSON answers only,
-`"required"` to require a call, or select a named function.
-`parallel_tool_calls:false` allows at most one call. Interrupted calls are omitted.
+`"required"` to force a call, or select a named function.
+`"required"` and a named function constrain decoding regardless of tool
+strictness; `parallel_tool_calls:false` allows at most one call and constrains
+it likewise. Interrupted calls are omitted.
 
 References: [OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create),
+[function calling](https://developers.openai.com/api/docs/guides/function-calling),
 [structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs),
 [JSON Schema patterns](https://json-schema.org/draft/2020-12/json-schema-validation#name-pattern)
 and [llama.cpp grammar sampling](https://github.com/ggml-org/llama.cpp/blob/68d9053afd4f4d0752ced6187585f862355a40be/common/sampling.cpp).
-Verify with `tools/serving/check-openai-sdk.py --suite structured` or
-`--suite structured-limits` (add `--vision` for an image-capable server).
+Verify with `tests/functional/openai_sdk.py --suite tools`,
+`--suite structured` or `--suite structured-limits`
+(add `--vision` for an image-capable server).
 
 ## Model Discovery
 
