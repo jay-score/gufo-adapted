@@ -615,8 +615,19 @@ sampling replay retains independent request histories.
 
 Tool calls are emitted only for declared functions when `tool_choice` allows
 calling tools. An unmet `required` choice returns `tool_choice_unsatisfied`
-(HTTP 502, or an SSE error after streaming starts), unless a requested stop
-sequence interrupted generation first.
+(HTTP 502, or an SSE error after streaming starts). Requested stops, token limits
+and cancellation terminate normally without emitting incomplete calls.
+
+A complete framed call that fails parsing or names an undeclared function
+returns `malformed_tool_call` (HTTP 502, without automatic retry guidance) when
+generation ends at EOS. Chat Completions sends an SSE error after headers;
+Responses sends `response.failed` with its standard `server_error` wire code,
+retaining `malformed_tool_call` in request diagnostics. A valid call does not
+hide a complete malformed attempt in the same output. Ordinary prose mentioning
+tool markers remains text. Diagnostic classification requires recognized call
+framing; ambiguous or unfinished native syntax is not a schema-validation
+guarantee. With an interrupted generation, complete calls are retained and
+incomplete calls are omitted.
 
 With no declared tools or `tool_choice: "none"`, tool markers are ordinary
 text. They do not end reasoning or delay streaming; thinking delimiters and
@@ -641,6 +652,11 @@ per key; each regex search has a 10 ms time limit and a 64 KiB stack limit.
 Exceeding a bound retains text. `anyOf`/`oneOf` type hints are unioned and
 `allOf` type hints intersected at a parameter; object-level applicators and
 conditional schemas remain guidance. Nested requirements are not enforced.
+
+Escaped newlines, indentation and literal protocol text in JSON array/object
+edit arguments survive parsing. Raw unescaped JSON controls remain invalid.
+Native scalar strings remain subject to their protocol's delimiter ambiguity;
+the parser does not guess missing structure or switch prompts automatically.
 
 Stop sequences match accepted output bytes, including reasoning and tool
 markup, before streaming or response parsing. Partial prefixes are buffered;

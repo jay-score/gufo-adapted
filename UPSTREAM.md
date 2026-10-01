@@ -36,6 +36,29 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-01 — Multiline edit boundaries and malformed-call diagnostics
+
+- Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)
+  (PR #373 multiline edit regressions).
+- Local: commit introducing this entry.
+- Adaptation: delimiters inside JSON strings are data in native Qwen/DeepSeek
+  array/object arguments; thinking markers after an enabled tool opener do not
+  start inline reasoning. DeepSeek raw string quotes retain native semantics.
+  Added a fork-specific, non-retryable `malformed_tool_call` 502/SSE contract for
+  complete framed attempts rejected at EOS. Stops, limits and cancellation omit
+  incomplete calls normally, including required choice. Retains the fork's
+  thinking boundary, duplicate rules and interrupted-call recovery. No blanket
+  control repair, schema enforcement, automatic JSON routing or loop suppression.
+- Areas: parser, backend error contract, API/HTTP fixtures and server contracts.
+- Validation: multiline fixture failed before the boundary adaptation. Fresh
+  Windows CPU `openai_chat_test`, `http_server_test`, `qwen_chat_template_test`
+  and `ds4.template` passed. Covers both APIs buffered/streaming, mixed valid/bad
+  output, escaped/raw newlines, literal Qwen/DSML/thinking delimiters, native
+  string quotes, non-retryable buffered errors, SSE failure after headers and
+  required calls at token limits. Linux and real-model qualification are recorded
+  separately in the implementation plan.
+- Status: retained.
+
 ### 2026-10-01 — Bounded Qwen declared-type recovery
 
 - Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)

@@ -1,6 +1,7 @@
 # Tool-calling improvements from upstream PR #373
 
-Date: 2026-10-01. Status: implementation pending.
+Date: 2026-10-01. Status: parser improvements implemented; runtime qualification
+in progress. The optional generation-time enforcement phase remains separate.
 
 ## Objective and agreed approach
 
@@ -317,13 +318,13 @@ subset validator or count parser-only work as full strict-schema support.
 
 ## Resume checklist
 
-- [ ] Reconfirm HEAD, clean/owned paths, worktree and current AGENTS instructions.
-- [ ] Verify which planned improvements are already present.
-- [ ] Capture baseline API fixture results and identify the test executable.
-- [ ] Implement/validate disabled-tool marker handling.
-- [ ] Implement/validate historical-call name handling.
-- [ ] Implement/validate bounded declared-type resolution.
-- [ ] Add multiline fixtures and resolve or explicitly defer error diagnostics.
+- [x] Reconfirm HEAD, clean/owned paths, worktree and current AGENTS instructions.
+- [x] Verify which planned improvements are already present.
+- [x] Capture baseline API fixture results and identify the test executable.
+- [x] Implement/validate disabled-tool marker handling.
+- [x] Implement/validate historical-call name handling.
+- [x] Implement/validate bounded declared-type resolution.
+- [x] Add multiline fixtures and resolve or explicitly defer error diagnostics.
 - [ ] Retain bounded agent and matched latency results; document coverage gaps.
 - [ ] Update provenance, server contracts and actual validation records.
 - [ ] Decide separately whether the optional inference phase is warranted.

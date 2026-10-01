@@ -440,6 +440,41 @@ void TestFallbackBackendMetrics() {
   }
 }
 
+void TestMalformedToolCalls() {
+  RunningServer server;
+  server.backend->SetOutput(
+      "<tool_call>{\"name\":\"f\",\"arguments\":{\"s\":\"raw\nnewline\"}}</"
+      "tool_call>");
+  for (bool responses : {false, true}) {
+    auto body = gufo::json::parse(R"({"model":"test","tools":[
+      {"type":"function","function":{"name":"f"}}]})");
+    if (responses)
+      body["input"] = "call f";
+    else
+      body["messages"] =
+          gufo::json::parse(R"([{"role":"user","content":"call f"}])");
+    const char* path = responses ? "/v1/responses" : "/v1/chat/completions";
+    const auto buffered = server.Post(path, body.dump());
+    ExpectStatus(buffered, 502);
+    assert(buffered.find("malformed_tool_call") != std::string::npos &&
+           buffered.find("Retry-After") == std::string::npos);
+    body["stream"] = true;
+    const auto streamed = server.Post(path, body.dump());
+    ExpectStatus(streamed, 200);
+    assert(streamed.find("HTTP/1.1", 1) == std::string::npos);
+    assert(streamed.find(responses
+                             ? "event: response.failed"
+                             : "malformed_tool_call") != std::string::npos);
+    assert(streamed.find(responses ? "event: response.completed"
+                                   : "\"finish_reason\":\"stop\"") ==
+           std::string::npos);
+    body["stream"] = false;
+    body[responses ? "max_output_tokens" : "max_tokens"] = 1;
+    body["tool_choice"] = "required";
+    ExpectStatus(server.Post(path, body.dump()), 200);
+  }
+}
+
 void TestCompatibilityRequests() {
   RunningServer server;
   using gufo::json::parse;
@@ -946,6 +981,7 @@ void TestSignalShutdown() {
 }  // namespace
 
 int main() {
+  TestMalformedToolCalls();
   TestRequestLogging();
   TestInvalidBindSettings();
   TestQueryParameters();

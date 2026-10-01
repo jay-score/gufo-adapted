@@ -685,6 +685,7 @@ void TestQwenToolBoundariesAndSchema() {
     std::string text;
     std::size_t calls;
     std::string argument;
+    bool interrupted{false};
   };
   for (const auto& item :
        {Case{good, 1, R"({"text":"42","count":42})"},
@@ -700,7 +701,7 @@ void TestQwenToolBoundariesAndSchema() {
         Case{"<tool_call><function=f><parameter=text>ok</parameter>"
              "<parameter=count>42</function></tool_call>" +
                  good,
-             1, R"({"text":"42","count":42})"},
+             1, R"({"text":"42","count":42})", true},
         Case{"<tool_call><function=f><parameter=text>unclosed" + good, 1,
              R"({"text":"42","count":42})"},
         Case{"<tool_call><function=f><parameter=text>literal </think>"
@@ -753,6 +754,9 @@ void TestQwenToolBoundariesAndSchema() {
         body["chat_template_kwargs"] = Value::object();
         body["chat_template_kwargs"]["enable_thinking"] = reasoning;
         FakeBackend backend;
+        if (item.interrupted)
+          backend.finish_reason =
+              gufo::server::TextGenerationBackend::FinishReason::kLength;
         // Thinking requests close reasoning before any tool starts, so a
         // quoted marker stays reasoning data rather than a call boundary.
         const auto text =
@@ -762,9 +766,19 @@ void TestQwenToolBoundariesAndSchema() {
           backend.pieces.emplace_back(1, c);
         const auto response =
             gufo::server::HandleOpenAiChat(Request(body.dump()), backend);
-        Expect(response.status == 200, "tool boundary request succeeds");
+        Expect(
+            response.status == 200 ||
+                (item.calls == 0 && response.status == 502),
+            "Tool boundary requests either parse or report malformed output");
         std::vector<Value> calls;
         if (!stream) {
+          if (response.status == 502) {
+            Expect(
+                item.calls == 0 && response.body.find("malformed_tool_call") !=
+                                       std::string::npos,
+                "Complete rejected calls report an explicit error");
+            continue;
+          }
           const auto output = gufo::json::parse(response.body);
           const auto& message =
               *output.find("choices")->items()[0].find("message");
@@ -925,7 +939,8 @@ void TestDeepSeekRepeatedToolParameters() {
             R"("tools":[{"type":"function","function":{"name":"read",)"
             R"("parameters":{"type":"object","properties":{"path":{"type":"string"}}}}}]})"),
         backend);
-    Expect(response.status == 200, "DeepSeek repeated parameter request");
+    Expect(response.status == (accepted ? 200 : 502),
+           "DeepSeek repeats either parse or report malformed output");
     Expect((response.body.find(R"("arguments":"{\"path\":\"/a\"}")") !=
             std::string::npos) == accepted,
            "identical DeepSeek repeats are dropped, conflicts rejected");
@@ -2624,7 +2639,191 @@ void TestQwenDeclaredTypes() {
   }
 }
 
+void TestMultilineToolEdits() {
+  using gufo::json::parse;
+  const auto body = parse(R"({"model":"test-model",
+    "messages":[{"role":"user","content":"apply edits"}],
+    "tools":[{"type":"function","function":{"name":"f","parameters":{
+      "properties":{"updates":{"type":"array"},"metadata":{"type":"object"}}}}}]})");
+  const auto edits = parse(R"({"updates":[{"old_text":"  before\n\n",
+    "new_text":"  after\nExample: <tool_call><function=f></function></tool_call> <think> </parameter> </tool_call> <｜DSML｜invoke name=\"f\"></｜DSML｜invoke> </｜DSML｜parameter>\n"}],
+    "metadata":{"indent":"    ","note":"literal <tool_call>"}})");
+  const auto values = edits.members();
+  std::vector<std::string> outputs{
+      "<tool_call><function=f><parameter=updates>\n" + values[0].second.dump() +
+          "\n</parameter><parameter=metadata>" + values[1].second.dump() +
+          "</parameter></function></tool_call>",
+      "<tool_call>{\"name\":\"f\",\"arguments\":" + edits.dump() +
+          "}</tool_call>",
+      "<｜DSML｜tool_calls><｜DSML｜invoke name=\"f\">"
+      "<｜DSML｜parameter name=\"updates\" string=\"false\">" +
+          values[0].second.dump() +
+          "</｜DSML｜parameter>"
+          "<｜DSML｜parameter name=\"metadata\" string=\"false\">" +
+          values[1].second.dump() +
+          "</｜DSML｜parameter>"
+          "</｜DSML｜invoke></｜DSML｜tool_calls>"};
+  for (const auto& raw : outputs) {
+    for (bool responses : {false, true}) {
+      for (bool stream : {false, true}) {
+        for (bool reasoning : {false, true}) {
+          FakeBackend backend;
+          for (char byte : (reasoning ? "Editing.</think>" : "") + raw)
+            backend.pieces.emplace_back(1, byte);
+          const auto response =
+              ToolFixtureResponse(body, backend, responses, stream, reasoning);
+          const auto output = ReadToolFixture(response, responses, stream);
+          Expect(
+              output.calls.size() == 1 && output.error.empty() &&
+                  output.calls[0].member_str("arguments") == edits.dump(),
+              "Multiline JSON edits preserve whitespace and protocol literals");
+        }
+      }
+    }
+  }
+  for (bool responses : {false, true}) {
+    for (bool stream : {false, true}) {
+      FakeBackend backend;
+      backend.pieces = {
+          "<｜DSML｜tool_calls><｜DSML｜invoke name=\"f\">"
+          "<｜DSML｜parameter name=\"quote\" string=\"true\">"
+          "He said \"hello</｜DSML｜parameter>"
+          "</｜DSML｜invoke></｜DSML｜tool_calls>"};
+      const auto response =
+          ToolFixtureResponse(body, backend, responses, stream);
+      const auto output = ReadToolFixture(response, responses, stream);
+      Expect(output.calls.size() == 1 &&
+                 parse(output.calls[0].member_str("arguments"))
+                         .member_str("quote") == "He said \"hello",
+             "Native DeepSeek text does not need balanced JSON quotes");
+    }
+  }
+}
+
+void TestMalformedToolDiagnostics() {
+  using Backend = gufo::server::TextGenerationBackend;
+  const auto body = gufo::json::parse(R"({"model":"test-model",
+    "messages":[{"role":"user","content":"call f"}],
+    "tools":[{"type":"function","function":{"name":"f","parameters":{
+      "properties":{"n":{"type":"integer"},"updates":{"type":"array"}}}}}]})");
+  const std::vector<std::string> malformed{
+      "<tool_call><function=f><parameter=n>oops</parameter></function></"
+      "tool_call>",
+      "<tool_call><function=f><parameter=n>1</parameter>"
+      "<parameter=n>2</parameter></function></tool_call>",
+      "<tool_call>{\"name\":\"f\",\"arguments\":{\"text\":\"raw\nnewline\"}}</"
+      "tool_call>",
+      "<tool_call>{\"name\":\"f\",\"arguments\":[]}</tool_call>",
+      "<｜DSML｜tool_calls><｜DSML｜invoke name=\"f\">"
+      "<｜DSML｜parameter name=\"n\" string=\"false\">bad"
+      "</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>",
+      "<｜DSML｜tool_calls><｜DSML｜invoke name=\"f\">"
+      "<｜DSML｜parameter name=\"n\" string=\"false\">{\"s\":\"raw\nnewline\"}"
+      "</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>"};
+  for (bool responses : {false, true}) {
+    for (bool stream : {false, true}) {
+      for (const auto& raw : malformed) {
+        for (auto finish :
+             {Backend::FinishReason::kStop, Backend::FinishReason::kLength,
+              Backend::FinishReason::kStopSequence,
+              Backend::FinishReason::kCancelled}) {
+          FakeBackend backend;
+          backend.pieces = {raw};
+          backend.finish_reason = finish;
+          const bool completed = finish == Backend::FinishReason::kStop;
+          if (responses && !stream && completed) {
+            bool rejected = false;
+            try {
+              (void)ToolFixtureResponse(body, backend, responses, stream);
+            } catch (const gufo::server::TextGenerationError& error) {
+              rejected = error.code() == gufo::server::TextGenerationErrorCode::
+                                             kMalformedToolCall &&
+                         error.http_status() == 502 && !error.retryable();
+            }
+            Expect(rejected,
+                   "Buffered Responses propagates malformed calls to HTTP "
+                   "error handling");
+            continue;
+          }
+          const auto response =
+              ToolFixtureResponse(body, backend, responses, stream);
+          const auto output = ReadToolFixture(response, responses, stream);
+          Expect(
+              response.status == (completed && !stream ? 502 : 200) &&
+                  output.calls.empty() && output.text.empty(),
+              "Malformed calls are never delivered as calls or visible text");
+          Expect(output.error ==
+                     (completed ? (responses && stream ? "server_error"
+                                                       : "malformed_tool_call")
+                                : ""),
+                 "Complete malformed attempts fail; interrupted ones end "
+                 "normally");
+          if (completed && stream)
+            Expect(
+                response.stream_log->error_code == "malformed_tool_call" &&
+                    response.stream_log->error_event_sent,
+                "Both SSE contracts retain the stable diagnostic in the log");
+        }
+      }
+      for (const auto& raw :
+           {std::string("Example: <tool_call> is a marker."),
+            std::string("Example: <｜DSML｜tool_calls> is a marker.")}) {
+        FakeBackend backend;
+        backend.pieces = {raw};
+        const auto response =
+            ToolFixtureResponse(body, backend, responses, stream);
+        const auto output = ReadToolFixture(response, responses, stream);
+        Expect(
+            output.text == raw && output.error.empty() && output.calls.empty(),
+            "Ordinary prose mentioning tool syntax remains visible");
+      }
+      auto required = body;
+      for (auto finish :
+           {Backend::FinishReason::kStop, Backend::FinishReason::kLength}) {
+        FakeBackend mixed;
+        mixed.pieces = {malformed.front(),
+                        "<tool_call><function=f><parameter=n>1</parameter></"
+                        "function></tool_call>"};
+        mixed.finish_reason = finish;
+        if (responses && !stream && finish == Backend::FinishReason::kStop) {
+          bool rejected = false;
+          try {
+            (void)ToolFixtureResponse(body, mixed, responses, stream);
+          } catch (const gufo::server::TextGenerationError& error) {
+            rejected =
+                error.code() ==
+                gufo::server::TextGenerationErrorCode::kMalformedToolCall;
+          }
+          Expect(rejected,
+                 "A valid call cannot hide a completed malformed attempt");
+        } else {
+          const auto response =
+              ToolFixtureResponse(body, mixed, responses, stream);
+          const auto output = ReadToolFixture(response, responses, stream);
+          Expect(finish == Backend::FinishReason::kStop
+                     ? !output.error.empty() && output.calls.empty()
+                     : output.error.empty() && output.calls.size() == 1,
+                 "Completed mixed output fails; interruption retains complete "
+                 "calls");
+        }
+      }
+      required["tool_choice"] = "required";
+      FakeBackend limited;
+      limited.pieces = {"<tool_call><function=f><parameter=n>"};
+      limited.finish_reason = Backend::FinishReason::kLength;
+      const auto response =
+          ToolFixtureResponse(required, limited, responses, stream);
+      const auto output = ReadToolFixture(response, responses, stream);
+      Expect(
+          output.calls.empty() && output.text.empty() && output.error.empty(),
+          "Required calls cut off by a token limit end normally");
+    }
+  }
+}
+
 int main() {
+  TestMalformedToolDiagnostics();
+  TestMultilineToolEdits();
   TestQwenDeclaredTypes();
   TestHistoricalFunctions();
   TestDisabledToolMarkers();
