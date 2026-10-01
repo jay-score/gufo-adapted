@@ -3,8 +3,12 @@ name: CI
 on:
   push:
     branches: [ main, windows-port ]
+    paths-ignore:
+      - '**/*.md'
   pull_request:
     branches: [ main, windows-port ]
+    paths-ignore:
+      - '**/*.md'
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
