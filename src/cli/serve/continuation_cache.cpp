@@ -213,14 +213,15 @@ std::size_t ContinuationCache::Lease::Commit(
 
 std::size_t ContinuationCache::Lease::PublishSnapshot(
     std::vector<ContinuationToken> tokens,
-    std::shared_ptr<const ContinuationSnapshot> snapshot) {
+    std::shared_ptr<const ContinuationSnapshot> snapshot,
+    bool preserve_source) {
   if (cache_ == nullptr)
     throw std::logic_error("continuation cache lease is empty");
   const auto identity = IdentityAt(tokens.size());
   const auto retained = cache_->Commit(
       index_, source_index_, reserved_snapshot_bytes_, std::move(tokens),
       std::move(snapshot), {identity.begin(), identity.end()}, {}, {}, false,
-      &source_index_);
+      preserve_source ? nullptr : &source_index_);
   reserved_snapshot_bytes_ = 0;
   return retained;
 }
@@ -695,6 +696,31 @@ std::size_t ContinuationCache::Commit(
             if (!impl_->entries[candidate]->valid) {
               target = candidate;
               break;
+            }
+          }
+        }
+        if (target == no_entry) {
+          // An edited branch can replace its old, incompatible tail before
+          // evicting checkpoints of the shared prefix. This keeps a new stable
+          // boundary and complete prompt within the same bounded entry pool.
+          if (source_index < impl_->entries.size()) {
+            const auto& source = *impl_->entries[source_index];
+            std::uint64_t oldest = std::numeric_limits<std::uint64_t>::max();
+            for (std::size_t candidate = 0; candidate < impl_->entries.size();
+                 ++candidate) {
+              const auto& entry = *impl_->entries[candidate];
+              if (!source.valid || source.tokens.empty() ||
+                  !IsPrefix(source.tokens, tokens) || !entry.valid ||
+                  candidate == source_index ||
+                  entry.input_identity != input_identity ||
+                  entry.tokens.size() <= source.tokens.size() ||
+                  IsPrefix(entry.tokens, tokens) ||
+                  !IsPrefix(source.tokens, entry.tokens))
+                continue;
+              if (entry.snapshot_last_used < oldest) {
+                target = candidate;
+                oldest = entry.snapshot_last_used;
+              }
             }
           }
         }

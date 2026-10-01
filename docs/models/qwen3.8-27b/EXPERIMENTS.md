@@ -2,6 +2,7 @@
 
 | Experiment | Decision / qualification |
 | --- | --- |
+| Bounded history-edit checkpoints | Retained on Windows/gfx1151 with UD-Q4_K_XL and the official DFlash2 Q4_K_M sidecar at 8,192 context. AR/DFlash2 latest-message edits, shortened tool results and rewinds reuse 2,048 tokens; unchanged retries and uncached output controls match exactly. Q8 and very large contexts were not rerun; timing is unqualified. [Check](../../../tests/tools/cache_edits_test.py). |
 | Quantized verification row groups | Retained per shape; scalar FP32 bits, full target logits and private acceptance/RNG must match. |
 | Shared DFlash2 body/context injection | Retained across requests; independent attention, convolution, history and selector state. |
 | Partial verification after rejection | Retained with the complete original proposal and unchanged consumed-prefix feedback. |
