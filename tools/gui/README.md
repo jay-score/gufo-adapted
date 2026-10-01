@@ -130,12 +130,20 @@ with disk caching off.
 
 The **Performance** section polls Gufo's `/metrics` endpoint about once per
 second while the server is ready, including when requests come from another
-chat client. It shows prefill and generation tokens/second plus cumulative
-prompt and generated token counts for the current server run. Speeds are the
-last completed nonzero measurements, not live rates during generation; a fully
-cached prompt retains the previous prefill speed. Prefill speed excludes cached
-tokens, while the prompt total includes them. Missing measurements appear as
-dashes, and unavailable metrics are retried without adding process-log entries.
+chat client. It shows live prefill and generation tokens/second, cumulative
+prompt and generated token counts for the current server run, and processing
+and queued request counts. Live rates measure token-counter changes over the
+actual interval between successful polls and cover all concurrent requests,
+including idle time. Prompt totals and live prefill exclude cached tokens.
+Processing includes cache preparation and cleanup; queued requests await a
+session. Live rates need two consecutive polls; failures, restarts and counter
+resets clear their baseline, and idle rates show zero.
+
+The completed-request speed cards retain the latest nonzero prefill/generation
+measurements; a fully cached prompt retains the previous prefill speed. Older
+executables still show their completed speeds and totals, with a note to update
+Gufo for live rates and request counts. Missing measurements appear as dashes,
+and unavailable metrics are retried without adding process-log entries.
 Restart the launcher after updating its code to load the new panel.
 
 - The control panel and Gufo both bind to localhost. Their ports must differ.

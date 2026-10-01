@@ -258,6 +258,50 @@ test("save as, rename, failed save, and delete keep the correct draft", async (t
   assert.equal(form.values().context, settings.context);
 });
 
+test("performance distinguishes live rates, completed speeds, legacy engines, and disconnects", async (t) => {
+  const env = await setup(t);
+  const { createRuntime } = await env.use("runtime.js");
+  const runtime = createRuntime(() => {});
+  const metrics = { prefill_tps: 800, generation_tps: 25.5, prompt_tokens_total: 100,
+    generated_tokens_total: 20, requests_processing: 1, requests_deferred: 2,
+    live_prefill_tps: 0, live_generation_tps: 19.5 };
+  const ready = { state: "ready", logs: [], pid: 123, metrics };
+  runtime.render(ready);
+  assert.equal(env.$("live-prefill-speed").textContent, "0.0");
+  assert.equal(env.$("live-generation-speed").textContent, "19.5");
+  assert.equal(env.$("prefill-speed").textContent, "800.0");
+  assert.equal(env.$("generation-speed").textContent, "25.5");
+  assert.equal(env.$("prompt-total").textContent, "100");
+  assert.equal(env.$("requests-processing").textContent, "1");
+  assert.equal(env.$("requests-deferred").textContent, "2");
+  assert.match(env.$("metrics-detail").textContent, /exclude cached tokens/);
+  runtime.render({ ...ready, metrics: { ...metrics, prompt_tokens_total: 0,
+    generated_tokens_total: 0, requests_processing: 0, requests_deferred: 2 } });
+  assert.match(env.$("metrics-note").textContent, /Live totals/);
+  runtime.render({ ...ready, metrics: { ...metrics, live_prefill_tps: null, live_generation_tps: null } });
+  assert.equal(env.$("live-generation-speed").textContent, "—");
+  assert.equal(env.$("generation-speed").textContent, "25.5");
+  runtime.render({ ...ready, metrics: { ...metrics, requests_processing: 0, requests_deferred: 0,
+    live_prefill_tps: 0, live_generation_tps: 0 } });
+  assert.equal(env.$("live-generation-speed").textContent, "0.0");
+  assert.equal(env.$("requests-processing").textContent, "0");
+  runtime.render({ ...ready, metrics: { prefill_tps: 800, generation_tps: 25.5,
+    prompt_tokens_total: 100, generated_tokens_total: 20 } });
+  assert.equal(env.$("requests-processing").textContent, "—");
+  assert.equal(env.$("live-generation-speed").textContent, "—");
+  assert.equal(env.$("generation-speed").textContent, "25.5");
+  assert.match(env.$("metrics-note").textContent, /Update the Gufo executable/);
+  assert.match(env.$("metrics-detail").textContent, /includes cached prompt tokens/);
+  runtime.render({ ...ready, metrics: null });
+  assert.match(env.$("metrics-note").textContent, /Retrying/);
+  for (const state of ["loading", "stopped", "disconnected"]) {
+    runtime.render({ ...ready, state });
+    for (const id of ["live-prefill-speed", "live-generation-speed", "prefill-speed", "generation-speed",
+      "prompt-total", "generated-total", "requests-processing", "requests-deferred"])
+      assert.equal(env.$(id).textContent, "—");
+  }
+});
+
 test("application initializes and previews edits without launching or saving", async (t) => {
   const env = await setup(t);
   env.initial.document.presets.push({ id: "second", name: "Second", settings: {

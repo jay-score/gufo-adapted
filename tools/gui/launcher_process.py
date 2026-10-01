@@ -23,6 +23,11 @@ def parse_metrics(text):
         "llamacpp:prompt_tokens_total": "prompt_tokens_total",
         "llamacpp:tokens_predicted_total": "generated_tokens_total",
     }
+    required = set(fields.values())
+    fields.update({
+        "llamacpp:requests_processing": "requests_processing",
+        "llamacpp:requests_deferred": "requests_deferred",
+    })
     metrics = {}
     for line in text.splitlines():
         parts = line.split()
@@ -33,8 +38,10 @@ def parse_metrics(text):
         value = float(parts[1])
         if not math.isfinite(value) or value < 0:
             raise ValueError("Invalid metric value")
+        if fields[parts[0]].startswith("requests_") and not value.is_integer():
+            raise ValueError("Invalid request count")
         metrics[fields[parts[0]]] = value
-    if len(metrics) != len(fields):
+    if not required.issubset(metrics):
         raise ValueError("Incomplete Gufo metrics")
     return metrics
 
@@ -141,6 +148,8 @@ class ProcessManager:
         # Local probes must not inherit HTTP proxy settings from the user's shell.
         client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         next_metrics_poll = 0.0
+        previous_metrics = None
+        previous_metrics_at = 0.0
         while child.poll() is None:
             with self.lock:
                 if self.process is not child:
@@ -166,6 +175,20 @@ class ProcessManager:
                     metrics = None
                 except (OSError, ValueError, urllib.error.URLError):
                     metrics = None
+                sampled_at = time.monotonic()
+                if metrics is not None:
+                    elapsed = sampled_at - previous_metrics_at
+                    live = "requests_processing" in metrics and "requests_deferred" in metrics
+                    continuous = (live and previous_metrics is not None and elapsed > 0
+                                  and all(metrics[key] >= previous_metrics[key]
+                                          for key in ("prompt_tokens_total", "generated_tokens_total")))
+                    for total, rate in (("prompt_tokens_total", "live_prefill_tps"),
+                                        ("generated_tokens_total", "live_generation_tps")):
+                        metrics[rate] = (metrics[total] - previous_metrics[total]) / elapsed if continuous else None
+                    previous_metrics = metrics if live else None
+                    previous_metrics_at = sampled_at
+                else:
+                    previous_metrics = None
                 with self.lock:
                     if self.process is child and self.state == "ready":
                         self.metrics = metrics

@@ -43,11 +43,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             speed = 25 if Handler.metrics_requests == 1 else 30
+            prompt, generated = {1: (100, 20), 3: (120, 30), 4: (140, 50)}.get(Handler.metrics_requests, (0, 0))
+            if Handler.metrics_requests == 4:
+                time.sleep(0.2)  # Rates must include scrape latency in the interval.
             body = ('# TYPE llamacpp:prompt_tokens_seconds gauge\\n'
                     'llamacpp:prompt_tokens_seconds 800\\n'
                     f'llamacpp:predicted_tokens_seconds {speed}\\n'
-                    'llamacpp:prompt_tokens_total 100\\n'
-                    'llamacpp:tokens_predicted_total 20\\n').encode()
+                    f'llamacpp:prompt_tokens_total {prompt}\\n'
+                    f'llamacpp:tokens_predicted_total {generated}\\n'
+                    f'llamacpp:requests_processing {int(prompt > 0)}\\n'
+                    'llamacpp:requests_deferred 2\\n').encode()
         else:
             body = json.dumps({'status': 'ready', 'model': 'fixture'}).encode()
         self.send_response(200)
@@ -103,23 +108,51 @@ class ProcessTest(unittest.TestCase):
         argv = [PYTHON, "-u", "-c", FAKE_SERVER, str(port)]
         self.assertIsNone(self.manager.start(argv, port, "fixture")["metrics"])
         self.wait_for("ready")
-        for expected_speed in (25, None, 30):
+        previous_seen_at = None
+        for expected_speed, expected_prompt, expected_live in ((25, 100, None), (None, None, None),
+                                                             (30, 120, None), (30, 140, True),
+                                                             (30, 0, None), (30, 0, 0)):
             deadline = time.monotonic() + 8
             while time.monotonic() < deadline:
                 snapshot = self.manager.snapshot()
                 metrics = snapshot["metrics"]
-                if (metrics and metrics["generation_tps"] == expected_speed) or (metrics is None and expected_speed is None):
+                if metrics is None and expected_speed is None:
                     break
+                if metrics and metrics["generation_tps"] == expected_speed and metrics["prompt_tokens_total"] == expected_prompt:
+                    rate = metrics["live_generation_tps"]
+                    if (expected_live is True and rate is not None and rate > 0
+                            or expected_live is None and rate is None
+                            or expected_live == 0 and rate == 0):
+                        break
                 time.sleep(0.05)
             else:
                 self.fail(f"Expected speed {expected_speed}, got {metrics}")
+            seen_at = time.monotonic()
             self.assertEqual(snapshot["state"], "ready")
             if metrics:
                 self.assertEqual(metrics["prefill_tps"], 800)
-                self.assertEqual(metrics["prompt_tokens_total"], 100)
-                self.assertEqual(metrics["generated_tokens_total"], 20)
+                self.assertEqual(metrics["prompt_tokens_total"], expected_prompt)
+                self.assertEqual(metrics["requests_processing"], int(expected_prompt > 0))
+                self.assertEqual(metrics["requests_deferred"], 2)
+                if expected_live is True:
+                    self.assertAlmostEqual(metrics["live_prefill_tps"], metrics["live_generation_tps"])
+                    self.assertGreater(metrics["live_generation_tps"], 0)
+                    self.assertLess(metrics["live_generation_tps"], 40)
+                    self.assertAlmostEqual(metrics["live_generation_tps"],
+                                           20 / (seen_at - previous_seen_at), delta=1)
+                else:
+                    self.assertEqual(metrics["live_prefill_tps"], expected_live)
+            previous_seen_at = seen_at if metrics is not None else None
         self.assertIsNone(self.manager.stop()["metrics"])
         self.assertIsNone(self.manager.start(argv, port, "fixture")["metrics"])
+        self.wait_for("ready")
+        deadline = time.monotonic() + 8
+        while self.manager.snapshot()["metrics"] is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        restarted = self.manager.snapshot()["metrics"]
+        self.assertIsNotNone(restarted)
+        self.assertIsNone(restarted["live_prefill_tps"])
+        self.assertIsNone(restarted["live_generation_tps"])
 
     def test_metrics_parser_rejects_missing_and_nonfinite_values(self):
         text = ("# HELP ignored comment\n"
@@ -134,6 +167,20 @@ class ProcessTest(unittest.TestCase):
                         *(text.replace("25.5", value) for value in ("NaN", "+Inf", "-1", "bad"))):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 parse_metrics(invalid)
+
+    def test_metrics_parser_accepts_optional_request_gauges(self):
+        text = ("llamacpp:prompt_tokens_seconds 800\n"
+                "llamacpp:predicted_tokens_seconds 25\n"
+                "llamacpp:prompt_tokens_total 100\n"
+                "llamacpp:tokens_predicted_total 20\n"
+                "llamacpp:requests_processing 1\n"
+                "llamacpp:requests_deferred 0\n")
+        metrics = parse_metrics(text)
+        self.assertEqual(metrics["requests_processing"], 1)
+        self.assertEqual(metrics["requests_deferred"], 0)
+        for value in ("NaN", "Inf", "-1", "0.5"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                parse_metrics(text.replace("requests_processing 1", f"requests_processing {value}"))
 
     def test_occupied_port_is_not_mistaken_for_our_server(self):
         with socket.socket() as listener:
