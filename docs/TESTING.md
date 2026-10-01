@@ -150,6 +150,17 @@ Pin sampling controls, seeds, cache history, and batching when testing replay.
 Run longer multi-turn cases when session reuse or EOS handling changes.
 Do not average away numerical mismatches or classify device failures as passes.
 
+For a running text server with at least an 8,192-token context, check advancing
+conversation reuse, unchanged retries and uncached answer controls explicitly:
+
+```sh
+python tests/tools/cache_growth_test.py --url http://127.0.0.1:8080/v1 \
+  --model gufo --out build/cache-growth.json
+```
+
+This real-model check covers dropped reasoning, replayed reasoning and reasoning
+disabled. It sends requests to the selected server and is not part of CPU CI.
+
 ## Performance evidence
 
 Compare identical model artifacts, prompt/output counts, context depths,

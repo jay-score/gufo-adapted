@@ -453,6 +453,7 @@ void TextModelRunner::RestorePersistentSnapshot(
 }
 
 struct TextRunnerPool::Impl {
+  static constexpr std::size_t kSnapshotEntriesPerSession = 3;
   Impl(std::shared_ptr<TextModelRunner> model_runner, std::size_t state_count,
        std::optional<TextRunnerDiskCacheOptions> disk_cache_options)
       : validated(ValidateRunner(std::move(model_runner), state_count)),
@@ -468,23 +469,20 @@ struct TextRunnerPool::Impl {
               return state;
             },
             MakeSnapshotSupport(&validated),
-            state_count <= std::numeric_limits<std::size_t>::max() / 2
-                ? state_count * 2
+            state_count <= std::numeric_limits<std::size_t>::max() /
+                               kSnapshotEntriesPerSession
+                ? state_count * kSnapshotEntriesPerSession
                 : state_count) {
-    // Retained capacity is not obvious from --sessions alone: a request keeps
-    // a fallback checkpoint as well as its own, so the entries hold about one
-    // conversation per session. Report it once so an operator can size the
-    // server against the number of conversations in rotation, not just the
-    // number of concurrent requests.
+    // Warm requests retain their reused frontier, stable boundary and complete
+    // prompt. Entry and byte limits constrain retention independently of
+    // sessions.
     if (validated.descriptor.capabilities.snapshot) {
-      Logger::Info(
-          "cache",
-          "event=snapshot_cache_configured sessions=" +
-              std::to_string(state_count) +
-              " snapshot_entries=" + std::to_string(cache.entry_capacity()) +
-              " retained_conversations=" + std::to_string(state_count) +
-              " capacity_bytes=" +
-              std::to_string(cache.snapshot_capacity_bytes()));
+      Logger::Info("cache",
+                   "event=snapshot_cache_configured sessions=" +
+                       std::to_string(state_count) + " snapshot_entries=" +
+                       std::to_string(cache.entry_capacity()) +
+                       " capacity_bytes=" +
+                       std::to_string(cache.snapshot_capacity_bytes()));
     }
     if (disk_cache_options.has_value()) {
       if (!validated.descriptor.persistence.has_value()) {
@@ -549,8 +547,8 @@ struct TextRunnerPool::Request::Impl {
         context(std::move(prompt_context)),
         retain_fallback(cache_prefix_tokens != 0) {
     // On a warm continuation the reused frontier is already a safe fallback.
-    // Freeze it before prefill, then process the entire new suffix together.
-    // Cold requests still checkpoint before mutable assistant framing.
+    // Freeze it before prefill, then retain this turn's own stable boundary
+    // before mutable assistant framing.
     auto count = cache_prefix_tokens == 0 ? prompt.size() : cache_prefix_tokens;
     // Newly consumed images need a fallback after their embeddings. Otherwise
     // rewritten assistant framing would force those images through prefill
@@ -559,8 +557,16 @@ struct TextRunnerPool::Request::Impl {
         context && !std::ranges::equal(context->IdentityBefore(prefill_offset),
                                        context->IdentityBefore(count));
     if (retain_fallback && lease.cache_hit() && prefill_offset <= count &&
-        !new_images)
+        !new_images) {
+      // Freezing the reused frontier must not cost this turn its own stable
+      // boundary. A client that rewrites the assistant turn, as one dropping
+      // reasoning does, diverges after that boundary, so retaining only the
+      // frontier pins every later turn to the same early position and the
+      // re-prefilled tail grows for the rest of the conversation.
+      if (prefill_offset < count)
+        stable_prefix_position = count;
       count = prefill_offset;
+    }
     if (lease.restored_from_disk() && prefill_offset == prompt.size())
       count = prompt.size();
     snapshot_tokens.reserve(prompt.size());
@@ -602,8 +608,9 @@ struct TextRunnerPool::Request::Impl {
       // Admission may refuse it without discarding the fallback.
       if (prompt_snapshot && retain_snapshot) {
         try {
-          snapshot_metrics.snapshot_bytes += lease.PublishSnapshot(
-              snapshot_tokens, std::move(prompt_snapshot));
+          snapshot_metrics.snapshot_bytes +=
+              lease.PublishSnapshot(snapshot_tokens, std::move(prompt_snapshot),
+                                    fallback_position != 0);
         } catch (...) {
           lease.SkipSnapshot(SnapshotEventReason::kCaptureFailure,
                              snapshot_bytes, snapshot_tokens.size());
@@ -612,7 +619,17 @@ struct TextRunnerPool::Request::Impl {
       prompt_snapshot.reset();
       retain_snapshot = false;
       fallback_position = snapshot_tokens.size();
-      snapshot_tokens = prompt;
+      // Take this turn's stable boundary next, before the complete prompt.
+      // The boundary is a prefix of whatever the client sends next, while the
+      // complete prompt ends in assistant framing the client may rewrite.
+      if (stable_prefix_position > snapshot_tokens.size() &&
+          stable_prefix_position < prompt.size()) {
+        snapshot_tokens.assign(prompt.begin(),
+                               prompt.begin() + stable_prefix_position);
+        stable_prefix_position = 0;
+      } else {
+        snapshot_tokens = prompt;
+      }
       prompt_snapshot_attempted = false;
     }
   }
@@ -821,6 +838,10 @@ struct TextRunnerPool::Request::Impl {
   std::shared_ptr<const TextPromptContext> context;
   bool retain_fallback{false};
   std::size_t fallback_position{0};
+  /// This turn's stable boundary when the reused frontier sits before it, so
+  /// the boundary is checkpointed after the frozen fallback instead of being
+  /// skipped. Zero once taken, or when the two positions coincide.
+  std::size_t stable_prefix_position{0};
   [[nodiscard]] std::span<const std::uint8_t> InputIdentity() const {
     return context ? std::span<const std::uint8_t>(context->cache_identity)
                    : std::span<const std::uint8_t>{};
