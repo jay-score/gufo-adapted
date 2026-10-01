@@ -260,6 +260,12 @@ defaults. With no server override, Qwen defaults to `xhigh`; its native levels
 are `low`, `medium`, and `xhigh` (`minimal` maps to `low`, and `high`/`max`
 map to `xhigh`). These controls work with buffered and streaming responses.
 
+For thinking tool requests, only `</think>` ends the reasoning phase. A
+model may quote tool markers such as `<tool_call>` while reasoning about
+damaged file contents; quoted markers stay reasoning data and never start a
+call or leak into visible output. This boundary is identical for buffered
+responses and streaming deltas in Chat Completions and Responses.
+
 The server uses compiled model-specific formatters and validates recognized
 artifact template hashes during model loading. It does not accept custom Jinja
 or claim to enforce a reasoning-token budget.
