@@ -1160,7 +1160,9 @@ ParsedGeneration ParseGeneration(
     // contents) while reasoning; such markers are reasoning data, not the
     // start of a call, and must not truncate reasoning or leak it into
     // visible output. Without a closing delimiter no call has started yet,
-    // so a tool request keeps the whole output as reasoning.
+    // so a tool request keeps the whole output as reasoning. This also
+    // skips the required-call check below: a cut-off mid-reasoning is
+    // reported through the finish reason, not as an unsatisfied choice.
     const std::size_t think_end = content.find(kThinkEnd);
     if (think_end == std::string_view::npos &&
         choice != ChatRequest::ToolChoice::kNone && !tools.empty()) {
@@ -1193,7 +1195,9 @@ ParsedGeneration ParseGeneration(
     if (think_start != std::string_view::npos) {
       const std::size_t think_content_start = think_start + kThinkStart.size();
       // Quoted markers inside the thinking span are data, as above; only
-      // </think> closes the span.
+      // </think> closes the span. (Streaming delta parity for this
+      // inline-span path is out of scope: the streaming filter only
+      // enters thinking from a leading delimiter, never from content.)
       const std::size_t think_end =
           content.find(kThinkEnd, think_content_start);
       if (think_end != std::string_view::npos) {
