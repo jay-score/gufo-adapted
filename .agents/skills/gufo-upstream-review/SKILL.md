@@ -49,7 +49,9 @@ applies. Do not push unless requested.
   outside the range and label them separately. A bounded review is not a complete
   audit of all divergence since the fork.
 - Record the fork SHA, official SHA, review date, range, and merge base if one
-  exists. Detect already integrated work by ancestry and patch equivalence
+  exists. Read the root [UPSTREAM.md](../../../UPSTREAM.md) for recorded
+  adaptations; its entries supplement Git and code inspection, and its coverage
+  may be incomplete. Detect already integrated work by ancestry and patch equivalence
   (`git cherry` / stable patch IDs), then inspect the current code for squashed,
   adapted, or reverted equivalents. A reviewed commit is not necessarily applied;
   a different SHA is not necessarily new behavior. Flag shallow or unrelated
@@ -136,3 +138,25 @@ and verify each change before proceeding. For cache/config format changes, inclu
 a migration and rollback plan; reverting code alone may not restore old data.
 Report unresolved failures without claiming completion. Respect existing user
 authorization rather than requesting approval again for already authorized work.
+
+## Record integrated changes
+
+After authorized integration from any other Gufo repository, update the root
+[UPSTREAM.md](../../../UPSTREAM.md) in the same change as the implementation.
+Use its entry format and update policy as the canonical record. This applies to
+official Gufo, the Windows port, and other Gufo forks, including manual adaptations
+and prerequisite imports. A review-only recommendation does not create an entry.
+
+Record every immutable source commit URL, the local implementation commits (or
+"commit introducing this entry" when committed together), the adaptation and
+omissions with reasons, affected paths, and validation actually run with results.
+State unrun or failed checks explicitly. Follow AGENTS.md's `git cherry-pick -x`
+and `Upstream-Commit:` trailer conventions; the ledger supplements commit
+provenance. Link relevant model-specific upstream contracts rather than copying
+them. When replacing or reverting a recorded adaptation, update its status and
+link the replacement or removal commit, preserving the original entry.
+
+Before reporting integration complete, verify the entry matches the final diff,
+source attribution, and validation evidence. Mention the ledger update in the
+integration report; do not claim prior imports have been backfilled unless their
+provenance has been verified.
