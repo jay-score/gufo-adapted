@@ -2503,7 +2503,129 @@ void TestHistoricalFunctions() {
   }
 }
 
+void TestQwenDeclaredTypes() {
+  using gufo::json::parse;
+  struct Case {
+    std::string schema;
+    std::string key;
+    std::string native;
+    std::string json;
+  };
+  std::vector<Case> cases{
+      {R"({"properties":{"value":{"type":"string"}},"patternProperties":{"^x_":{"type":"integer"}}})",
+       "x_count", "1", "1"},
+      {R"({"properties":{"value":{"type":"string"}},"patternProperties":{"^x_":{"type":"integer"}}})",
+       "value", "1", R"("1")"},
+      {R"({"patternProperties":{"^x_":{"type":"number"}}})", "x_n", "1.5",
+       "1.5"},
+      {R"({"patternProperties":{"^x_":{"type":"boolean"}}})", "x_b", "True",
+       "true"},
+      {R"({"patternProperties":{"^x_":{"type":"null"}}})", "x_n", "None",
+       "null"},
+      {R"({"patternProperties":{"^x_":{"type":"array"}}})", "x_a", "[1,False]",
+       "[1,false]"},
+      {R"({"patternProperties":{"^x_":{"type":"object"}}})", "x_o",
+       R"({"a":1})", R"({"a":1})"},
+      {R"({"patternProperties":{"^x_":{"type":"string"}}})", "x_s", "[1]",
+       R"("[1]")"},
+      {R"({"patternProperties":{"count":{"type":"integer"}}})", "x_count_z",
+       "1", "1"},
+      {R"({"patternProperties":{"^雪\\.$":{"type":"boolean"}}})", "雪.",
+       "false", "false"},
+      {R"({"patternProperties":{"^x_":{"type":"number"},"count$":{"type":"integer"}}})",
+       "x_count", "1", "1"},
+      {R"({"properties":{"x_count":{"type":["integer","string"]}},"patternProperties":{"^x_":{"type":"integer"}}})",
+       "x_count", "1", "1"},
+      {R"({"properties":{"x_count":{"type":"integer"}},"patternProperties":{"^x_":{"type":"string"}}})",
+       "x_count", "1", R"("1")"},
+      {R"({"properties":{"n":{"$ref":"#/$defs/count"}},"$defs":{"count":{"$ref":"#/$defs/number"},"number":{"type":"integer"}}})",
+       "n", "1", "1"},
+      {R"({"$ref":"#/$defs/root","$defs":{"root":{"properties":{"n":{"type":"integer"}}}}})",
+       "n", "1", "1"},
+      {R"({"properties":{"n":{"$ref":"#/$defs/a~1b~0c"}},"$defs":{"a/b~c":{"type":"integer"}}})",
+       "n", "1", "1"},
+      {R"({"properties":{"n":{"$ref":"#/$defs/cycle"}},"$defs":{"cycle":{"$ref":"#/$defs/cycle"}}})",
+       "n", "1", R"("1")"},
+      {R"({"properties":{"n":{"$ref":"https://example.org/schema"}}})", "n",
+       "1", R"("1")"},
+      {R"({"properties":{"n":{"$ref":"#/$defs/missing"}}})", "n", "1",
+       R"("1")"},
+      {R"({"properties":{"n":{"type":"integer"}},"additionalProperties":{"type":"boolean"}})",
+       "n", "1", "1"},
+      {R"({"patternProperties":{"^n$":{"type":"integer"}},"additionalProperties":{"type":"boolean"}})",
+       "n", "1", "1"},
+      {R"({"properties":{"text":{"type":"string"}},"additionalProperties":{"type":"boolean"}})",
+       "extra", "false", "false"},
+      {R"({"additionalProperties":{"$ref":"#/$defs/a"},"$defs":{"a":{"type":"array"}}})",
+       "extra", "[]", "[]"},
+      {R"({"additionalProperties":true})", "extra", "null", R"("null")"},
+      {R"({"additionalProperties":false})", "extra", "1", R"("1")"},
+      {R"({"properties":{"n":{"type":["string","null"]}}})", "n", "null",
+       R"("null")"},
+      {R"({"properties":{"n":{"anyOf":[{"type":"integer"},{"type":"null"}]}}})",
+       "n", "null", "null"},
+      {R"({"properties":{"n":{"allOf":[{"type":"number"},{"type":"integer"}]}}})",
+       "n", "1", "1"},
+      {R"({"properties":{"n":{"type":"integer","not":{"type":"integer"}}}})",
+       "n", "1", R"("1")"},
+      {R"({"if":{},"then":{"properties":{"n":{"type":"integer"}}}})", "n", "1",
+       R"("1")"},
+      {R"({"patternProperties":{"(?i)^x":{"type":"integer"}},"additionalProperties":{"type":"integer"}})",
+       "x", "1", R"("1")"},
+      {R"({"patternProperties":{"\\w":{"type":"integer"}},"additionalProperties":{"type":"integer"}})",
+       "雪", "1", R"("1")"},
+      {R"({"patternProperties":{"[":{"type":"integer"}},"additionalProperties":{"type":"integer"}})",
+       "n", "1", R"("1")"},
+      {R"({"patternProperties":{"^.$":{"type":"integer"}}})", "\xC2\x85", "1",
+       "1"}};
+  auto deep = parse(R"({"properties":{"n":{"$ref":"#/$defs/a0"}},"$defs":{}})");
+  for (int i = 0; i < 40; ++i) {
+    auto branch = gufo::json::Value::object();
+    branch["$ref"] = "#/$defs/a" + std::to_string(i + 1);
+    deep["$defs"]["a" + std::to_string(i)] = std::move(branch);
+  }
+  deep["$defs"]["a40"] = parse(R"({"type":"integer"})");
+  cases.push_back({deep.dump(), "n", "1", R"("1")"});
+  auto large_pattern = gufo::json::Value::object();
+  large_pattern["patternProperties"][std::string(513, 'a')] =
+      parse(R"({"type":"integer"})");
+  large_pattern["additionalProperties"] = parse(R"({"type":"integer"})");
+  cases.push_back({large_pattern.dump(), "a", "1", R"("1")"});
+  cases.push_back(
+      {R"({"$ref":"#/$defs/base","properties":{"n":{"type":"integer"}},"$defs":{"base":{"properties":{"n":{"type":["string","number"]}}}}})",
+       "n", "1", "1"});
+  for (const auto& item : cases) {
+    auto body = parse(R"({"model":"test-model",
+      "messages":[{"role":"user","content":"call f"}],
+      "tools":[{"type":"function","function":{"name":"f"}}]})");
+    auto tool = body["tools"].items()[0];
+    tool["function"]["parameters"] = parse(item.schema);
+    body["tools"] = gufo::json::Value::array();
+    body["tools"].push_back(std::move(tool));
+    auto expected = gufo::json::Value::object();
+    expected[item.key] = parse(item.json);
+    const auto raw = "<tool_call><function=f><parameter=" + item.key + ">" +
+                     item.native + "</parameter></function></tool_call>";
+    for (bool responses : {false, true}) {
+      for (bool stream : {false, true}) {
+        FakeBackend backend;
+        for (char byte : raw)
+          backend.pieces.emplace_back(1, byte);
+        const auto response =
+            ToolFixtureResponse(body, backend, responses, stream);
+        const auto output = ReadToolFixture(response, responses, stream);
+        Expect(
+            output.calls.size() == 1 &&
+                parse(output.calls[0].member_str("arguments")).dump() ==
+                    expected.dump(),
+            "Declared type recovered for " + item.key + " in " + item.schema);
+      }
+    }
+  }
+}
+
 int main() {
+  TestQwenDeclaredTypes();
   TestHistoricalFunctions();
   TestDisabledToolMarkers();
   TestStopSequencesAndDefaultFields();

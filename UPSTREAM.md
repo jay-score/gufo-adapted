@@ -36,6 +36,26 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-01 — Bounded Qwen declared-type recovery
+
+- Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)
+  (PR #373 typed wildcard regression and native-schema review).
+- Local: commit introducing this entry.
+- Adaptation: parser-only type hints from named properties, all matching
+  patterns, additional-property schemas and bounded local references. Uses
+  existing ICU with `ICU::i18n` linkage and a documented portable regex subset.
+  Ambiguous/unsupported hints retain text. This is an independent adaptation,
+  not upstream's wildcard JSON fallback or a schema validator. Does not import
+  automatic protocol switching, constraints or inference changes.
+- Areas: `CMakeLists.txt`, API parser/fixtures and server contracts.
+- Validation: baseline fixture reproduced integer `x_count` becoming a string.
+  Fresh Windows CPU `openai_chat_test` and `http_server_test` pass; coverage
+  includes all JSON types, intersections, precedence, Unicode/escaped keys,
+  reference chains/cycles, bounded lookup and guidance fallback. Pinned ICU 78.3
+  Windows import libraries and `icuin78.dll` linked/staged successfully.
+  Linux and real-model qualification remain outstanding.
+- Status: retained.
+
 ### 2026-10-01 — Historical function-name preservation
 
 - Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)

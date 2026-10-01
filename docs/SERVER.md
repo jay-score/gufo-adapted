@@ -622,6 +622,26 @@ With no declared tools or `tool_choice: "none"`, tool markers are ordinary
 text. They do not end reasoning or delay streaming; thinking delimiters and
 UTF-8 buffering still apply.
 
+Native Qwen parameter types are recovered from named properties, matching
+`patternProperties`, schema-valued `additionalProperties`, and local object
+JSON-pointer references. All applicable hints are intersected; additional
+properties apply only when no named property or pattern matches. String values
+that look like JSON remain strings. String/non-string unions, untyped fields,
+conflicting hints, cyclic/external references and unsupported rules retain
+best-effort text semantics. This is type recovery, not schema validation or
+generation-time enforcement.
+
+Pattern lookup uses ICU over a conservative ECMAScript-compatible subset:
+Unicode literals, anchors, dot, ordinary groups/lookahead, character classes,
+alternation, quantifiers and escaped punctuation or `\n`, `\r`, `\t`, `\f`.
+Other escapes (including shorthand classes), engine-specific groups and class
+set operations remain guidance. Lookup permits at most 32 schema levels,
+128 visited nodes, 64 patterns per object, 512 bytes per pattern and 2048 bytes
+per key; each regex search has a 10 ms time limit and a 64 KiB stack limit.
+Exceeding a bound retains text. `anyOf`/`oneOf` type hints are unioned and
+`allOf` type hints intersected at a parameter; object-level applicators and
+conditional schemas remain guidance. Nested requirements are not enforced.
+
 Stop sequences match accepted output bytes, including reasoning and tool
 markup, before streaming or response parsing. Partial prefixes are buffered;
 matched sequences and subsequent text are excluded. OpenAI reports

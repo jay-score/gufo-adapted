@@ -1,5 +1,7 @@
 #include "src/cli/serve/openai_chat.hpp"
 
+#include <unicode/regex.h>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -881,35 +883,246 @@ std::string ArgumentsJson(
   return object.dump();
 }
 
-// Qwen's XML-like arguments carry no type marker. The advertised schema is
-// needed to distinguish a string such as 42 from the JSON number 42.
-bool SchemaAccepts(const json::Value& schema, const json::Value& value) {
-  const auto matches = [&](std::string_view type) {
-    return (type == "string" && value.is_string()) ||
-           (type == "number" && value.is_number()) ||
-           (type == "integer" && value.is_number() &&
-            std::floor(value.as_double()) == value.as_double()) ||
-           (type == "boolean" && value.is_bool()) ||
-           (type == "null" && value.is_null()) ||
-           (type == "array" && value.is_array()) ||
-           (type == "object" && value.is_object());
-  };
+// Native Qwen parameters have no type marker. These are decoding hints, not
+// a JSON Schema validator: unsupported rules retain non-strict text semantics.
+constexpr unsigned kStringType = 1;
+constexpr unsigned kIntegerType = 2;
+constexpr unsigned kFractionalType = 4;
+constexpr unsigned kBooleanType = 8;
+constexpr unsigned kNullType = 16;
+constexpr unsigned kArrayType = 32;
+constexpr unsigned kObjectType = 64;
+constexpr unsigned kAllTypes = 127;
+
+unsigned JsonType(std::string_view type) {
+  if (type == "string")
+    return kStringType;
+  if (type == "integer")
+    return kIntegerType;
+  if (type == "number")
+    return kIntegerType | kFractionalType;
+  if (type == "boolean")
+    return kBooleanType;
+  if (type == "null")
+    return kNullType;
+  if (type == "array")
+    return kArrayType;
+  if (type == "object")
+    return kObjectType;
+  return 0;
+}
+
+struct TypeHint {
+  enum class Resolution { kResolved, kUnsupported, kCyclic, kBounded };
+  unsigned types{kAllTypes};
+  Resolution resolution{Resolution::kResolved};
+
+  void Intersect(const TypeHint& other) {
+    types &= other.types;
+    if (other.resolution != Resolution::kResolved)
+      resolution = other.resolution;
+  }
+  bool PreferString() const {
+    return resolution != Resolution::kResolved || types == 0 ||
+           (types & kStringType) != 0;
+  }
+  bool Accepts(const json::Value& value) const {
+    const auto type = value.is_number()
+                          ? (std::floor(value.as_double()) == value.as_double()
+                                 ? kIntegerType
+                                 : kFractionalType)
+                          : JsonType(value.is_null()     ? "null"
+                                     : value.is_bool()   ? "boolean"
+                                     : value.is_array()  ? "array"
+                                     : value.is_object() ? "object"
+                                                         : "string");
+    return (types & type) != 0;
+  }
+};
+
+// ICU is not an ECMAScript engine. Admit only a portable subset and normalize
+// dot/end-anchor semantics; ICU-only escapes, groups and set operations remain
+// guidance. Search is unanchored, as JSON Schema patternProperties requires.
+std::optional<bool> MatchesPropertyPattern(std::string_view pattern,
+                                           std::string_view name) {
+  if (pattern.size() > 512 || name.size() > 2048)
+    return std::nullopt;
+  std::string portable;
+  bool in_class = false;
+  for (std::size_t i = 0; i < pattern.size(); ++i) {
+    const char c = pattern[i];
+    if (c == '\\') {
+      if (++i == pattern.size() ||
+          std::string_view{R"(\.^$|?*+()[]{}-/nrtf)"}.find(pattern[i]) ==
+              std::string_view::npos)
+        return std::nullopt;
+      portable += '\\';
+      portable += pattern[i];
+    } else if (in_class) {
+      if (c == '[' || c == '&' || c == '{' || c == '}' ||
+          (c == '-' && i + 1 < pattern.size() && pattern[i + 1] == '-'))
+        return std::nullopt;
+      in_class = c != ']';
+      portable += c;
+    } else {
+      if (c == '(' && i + 1 < pattern.size() && pattern[i + 1] == '?' &&
+          (i + 2 == pattern.size() ||
+           std::string_view{":=!"}.find(pattern[i + 2]) ==
+               std::string_view::npos))
+        return std::nullopt;
+      if (c == '+' && i > 0 &&
+          std::string_view{"*+?}"}.find(pattern[i - 1]) !=
+              std::string_view::npos)
+        return std::nullopt;
+      in_class = c == '[';
+      portable += c == '.'   ? R"([^\r\n\u2028\u2029])"
+                  : c == '$' ? R"(\z)"
+                             : std::string(1, c);
+    }
+  }
+  UErrorCode status = U_ZERO_ERROR;
+  const auto input = icu::UnicodeString::fromUTF8(name);
+  const std::unique_ptr<icu::RegexPattern> compiled(
+      icu::RegexPattern::compile(icu::UnicodeString::fromUTF8(portable),
+                                 UREGEX_ERROR_ON_UNKNOWN_ESCAPES, status));
+  if (U_FAILURE(status) || !compiled)
+    return std::nullopt;
+  const std::unique_ptr<icu::RegexMatcher> matcher(
+      compiled->matcher(input, status));
+  if (U_FAILURE(status) || !matcher)
+    return std::nullopt;
+  matcher->setTimeLimit(10, status);
+  matcher->setStackLimit(64 * 1024, status);
+  const bool matches = matcher->find(status);
+  return U_FAILURE(status) ? std::nullopt : std::optional(matches);
+}
+
+const json::Value* LocalSchemaReference(const json::Value& root,
+                                        std::string_view reference) {
+  if (reference == "#")
+    return &root;
+  if (!reference.starts_with("#/") ||
+      reference.find('%') != std::string_view::npos)
+    return nullptr;
+  reference.remove_prefix(2);
+  const auto* schema = &root;
+  while (true) {
+    const auto end = reference.find('/');
+    const auto part = reference.substr(0, end);
+    std::string key;
+    for (std::size_t i = 0; i < part.size(); ++i) {
+      if (part[i] != '~') {
+        key += part[i];
+      } else {
+        if (++i == part.size() || (part[i] != '0' && part[i] != '1'))
+          return nullptr;
+        key += part[i] == '0' ? '~' : '/';
+      }
+    }
+    schema = schema->is_object() ? schema->find(key) : nullptr;
+    if (!schema || end == std::string_view::npos)
+      return schema;
+    reference.remove_prefix(end + 1);
+  }
+}
+
+TypeHint ResolveDeclaredTypes(const json::Value& root,
+                              const json::Value& schema,
+                              std::optional<std::string_view> property,
+                              std::vector<const json::Value*> path,
+                              std::size_t* budget) {
+  using Resolution = TypeHint::Resolution;
+  if (path.size() >= 32 || *budget == 0)
+    return {.resolution = Resolution::kBounded};
+  --*budget;
+  if (std::ranges::find(path, &schema) != path.end())
+    return {.resolution = Resolution::kCyclic};
+  path.push_back(&schema);
+  if (!schema.is_object())
+    return schema.is_bool() && schema.as_bool()
+               ? TypeHint{}
+               : TypeHint{.resolution = Resolution::kUnsupported};
+  for (const auto* rule :
+       {"if", "then", "else", "not", "$dynamicRef", "unevaluatedProperties"})
+    if (schema.contains(rule))
+      return {.resolution = Resolution::kUnsupported};
+  TypeHint hint;
+  if (const auto* reference = schema.find("$ref")) {
+    const auto* target = reference->is_string()
+                             ? LocalSchemaReference(root, reference->str())
+                             : nullptr;
+    if (!target)
+      return {.resolution = Resolution::kUnsupported};
+    hint.Intersect(ResolveDeclaredTypes(root, *target, property, path, budget));
+  }
+  if (property) {
+    for (const auto* rule : {"anyOf", "oneOf", "allOf"})
+      if (schema.contains(rule))
+        return {.resolution = Resolution::kUnsupported};
+    bool matched = false;
+    if (const auto* properties = schema.find("properties")) {
+      if (!properties->is_object())
+        return {.resolution = Resolution::kUnsupported};
+      if (const auto* named = properties->find(std::string(*property))) {
+        matched = true;
+        hint.Intersect(ResolveDeclaredTypes(root, *named, {}, path, budget));
+      }
+    }
+    if (const auto* patterns = schema.find("patternProperties")) {
+      if (!patterns->is_object() || patterns->size() > 64)
+        return {.resolution = Resolution::kBounded};
+      for (const auto& [pattern, value] : patterns->members()) {
+        const auto match = MatchesPropertyPattern(pattern, *property);
+        if (!match)
+          return {.resolution = Resolution::kUnsupported};
+        if (*match) {
+          matched = true;
+          hint.Intersect(ResolveDeclaredTypes(root, value, {}, path, budget));
+        }
+      }
+    }
+    if (!matched) {
+      if (const auto* additional = schema.find("additionalProperties"))
+        hint.Intersect(
+            ResolveDeclaredTypes(root, *additional, {}, path, budget));
+    }
+    return hint;
+  }
   if (const auto* type = schema.find("type")) {
-    if (type->is_string())
-      return matches(type->get_str());
-    if (type->is_array())
-      return std::ranges::any_of(type->items(), [&](const auto& item) {
-        return item.is_string() && matches(item.get_str());
-      });
-    return false;
+    unsigned mask = 0;
+    if (type->is_string()) {
+      mask = JsonType(type->str());
+    } else if (type->is_array()) {
+      for (const auto& item : type->items()) {
+        if (!item.is_string() || JsonType(item.str()) == 0)
+          return {.resolution = Resolution::kUnsupported};
+        mask |= JsonType(item.str());
+      }
+    }
+    if (mask == 0)
+      return {.resolution = Resolution::kUnsupported};
+    hint.types &= mask;
   }
-  for (const auto* name : {"anyOf", "oneOf"}) {
-    if (const auto* choices = schema.find(name); choices && choices->is_array())
-      return std::ranges::any_of(choices->items(), [&](const auto& item) {
-        return SchemaAccepts(item, value);
-      });
+  for (const auto* rule : {"anyOf", "oneOf", "allOf"}) {
+    if (const auto* choices = schema.find(rule)) {
+      if (!choices->is_array() || choices->empty())
+        return {.resolution = Resolution::kUnsupported};
+      const bool intersection = std::string_view(rule) == "allOf";
+      TypeHint combined{.types = intersection ? kAllTypes : 0};
+      for (const auto& branch : choices->items()) {
+        const auto resolved =
+            ResolveDeclaredTypes(root, branch, {}, path, budget);
+        if (resolved.resolution != Resolution::kResolved)
+          return resolved;
+        if (intersection)
+          combined.types &= resolved.types;
+        else
+          combined.types |= resolved.types;
+      }
+      hint.Intersect(combined);
+    }
   }
-  return true;
+  return hint;
 }
 
 void ParseQwenCalls(std::string_view text,
@@ -964,22 +1177,21 @@ void ParseQwenCalls(std::string_view text,
           break;
         }
         const auto value = StripFramingNewlines(body.substr(0, close));
-        const auto* properties = schema ? schema->find("properties") : nullptr;
-        const auto* property = properties ? properties->find(name) : nullptr;
-        const bool string_allowed =
-            !property ||
-            SchemaAccepts(*property, json::Value(std::string(value)));
+        std::size_t budget = 128;
+        const auto hint =
+            schema ? ResolveDeclaredTypes(*schema, *schema, name, {}, &budget)
+                   : TypeHint{};
         // Prefer text if the schema permits it; parsing ambiguous scalars
         // as JSON would silently change a caller's declared string type.
-        const bool is_string = string_allowed;
+        const bool is_string = hint.PreferString();
         std::string raw(is_string ? value : Trim(value));
         if (!is_string) {
           auto parsed = TryParseJson(raw);
-          if (!parsed || !SchemaAccepts(*property, *parsed)) {
+          if (!parsed || !hint.Accepts(*parsed)) {
             raw = PythonLiteralsToJson(raw);
             parsed = TryParseJson(raw);
           }
-          if (!parsed || !SchemaAccepts(*property, *parsed)) {
+          if (!parsed || !hint.Accepts(*parsed)) {
             valid = false;
             break;
           }
