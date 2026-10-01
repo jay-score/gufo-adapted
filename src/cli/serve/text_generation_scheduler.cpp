@@ -14,6 +14,7 @@
 #include <thread>
 #include <utility>
 
+#include "src/cli/serve/generation_metrics.hpp"
 #include "src/cli/serve/stop_sequences.hpp"
 
 namespace gufo::server {
@@ -89,6 +90,8 @@ struct ScheduledRequest {
   std::condition_variable output_condition;
   std::deque<std::string> output_pieces;
   std::size_t buffered_output_bytes{0};
+  // Only the scheduler worker changes this, from admission through cleanup.
+  bool counted_processing{false};
   std::exception_ptr failure;
   bool terminal{false};
 };
@@ -120,6 +123,9 @@ void PublishTerminal(const std::shared_ptr<ScheduledRequest>& request,
     }
     request->failure = std::move(failure);
     request->terminal = true;
+    if (std::exchange(request->counted_processing, false)) {
+      detail::RequestsProcessing().fetch_sub(1, std::memory_order_relaxed);
+    }
     request->phase.store(TextRequestPhase::kTerminal,
                          std::memory_order_release);
   }
@@ -246,6 +252,15 @@ struct TextGenerationScheduler::Impl {
   Impl(Impl&&) = delete;
   Impl& operator=(Impl&&) = delete;
 
+  /// Keeps the process-wide deferred gauge in step. Requires queue_mutex.
+  void SetQueuedCountLocked(std::size_t count) {
+    detail::RequestsDeferred().fetch_add(
+        static_cast<std::int64_t>(count) -
+            static_cast<std::int64_t>(queued_count),
+        std::memory_order_relaxed);
+    queued_count = count;
+  }
+
   [[nodiscard]] std::shared_ptr<ScheduledRequest> PopQueued() {
     const std::lock_guard<std::mutex> lock(queue_mutex);
     if (queued_clients.empty()) {
@@ -255,7 +270,11 @@ struct TextGenerationScheduler::Impl {
     queued_clients.pop_front();
     auto request = std::move(client.requests.front());
     client.requests.pop_front();
-    --queued_count;
+    // Admission reserves a session before potentially slow cache preparation.
+    // Publish the transfer before removing it from the deferred count.
+    request->counted_processing = true;
+    detail::RequestsProcessing().fetch_add(1, std::memory_order_relaxed);
+    SetQueuedCountLocked(queued_count - 1);
     if (!client.requests.empty()) {
       queued_clients.push_back(std::move(client));
     }
@@ -273,7 +292,7 @@ struct TextGenerationScheduler::Impl {
         continue;
       }
       client->requests.erase(queued);
-      --queued_count;
+      SetQueuedCountLocked(queued_count - 1);
       if (client->requests.empty()) {
         queued_clients.erase(client);
       }
@@ -512,6 +531,8 @@ struct TextGenerationScheduler::Impl {
           std::chrono::duration<double, std::milli>(Clock::now() - start)
               .count();
       request->result.prefill_tokens += step.consumed_tokens;
+      detail::TotalPromptTokens().fetch_add(step.consumed_tokens,
+                                            std::memory_order_relaxed);
       ++request->result.prefill_chunks;
       request->result.max_prefill_chunk_tokens = std::max(
           request->result.max_prefill_chunk_tokens, step.consumed_tokens);
@@ -613,6 +634,7 @@ struct TextGenerationScheduler::Impl {
     }
     request->generated_output_bytes += selection.piece.size();
     request->result.tokens.push_back(selection.token);
+    detail::TotalGenTokens().fetch_add(1, std::memory_order_relaxed);
     const auto piece = request->stop_filter.enabled()
                            ? request->stop_filter.Push(selection.piece)
                            : selection.piece;
@@ -1041,7 +1063,7 @@ struct TextGenerationScheduler::Impl {
                   std::back_inserter(remaining_queued));
       }
       queued_clients.clear();
-      queued_count = 0;
+      SetQueuedCountLocked(0);
     }
     for (const auto& request : remaining_queued) {
       CompleteCancelled(request);
@@ -1374,6 +1396,7 @@ TextGenerationScheduler::Request TextGenerationScheduler::Submit(
   request->client_id =
       metadata.client_id.empty() ? "anonymous" : std::move(metadata.client_id);
   request->result.prompt_tokens = prompt.size();
+  request->result.token_metrics_recorded = true;
   request->result.client_id = request->client_id;
   request->result.configured_active_prefill_tokens =
       impl_->prefill_policy.decode_active_tokens;
@@ -1434,7 +1457,7 @@ TextGenerationScheduler::Request TextGenerationScheduler::Submit(
     request->result.queue_depth_at_submit = impl_->queued_count + 1;
     request->result.client_queue_depth_at_submit = client->requests.size() + 1;
     client->requests.push_back(request);
-    ++impl_->queued_count;
+    impl_->SetQueuedCountLocked(impl_->queued_count + 1);
   }
   impl_->queue_condition.notify_one();
   return Request(std::make_unique<Request::Impl>(std::move(request)));

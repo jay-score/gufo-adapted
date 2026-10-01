@@ -709,8 +709,13 @@ conversations are not implemented.
 ## Metrics
 
 `/metrics` exposes total prompt/generated tokens and the latest prompt/decode
-speeds. `Server-Timing`, generation `timings`, and Chat Completions
-`usage.gufo` provide request-level measurements. The legacy KV-utilization
+speeds. The token counters advance as each prefill chunk and generated token
+executes, so their rates show live throughput; prompt tokens exclude cache
+hits. `llamacpp:requests_processing` counts admitted requests, including cache
+preparation and cleanup; `llamacpp:requests_deferred` counts requests waiting
+for a session. The speed gauges retain the latest nonzero request rates.
+`Server-Timing`, generation `timings`, and Chat Completions `usage.gufo`
+provide request-level measurements. The legacy KV-utilization
 metric and `/slots`/`/props` metadata are placeholders; do not use them for
 capacity or admission decisions.
 
