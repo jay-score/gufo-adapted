@@ -727,7 +727,30 @@ void TestEmptyReasoningReplayChangesThinkingSuffixTokens() {
 
 }  // namespace
 
+void TestHistoricalToolNames() {
+  using namespace gufo::tokenization;
+  for (const auto& name :
+       {std::string("outil_traçage"), std::string("old>\"<name\\\n")}) {
+    ChatMessage assistant{ChatRole::kAssistant, "", "", ""};
+    assistant.tool_calls.push_back(
+        {.id = "past", .name = name, .arguments = {}});
+    ChatMessage result{ChatRole::kTool, "done"};
+    result.tool_call_id = "past";
+    const std::vector<ChatMessage> messages{
+        {ChatRole::kUser, "continue", "", ""}, assistant, result};
+    const auto rendered =
+        QwenChatTemplate::Render(messages, ChatTemplateOptions{});
+    Expect(rendered &&
+               rendered->find("<function=" + name + ">") != std::string::npos &&
+               rendered->find("<tool_response>\ndone\n</tool_response>") !=
+                   std::string::npos &&
+               rendered->find("# Tools") == std::string::npos,
+           "Historical names render verbatim without declaring callable tools");
+  }
+}
+
 int main() {
+  TestHistoricalToolNames();
   std::cout << "Running QwenChatTemplate unit tests...\n";
   TestBasicChatRendering();
   TestThinkingFraming();

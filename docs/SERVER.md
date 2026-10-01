@@ -590,11 +590,15 @@ and template-aware message counting are not implemented.
   which frame a rendered call; dotted and namespaced names such as
   `github.create_issue` are accepted. OpenAI itself documents a narrower set
   for this field, so a name outside `[A-Za-z0-9_-]` is portable to gufo but not
-  to every OpenAI-compatible service. The same name rule applies to an
-  assistant `tool_calls` entry that replays a call. Unsupported tool types,
+  to every OpenAI-compatible service. Historical names in assistant
+  `tool_calls` and Responses `function_call` items are preserved verbatim,
+  including Unicode and names absent from current tools. This does not
+  authorize new calls to them. History requires a non-empty string name,
+  without embedded NUL, and string arguments encoding a JSON object.
+  Unsupported tool types,
   malformed entries, unrenderable declared names and non-object parameters
   return 400 `invalid_tools` before generation; because messages parse first,
-  an unrenderable name in a replayed call returns 400 `invalid_messages`.
+  malformed Chat Completions history returns 400 `invalid_messages`.
 - shared top-k, min-p, repeat, frequency and presence sampling controls
 
 Streaming objects use `chat.completion.chunk` and end with the compatibility

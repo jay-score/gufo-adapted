@@ -226,12 +226,14 @@ bool ParseContent(const json::Value* content,
   return true;
 }
 
-// A tool name reaches the Qwen and DeepSeek renderers unescaped, inside
+// Declared tool names reach the Qwen and DeepSeek renderers unescaped, inside
 // "<function=NAME>" and "name=\"NAME\"", so the characters that frame a call
 // are excluded. The dots, colons and slashes that agent harnesses give bridged
 // tool names are data and are kept. Non-ASCII bytes are excluded as well: a
 // name is placed in a prompt the model reads and in operator logs, where
 // confusable and invisible characters buy a client nothing.
+// Historical names describe past output and are preserved by the renderers;
+// they do not declare tools the model is allowed to call now.
 constexpr std::string_view kToolNameRule =
     "function names require 1-64 printable ASCII characters other than "
     "spaces, '<', '>', '\"' and '\\'";
@@ -267,6 +269,27 @@ bool ParseArguments(std::string_view arguments,
     });
   }
   return true;
+}
+
+bool ParseHistoricalFunction(const json::Value& function,
+                             tokenization::ChatMessage::ToolCall* call,
+                             std::string* error) {
+  const auto* name = function.find("name");
+  const auto* arguments = function.find("arguments");
+  if (!name || !name->is_string() || name->str().empty() || !arguments ||
+      !arguments->is_string()) {
+    *error =
+        "historical function calls require a non-empty string name and "
+        "string arguments";
+    return false;
+  }
+  // NUL cannot pass through the DeepSeek tokenizer's C-string interface.
+  if (name->str().find('\0') != std::string::npos) {
+    *error = "historical function names cannot contain NUL";
+    return false;
+  }
+  call->name = name->str();
+  return ParseArguments(arguments->str(), &call->arguments, error);
 }
 
 bool ParseMessage(const json::Value& value, tokenization::ChatMessage* message,
@@ -321,19 +344,7 @@ bool ParseMessage(const json::Value& value, tokenization::ChatMessage* message,
     }
     tokenization::ChatMessage::ToolCall call;
     call.id = item.member_str("id");
-    call.name = function->member_str("name");
-    const std::string arguments = function->member_str("arguments");
-    // A replayed call is rendered like a fresh one, so it carries the same
-    // name rule: a name that cannot be framed is rejected wherever it enters.
-    if (!call.name.empty() && !RenderableToolName(call.name)) {
-      *error = std::string(kToolNameRule);
-      return false;
-    }
-    if (call.name.empty() || arguments.empty() ||
-        !ParseArguments(arguments, &call.arguments, error)) {
-      if (error->empty()) {
-        *error = "assistant tool calls require a name and JSON arguments";
-      }
+    if (!ParseHistoricalFunction(*function, &call, error)) {
       return false;
     }
     message->tool_calls.push_back(std::move(call));
@@ -2080,10 +2091,7 @@ bool ParseOpenAiResponseChat(const json::Value& body, ChatRequest* chat,
       message.role = tokenization::ChatRole::kAssistant;
       tokenization::ChatMessage::ToolCall call;
       call.id = item.member_str("call_id");
-      call.name = item.member_str("name");
-      const auto arguments = item.member_str("arguments");
-      if (call.id.empty() || call.name.empty() || arguments.empty() ||
-          !ParseArguments(arguments, &call.arguments, error))
+      if (call.id.empty() || !ParseHistoricalFunction(item, &call, error))
         return false;
       message.tool_calls.push_back(std::move(call));
     } else if (type == "function_call_output") {

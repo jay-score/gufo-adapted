@@ -36,6 +36,25 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-01 — Historical function-name preservation
+
+- Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)
+  (PR #373).
+- Local: commit introducing this entry.
+- Adaptation: shared historical-function parsing for Chat Completions and
+  Responses. Preserves non-empty string names except embedded NUL and requires
+  JSON-object arguments. Declaration rules and generated-call allowlists remain
+  intact. The native renderers retain historical names verbatim, including
+  delimiter-bearing names; this is history preservation, not escaping or new
+  invocation authorization. No upstream grammar or renderer changes imported.
+- Areas: API parser, API fixtures, Qwen/DeepSeek template fixtures and server
+  contracts.
+- Validation: new history fixture failed against the previous parser. Fresh
+  Windows CPU API and Qwen/DeepSeek template targets passed after adaptation;
+  existing stateless grouping, call/result identity and image-order fixtures
+  remain covered. Linux and real-model agent qualification remain outstanding.
+- Status: retained.
+
 ### 2026-10-01 — Disabled-tool marker delivery
 
 - Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)

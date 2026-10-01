@@ -341,7 +341,26 @@ void TestPinnedArtifactTemplateValidation() {
 
 }  // namespace
 
+void TestHistoricalToolNames() {
+  for (const auto& name :
+       {std::string("outil_traçage"), std::string("old>\"<name\\\n")}) {
+    const std::vector<ChatMessage> messages{
+        {.role = "user", .content = "continue"},
+        {.role = "assistant",
+         .tool_calls = {{.name = name, .arguments = {}, .id = "past"}}},
+        {.role = "tool", .content = "done", .tool_call_id = "past"}};
+    const auto rendered = gufo::models::deepseek_v4_flash::RenderChat(messages);
+    Expect(
+        rendered.find("invoke name=\"" + name + "\">") != std::string::npos &&
+            rendered.find("<tool_result>done</tool_result>") !=
+                std::string::npos &&
+            rendered.find("### Available Tool Schemas") == std::string::npos,
+        "Historical names render verbatim without declaring callable tools");
+  }
+}
+
 int main() {
+  TestHistoricalToolNames();
   {
     const std::vector<ChatMessage> messages{
         {.role = "user", .content = "Emit."}};

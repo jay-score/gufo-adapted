@@ -635,10 +635,7 @@ void TestToolNameCharacters() {
            "The same name is accepted when a message replays a call");
   }
 
-  // The Qwen and DeepSeek renderers append a name verbatim, so a name that
-  // frames a call is refused at both entry points rather than corrupting one.
-  // Non-ASCII is refused with them: a confusable name reaches the prompt and
-  // the operator's logs, where it can only mislead.
+  // Declarations retain their framing rules; history preserves past names.
   const std::vector<std::string> unrenderable{"bad>name",
                                               "bad<name",
                                               "bad\"name",
@@ -663,16 +660,12 @@ void TestToolNameCharacters() {
 
     if (name.empty())
       continue;  // An empty replayed name has its own error message.
-    // Messages parse before tools, so a replayed name reports the message
-    // code. Both routes refuse the name; only the code differs.
     FakeBackend replayed;
     const auto replay_response =
         gufo::server::HandleOpenAiChat(Request(replay(name)), replayed);
-    Expect(replay_response.status == 400 &&
-               replay_response.body.find("invalid_messages") !=
-                   std::string::npos &&
-               replayed.chat_calls == 0,
-           "An unrenderable replayed name fails with invalid_messages");
+    Expect(replay_response.status == 200 && replayed.chat_calls == 1 &&
+               replayed.last_request.messages[1].tool_calls[0].name == name,
+           "Historical names are retained even when invalid as declarations");
   }
 }
 
@@ -2426,7 +2419,92 @@ void TestDisabledToolMarkers() {
   }
 }
 
+void TestHistoricalFunctions() {
+  using gufo::json::parse;
+  using gufo::json::Value;
+  const auto base = parse(R"({"model":"test-model",
+    "messages":[{"role":"user","content":"continue"}],
+    "tools":[{"type":"function","function":{"name":"f"}}]})");
+  const auto history = [](const Value& name, const Value& arguments,
+                          bool responses) {
+    auto item = responses
+                    ? parse(R"({"type":"function_call","call_id":"past"})")
+                    : parse(R"({"id":"past","type":"function","function":{}})");
+    auto* function = responses ? &item : &item["function"];
+    (*function)["name"] = name;
+    (*function)["arguments"] = arguments;
+    return item;
+  };
+  const auto request = [&](const Value& name, const Value& arguments,
+                           bool responses) {
+    auto body = base;
+    if (responses) {
+      body["input"] = Value::array();
+      body["input"].push_back(history(name, arguments, true));
+      body["input"].push_back(parse(R"({"type":"function_call_output",
+        "call_id":"past","output":"done"})"));
+    } else {
+      auto assistant = parse(R"({"role":"assistant","tool_calls":[]})");
+      assistant["tool_calls"].push_back(history(name, arguments, false));
+      body["messages"].push_back(std::move(assistant));
+      body["messages"].push_back(parse(R"({"role":"tool",
+        "tool_call_id":"past","content":"done"})"));
+    }
+    return body;
+  };
+  for (bool responses : {false, true}) {
+    for (const auto& name :
+         {std::string("retired"), std::string("outil_traçage"),
+          std::string("old>\"<name\\\n"), std::string(65, 'n')}) {
+      FakeBackend backend;
+      const auto body = request(name, "{\"path\":\"a.txt\"}", responses);
+      gufo::server::ChatRequest chat;
+      if (responses) {
+        chat = ResponseChat(body);
+      } else {
+        Expect(gufo::server::HandleOpenAiChat(Request(body.dump()), backend)
+                       .status == 200,
+               "Historical function names are accepted");
+        chat = backend.last_request;
+      }
+      const auto index = responses ? 0 : 1;
+      Expect(chat.messages[index].tool_calls[0].name == name &&
+                 chat.messages[index].tool_calls[0].id == "past" &&
+                 chat.messages[index + 1].tool_call_id == "past" &&
+                 chat.messages[index + 1].name == (responses ? name : ""),
+             "Historical names and result identity survive replay");
+      Expect(chat.tools.size() == 1 && chat.tools[0].name == "f",
+             "History does not add current declarations");
+    }
+    for (const auto& pair : std::vector<std::pair<Value, Value>>{
+             {"", "{}"},
+             {42, "{}"},
+             {Value(), "{}"},
+             {std::string("bad\0name", 8), "{}"},
+             {"past", 42},
+             {"past", "[]"},
+             {"past", "null"},
+             {"past", "{"},
+             {"past", "{\"text\":\"raw\nnewline\"}"}}) {
+      const auto body = request(pair.first, pair.second, responses);
+      FakeBackend backend;
+      if (responses) {
+        gufo::server::ChatRequest chat;
+        std::string error;
+        Expect(!gufo::server::ParseOpenAiResponseChat(body, &chat, &error),
+               "Malformed Responses function history is rejected");
+      } else {
+        Expect(gufo::server::HandleOpenAiChat(Request(body.dump()), backend)
+                           .status == 400 &&
+                   backend.chat_calls == 0,
+               "Malformed Chat Completions history fails before generation");
+      }
+    }
+  }
+}
+
 int main() {
+  TestHistoricalFunctions();
   TestDisabledToolMarkers();
   TestStopSequencesAndDefaultFields();
   TestExplicitStopOutputFraming();
