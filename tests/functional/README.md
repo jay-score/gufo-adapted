@@ -53,12 +53,16 @@ draft limit for this suite. Audio and image/video generation have separate tests
 | `sampling-defaults`, `sampling-ranges` | CLI/request overrides, partial/null settings and range validation |
 | `batch` | Independent requests across Chat, Responses and Completions; sessions 1–8 |
 | `long-context` | Longer multi-turn recall, endpoint switching, sampled JSON and cancellation |
+| `metrics` | Live Prometheus counters, uncached work, endpoint totals, queueing and cancellation |
 | `cache` | Interrupted text/thinking/tool/image histories, RAM and disk restart |
 
 Repeat `--suite` to select affected tests; `--suite all` explicitly runs all. For long
 contexts, use server `--context 32768`; actual prompt depth is recorded. `cache`
 uses its own 8 GiB disk budget and 1 GiB staging area inside the output directory.
 Model runs stay outside hosted CI; CI checks the runner and measurement logic.
+For metrics changes, run `--suite metrics` with AR and the affected speculative
+mode. It checks all three text endpoints and reconciles cancelled work with the
+terminal logs. Scrapes are not recorded as generation requests.
 
 Every request checks its applicable response format, expected output and timings.
 Missing measurements fail. `comparison.json` reports per-request prefill, decode,

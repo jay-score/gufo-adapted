@@ -507,6 +507,65 @@ void TestFramingAndMetrics() {
   assert(timings->member_double("prompt_per_token_ms") == 2);
 }
 
+void TestFallbackBackendMetrics() {
+  namespace metrics = gufo::server::detail;
+  RunningServer server;
+  struct Endpoint {
+    const char* path;
+    const char* body;
+  };
+  for (const auto& endpoint : {
+           Endpoint{"/v1/chat/completions",
+                    R"({"messages":[{"role":"user","content":"hi"}]})"},
+           Endpoint{"/v1/completions", R"({"prompt":"hi"})"},
+           Endpoint{"/v1/responses", R"({"input":"hi"})"},
+       }) {
+    for (const bool stream : {false, true}) {
+      const auto prompt_before = metrics::TotalPromptTokens().load();
+      const auto generated_before = metrics::TotalGenTokens().load();
+      auto body = gufo::json::parse(endpoint.body);
+      body["model"] = "test";
+      body["stream"] = stream;
+      ExpectStatus(server.Post(endpoint.path, body.dump()), 200);
+      const auto response = server.Send("GET /metrics HTTP/1.1\r\n\r\n");
+      ExpectStatus(response, 200);
+      // The backend reports 10 prompt tokens, of which 8 were cached.
+      assert(response.find("llamacpp:prompt_tokens_total " +
+                           std::to_string(prompt_before + 2) + "\n") !=
+             std::string::npos);
+      assert(response.find("llamacpp:tokens_predicted_total " +
+                           std::to_string(generated_before + 1) + "\n") !=
+             std::string::npos);
+    }
+  }
+  struct Case {
+    std::size_t prefill, cached;
+    bool cancelled;
+    std::size_t expected_prompt;
+  };
+  for (const auto& test : {
+           Case{6, 4, false, 6},
+           Case{0, 4, false, 6},
+           Case{0, 10, false, 0},
+           Case{0, 20, false, 0},
+           Case{0, 0, true, 0},
+           Case{3, 0, true, 3},
+       }) {
+    const auto prompt_before = metrics::TotalPromptTokens().load();
+    const auto generated_before = metrics::TotalGenTokens().load();
+    TextGenerationBackend::Result result;
+    result.prompt_tokens = 10;
+    result.cached_prompt_tokens = test.cached;
+    result.prefill_tokens = test.prefill;
+    result.completion_tokens = 2;
+    result.cancelled = test.cancelled;
+    gufo::server::RecordServerMetrics(result);
+    assert(metrics::TotalPromptTokens().load() ==
+           prompt_before + test.expected_prompt);
+    assert(metrics::TotalGenTokens().load() == generated_before + 2);
+  }
+}
+
 void TestCompatibilityRequests() {
   RunningServer server;
   using gufo::json::parse;
@@ -1157,6 +1216,7 @@ int main() {
   TestQueryParameters();
   TestAuthorization();
   TestFramingAndMetrics();
+  TestFallbackBackendMetrics();
   TestCompatibilityRequests();
   TestRawCompletionStreaming();
   TestCompatibilityStopSequences();

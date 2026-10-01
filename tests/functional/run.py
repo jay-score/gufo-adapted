@@ -29,7 +29,7 @@ from metrics import compare, comparison_status, join_server_timings, timing_meas
 TESTS = Path(__file__).resolve().parent
 SUITES = ("responses", "stops", "conversation", "structured", "structured-limits",
           "tools", "auto-tools", "tool-edges", "sampling-defaults", "sampling-ranges", "batch",
-          "long-context", "state-edges", "cache")
+          "long-context", "state-edges", "metrics", "cache")
 SAMPLING = {
     "--temperature": ("temperature", float), "--top-p": ("top_p", float),
     "--top-k": ("top_k", int), "--min-p": ("min_p", float),
@@ -45,7 +45,7 @@ COMPARISON_FIELDS = ("comparison_command", "sampling_preset", "sampling_override
 
 def provenance():
     source = hashlib.sha256()
-    for name in ("run.py", "metrics.py", "openai_sdk.py", "continuation.py"):
+    for name in ("run.py", "metrics.py", "server_metrics.py", "openai_sdk.py", "continuation.py"):
         source.update((TESTS / name).read_bytes())
     lock = TESTS.parents[1] / "flake.lock"
     kernel_command = Path("/proc/cmdline")
@@ -386,7 +386,11 @@ def main():
     try:
         join_server_timings(output)
         report["execution"] = execution_coverage(output, speculative)
-    except (ValueError, OSError) as error:
+        if ("metrics" in selected and through_suite != "metrics"
+                and report["suites"]["metrics"]["status"] == "passed"):
+            from server_metrics import validate_metrics_report
+            report["metric_accounting"] = validate_metrics_report(output)
+    except (ValueError, OSError, KeyError, AssertionError) as error:
         report.update(status="failed", measurements_error=str(error))
     report["functional_status"] = report["status"]
     report["completed_ns"] = time.time_ns()

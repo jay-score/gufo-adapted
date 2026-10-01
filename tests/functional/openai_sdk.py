@@ -2080,9 +2080,121 @@ def check_responses(client, model, checks, options, async_local_only, expect_rea
     checks["async_concurrent"] = asyncio.run(concurrent())
 
 
+def check_server_metrics(client, model, checks, width):
+    from server_metrics import (ServerMetrics, assert_accounting, PROMPT, GENERATED,
+                                PROCESSING, DEFERRED, PROMPT_SPEED, GENERATED_SPEED)
+
+    metrics = ServerMetrics(client.base_url)
+    initial = metrics.idle()
+    assert metrics.read("/v1/metrics") == initial
+    prompt = "Count from one to one hundred, with no explanation."
+    common = dict(model=model, temperature=0, seed=42, max_completion_tokens=16,
+                  messages=[{"role": "user", "content": prompt}],
+                  extra_body={"presence_penalty": 0, "cache_prompt": True,
+                              "chat_template_kwargs": {"enable_thinking": False}})
+
+    def completed(name, operation):
+        before = metrics.idle()
+        start = len(checks.recorder.rows)
+        result = operation()
+        after = metrics.idle()
+        rows = checks.recorder.rows[start:]
+        assert rows, "accounting check performed no requests"
+        assert_accounting(before, after, rows)
+        checks[name] = {"before": before, "after": after, "result": result}
+        return result, rows, after
+
+    first, _, cold = completed(
+        "metrics_chat_cold", lambda: chat_result(client, common))
+    replay, rows, warm = completed(
+        "metrics_chat_stream_cached", lambda: chat_result(client, common, True))
+    assert first["text"] == replay["text"] and first["reasoning"] == replay["reasoning"]
+    assert rows[0]["metrics"]["cached_tokens"] > 0 and rows[0]["metrics"]["prefill_tokens"] == 0
+    assert warm[PROMPT_SPEED] == cold[PROMPT_SPEED] > 0
+    assert warm[GENERATED_SPEED] > 0
+
+    for streaming in (False, True):
+        def response():
+            request = dict(model=model, input=prompt, temperature=0, max_output_tokens=16,
+                           reasoning={"effort": "none"}, store=False,
+                           extra_body={"seed": 42, "presence_penalty": 0})
+            if streaming:
+                with client.responses.create(**request, stream=True) as stream:
+                    events = list(stream)
+                return check_events(events, False)
+            return check_response(client.responses.create(**request), False)
+        completed(f"metrics_responses_stream{streaming}", response)
+        completed(f"metrics_completions_stream{streaming}", lambda: completion_result(
+            client, dict(model=model, prompt="One, two, three,", temperature=0,
+                         seed=42, max_tokens=16), streaming))
+
+    # Stop-filtered text still accounts for generated tokens, including the
+    # withheld stop sequence. Match server usage, not retokenized visible text.
+    assert first["text"], first
+    completed("metrics_stop", lambda: chat_result(
+        client, {**common, "stop": first["text"][:1]}, True))
+
+    def rejected():
+        try:
+            client.chat.completions.create(**{**common, "top_p": 2})
+        except openai.BadRequestError as error:
+            return {"status": error.status_code}
+        raise AssertionError("invalid sampling request was accepted")
+    completed("metrics_rejected_request", rejected)
+
+    # Exercise live totals and the deferred gauge with every session occupied.
+    # A long constrained value prevents model-specific early EOS. Disconnect
+    # after observing admission; do not finish generating this value.
+    before = metrics.idle()
+    ready = [threading.Event() for _ in range(width)]
+    release = threading.Event()
+    live = {**common, "max_completion_tokens": 2048, "response_format": {
+        "type": "json_schema", "json_schema": {"name": "busy", "strict": True,
+        "schema": {"type": "object", "properties": {"text": {
+            "type": "string", "const": "tick " * 2048}},
+            "required": ["text"], "additionalProperties": False}}}}
+
+    def hold(index):
+        request = {**live, "messages": [{"role": "user", "content":
+                   f"Request {index}: emit the required JSON object."}]}
+        with client.chat.completions.create(**request, stream=True) as stream:
+            for chunk in stream:
+                if any(choice.delta.content for choice in chunk.choices):
+                    ready[index].set()
+                if release.is_set():
+                    return {"cancelled": True}
+        raise AssertionError("live accounting request finished before cancellation")
+
+    with ThreadPoolExecutor(width + 1) as pool:
+        active = [pool.submit(hold, index) for index in range(width)]
+        try:
+            for event in ready:
+                assert event.wait(30), "live stream did not start"
+            busy = metrics.wait(lambda m: m[PROCESSING] == width and m[GENERATED] > before[GENERATED]
+                                and m[PROMPT] > before[PROMPT], "live token accounting")
+            assert busy[DEFERRED] == 0, busy
+            queued_start = len(checks.recorder.rows)
+            queued = pool.submit(chat_result, client, common, True)
+            waiting = metrics.wait(lambda m: m[DEFERRED] == 1 and m[PROCESSING] == width,
+                                   "one queued request")
+        finally:
+            release.set()
+        cancelled = [future.result(timeout=30) for future in active]
+        result = queued.result(timeout=30)
+    after = metrics.idle()
+    assert after[GENERATED] >= waiting[GENERATED]
+    assert all(row["status"] == "complete" for row in checks.recorder.rows[queued_start:])
+    checks["metrics_live_queue_cancel"] = {
+        "before": before, "busy": busy, "queued": waiting, "after": after,
+        "cancelled": cancelled, "completed_peer": result}
+    # Cancellation must not leave stale gauge ownership or double-count the
+    # completed peer when the next request reuses its prompt.
+    completed("metrics_after_cancel_cached", lambda: chat_result(client, common))
+
+
 SDK_SUITES = ("responses", "stops", "conversation", "structured", "structured-limits",
               "tools", "auto-tools", "tool-edges", "sampling-defaults", "sampling-ranges", "batch",
-              "long-context", "state-edges")
+              "long-context", "state-edges", "metrics")
 
 
 def main():
@@ -2164,6 +2276,7 @@ def main():
                 client, args.model, checks, args.concurrency, args.vision, args.speculative),
             "long-context": lambda: check_long_context(
                 client, args.model, checks, args.context, args.vision),
+            "metrics": lambda: check_server_metrics(client, args.model, checks, args.concurrency),
         }
         selected = (list(suites) if args.suite == "all" else
                     ["native-tools", "auto-tools"] if args.suite == "tools" else [args.suite])

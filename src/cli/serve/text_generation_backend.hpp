@@ -196,6 +196,8 @@ public:
     bool cache_hit{false};
     bool cache_disk_hit{false};
     bool cancelled{false};
+    /// Internal: token totals were already recorded during execution.
+    bool token_metrics_recorded{false};
   };
 
   class GenerationRequest {
