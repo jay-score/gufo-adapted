@@ -108,12 +108,17 @@ the assistant turn verbatim:
 | 3 | 5,620 | 5,320 | 300 | live frontier from turn 2 |
 
 Now change one thing: edit the *last user message* of turn 3 and resend. The
-first 5,320 tokens are byte-identical, but the divergence falls after the last
-retained checkpoint, so there is nothing to resume from:
+first 5,320 tokens are byte-identical. The longest usable retained checkpoint
+wins, which can be the previous turn's frontier. If the longest usable
+checkpoint is instead the intermediate position at 4,096 tokens, that prefix
+can be restored and only the suffix is prefilled. If earlier checkpoints have
+been evicted or refused by the byte budget,
+and all remaining checkpoints fall after the edit, reuse is impossible:
 
 | Turn | Prompt | Reused | Prefilled | Common prefix |
 | --- | ---: | ---: | ---: | ---: |
-| 3' | 5,620 | 0 | 5,620 | 5,599 |
+| 3', intermediate checkpoint retained | 5,620 | 4,096 | 1,524 | 5,599 |
+| 3', no usable earlier checkpoint | 5,620 | 0 | 5,620 | 5,599 |
 
 That gap between "common prefix" and "reused" is the signature of the
 exact-prefix limitation. See #331.
@@ -121,35 +126,44 @@ exact-prefix limitation. See #331.
 ## What gets retained
 
 The unit of retention is a **checkpoint**, not a conversation. A single request
-can retain three: the frontier it reused, frozen before prefill mutates it,
-its own stable boundary before mutable assistant framing, and its complete
-prompt. A warm turn stops once at its stable boundary to capture that state
-before processing the assistant opening.
+can retain up to four intermediate checkpoints in addition to its branching
+fallback and complete prompt. Prefill stops at those positions and captures the
+whole model state before advancing. Positions lie on a 2,048-token grid spread
+across the prompt; the final grid point is within 2,048 tokens of its end.
+Warm continuations capture only positions beyond the reused frontier. They
+also retain their stable boundary before mutable assistant framing, preserving
+reuse when a client drops reasoning from the next history replay. Admission
+remains subject to the existing byte budget, and intermediate copies preserve
+the original branching fallback. These intermediate checkpoints live in RAM;
+the disk tier continues to retain prompt and learned shared-prefix boundaries.
 
-The entry table holds `sessions x 3` entries. The first `sessions` of them own
+The entry table holds `sessions x 6` entries. The first `sessions` of them own
 a real session state and are the only ones a request can execute in; the rest
 exist purely to hold snapshots.
 
 ```mermaid
 flowchart TB
-  subgraph T["Entry table with --sessions 2: 6 entries"]
+  subgraph T["Entry table with --sessions 2: 12 entries"]
     direction LR
     S0["entry 0<br/>session state<br/>+ snapshot"]
     S1["entry 1<br/>session state<br/>+ snapshot"]
-    X2["entries 2–3<br/>snapshot only"]
-    X3["entries 4–5<br/>snapshot only"]
+    X2["entries 2–6<br/>snapshot only"]
+    X3["entries 7–11<br/>snapshot only"]
   end
-  C1["conversation A<br/>up to 3 checkpoints"] --> S0
+  C1["conversation A<br/>up to 6 checkpoints"] --> S0
   C1 --> X2
-  C2["conversation B<br/>up to 3 checkpoints"] --> S1
+  C2["conversation B<br/>up to 6 checkpoints"] --> S1
   C2 --> X3
 ```
 
-Three entries allow a warm turn to retain these checkpoints without allocating
-more execution sessions. This is an entry limit, not a guaranteed conversation
-count: checkpoint sizes, byte admission and global eviction also determine how
-much history remains resumable. Workloads with more retained histories than
-entries can still lose reuse under round-robin traffic. See #341.
+Six entries allow a long conversation to retain all four intermediate positions
+and endpoint checkpoints without allocating more execution sessions. Warm
+turns with a separate stable boundary share these six slots with intermediate
+positions; admission can evict an older checkpoint.
+This is an entry limit, not a guaranteed conversation count: checkpoint sizes,
+byte admission and global eviction also determine how much history remains
+resumable. Workloads with more retained histories than entries can still lose
+reuse under round-robin traffic. See #341.
 
 When entries are full, an edited branch prefers replacing an incompatible
 checkpoint after its reused prefix over evicting an earlier shared checkpoint.
@@ -160,7 +174,7 @@ admission, so optional copies cannot immediately displace that fallback.
 The limit is reported at startup:
 
 ```text
-event=snapshot_cache_configured sessions=2 snapshot_entries=6 capacity_bytes=99007139840
+event=snapshot_cache_configured sessions=2 snapshot_entries=12 capacity_bytes=99007139840
 ```
 
 ## Invariants

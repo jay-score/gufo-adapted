@@ -161,6 +161,19 @@ python tests/tools/cache_growth_test.py --url http://127.0.0.1:8080/v1 \
 This real-model check covers dropped reasoning, replayed reasoning and reasoning
 disabled. It sends requests to the selected server and is not part of CPU CI.
 
+Check edited and rewound histories separately on the same loaded server:
+
+```sh
+python tests/tools/cache_edits_test.py --url http://127.0.0.1:8080/v1 \
+  --model gufo --out build/cache-edits.json
+```
+
+This checks editing the latest user message, shortening an older tool result,
+and changing an earlier user message while dropping later turns. Each shape
+must reuse at least half its prompt, preserve exact unchanged retries, and match
+an uncached output control with reasoning disabled. It writes results even on
+failure; detailed checkpoint diagnostics remain in the server log.
+
 ## Performance evidence
 
 Compare identical model artifacts, prompt/output counts, context depths,

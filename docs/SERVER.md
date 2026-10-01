@@ -760,9 +760,11 @@ Cache capacity is a budget, not allocated memory.
 Snapshot-capable runners emit `event=snapshot_cache_configured` once at pool
 startup, reporting `sessions`, `snapshot_entries` and `capacity_bytes`.
 Warm requests can retain the reused frontier, their stable boundary and their
-complete prompt. The entry table holds three checkpoints per session; the byte
-budget and checkpoint sizes also limit retention. Session count is not a
-guaranteed conversation capacity.
+complete prompt, plus up to four intermediate positions on a 2,048-token
+grid for history edits. The entry table holds six checkpoints per session; all
+positions share this entry limit and the existing byte budget. Intermediate
+checkpoints live in RAM; the disk format and retention policy are unchanged.
+Session count is not a guaranteed conversation capacity.
 
 Loading logs report elapsed time, model, context and session capacity,
 speculative mode and memory. `rss_mib` is process resident memory;

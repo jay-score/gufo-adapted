@@ -97,13 +97,13 @@ def check_cache_growth(client, model, checks, chat_result):
     assert not failures, "\n".join(failures)
 
 
-def main():
+def main(check=check_cache_growth, description=__doc__):
     import argparse
     import json
     from pathlib import Path
     from urllib.request import Request, urlopen
 
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--url", default="http://127.0.0.1:8080/v1")
     parser.add_argument("--model", default="gufo")
     parser.add_argument("--out", type=Path, required=True,
@@ -127,11 +127,11 @@ def main():
 
     checks = {}
     try:
-        check_cache_growth(None, args.model, checks, chat_result)
+        check(None, args.model, checks, chat_result)
     finally:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(checks, indent=2) + "\n", encoding="utf-8")
-    print(f"Passed {len(checks)} real-model cache-growth checks")
+    print(f"Passed {len(checks)} real-model checks")
 
 
 if __name__ == "__main__":
