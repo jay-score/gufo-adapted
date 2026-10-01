@@ -36,8 +36,116 @@ Use this entry format:
 
 ## Recorded adaptations
 
-No entries have been recorded yet. Earlier imports have not been backfilled;
-absence from this record does not mean an upstream change is absent from the fork.
+### 2026-10-01 — Conversation history-edit checkpoints
+
+- Source: [gufo-org/gufo@0c350ed3ef5f8db9783385071ff05eec6bd687f1](https://github.com/gufo-org/gufo/commit/0c350ed3ef5f8db9783385071ff05eec6bd687f1)
+  and [gufo-org/gufo@840d3736012ebeb123472b2dc8ca39411084b05e](https://github.com/gufo-org/gufo/commit/840d3736012ebeb123472b2dc8ca39411084b05e)
+  (PR #362 branch work), plus grid deduplication from
+  [gufo-org/gufo@d8475862a1872ddbadefa281e0aee54350f18e9f](https://github.com/gufo-org/gufo/commit/d8475862a1872ddbadefa281e0aee54350f18e9f)
+  (PR #358).
+- Local: 733aee8a44ba0ccaaae9b4448e8b316f6265611b.
+- Adaptation: four bounded intermediate RAM checkpoints on a 2048-token grid
+  and six retained entry slots per execution session, within the existing byte
+  budget. Flash-Next snapshot pages are pre-faulted with bounded fault workers
+  before huge-page advice via the existing Windows madvise layer. Preserves the
+  fork's prefix-scoped image identity and the #358 warm-turn stable
+  boundary/source protection. The upstream history-edit and rewind regression
+  was adapted to a standalone stdlib HTTP check sharing the existing
+  cache-growth transport; the unrelated upstream functional SDK framework was
+  not imported.
+- Areas: `src/cli/serve/text_model_runner.cpp`,
+  `src/models/qwen38_flash_next/engine.cpp`,
+  `tests/cli/text_model_runner_test.cpp`, `tests/tools/cache_edits_test.py`,
+  `tests/tools/cache_growth_test.py`, `docs/KV-CACHE.md`, `docs/SERVER.md`,
+  `docs/TESTING.md`, `docs/models/qwen3.8-27b/EXPERIMENTS.md`,
+  `docs/models/qwen3.8-flash-next/EXPERIMENTS.md`.
+- Validation: CPU assertions and the `cache_edits_test.py` HTTP check were
+  added in-commit; run results were not verified while writing this entry.
+- Status: retained.
+
+### 2026-10-01 — Warm-turn stable checkpoints
+
+- Source: [gufo-org/gufo@d8475862a1872ddbadefa281e0aee54350f18e9f](https://github.com/gufo-org/gufo/commit/d8475862a1872ddbadefa281e0aee54350f18e9f)
+  including [gufo-org/gufo@492e5e1a948c5ac5456f850a7a128d0bee01e94c](https://github.com/gufo-org/gufo/commit/492e5e1a948c5ac5456f850a7a128d0bee01e94c)
+  (PR #358 branch work), plus only the `PublishSnapshot` source-preservation
+  API prerequisite from PR #362
+  ([gufo-org/gufo@0c350ed3ef5f8db9783385071ff05eec6bd687f1](https://github.com/gufo-org/gufo/commit/0c350ed3ef5f8db9783385071ff05eec6bd687f1)).
+- Local: 031d2891acf8ecc4a3027ffcccd84407c411b14b.
+- Adaptation: retains the turn's own stable boundary after freezing its reused
+  frontier, prefers replacement of incompatible branch tails, and guards
+  against concurrently replaced sources. Uses three checkpoint entries per
+  session (frontier, stable boundary, complete prompt) with unchanged byte
+  budgets and execution-state count; preserves the fork's prefix image identity
+  and Windows persistence behavior. Deferred the intermediate history
+  checkpoints (later covered by `733aee8`), the six-entry layout and
+  Flash-Next allocation changes. CPU regressions were ported and cache-growth
+  functional coverage was adapted into an explicit stdlib-only real-model
+  check instead of the absent upstream SDK framework.
+- Areas: `src/cli/serve/continuation_cache.cpp`,
+  `src/cli/serve/continuation_cache.hpp`,
+  `src/cli/serve/text_model_runner.cpp`,
+  `tests/cli/continuation_cache_test.cpp`,
+  `tests/cli/text_model_runner_test.cpp`, `tests/tools/cache_growth_test.py`,
+  `docs/KV-CACHE.md`, `docs/SERVER.md`, `docs/TESTING.md`.
+- Validation: ported CPU regressions and the `cache_growth_test.py` check were
+  added in-commit; run results were not verified while writing this entry.
+- Status: retained; extended by `733aee8` (intermediate checkpoints).
+
+### 2026-09-29 — Stable reasoning and image boundaries
+
+- Source: [gufo-org/gufo@8783ccbb2c4ed6ff5fc2f6e19d774ffd04eeea6e](https://github.com/gufo-org/gufo/commit/8783ccbb2c4ed6ff5fc2f6e19d774ffd04eeea6e)
+  (PR #301).
+- Local: dbdc36cb2fb14f16227babe0528822832c257944.
+- Adaptation: partial integration of the stable-boundary changes, preserving
+  this fork's image-prefix reuse and Windows tuning. Omitted upstream disk
+  image-prefix indexing and Qwen27B executor cancellation changes.
+- Areas: `src/cli/serve/inference_backend.cpp`,
+  `src/cli/serve/text_model_runner.cpp`, `src/models/qwen/chat_template.cpp`,
+  `src/models/qwen/chat_template.hpp`, `src/models/qwen/vision/prompt.cpp`,
+  `src/models/qwen/vision/prompt.hpp`, `tests/cli/text_model_runner_test.cpp`,
+  `tests/models/qwen27b/vision_test.cpp`,
+  `tools/serving/check-continuation.py`, `docs/SERVER.md`.
+- Validation: assertions added in `tests/cli/text_model_runner_test.cpp` and
+  `tests/models/qwen27b/vision_test.cpp` in-commit; run results were not
+  verified while writing this entry.
+- Status: retained.
+
+### 2026-09-29 — Fallback and full-prompt checkpoints
+
+- Source: [gufo-org/gufo@c362049c59e11a8fb998f5b2e0df2cfb8fac4c9c](https://github.com/gufo-org/gufo/commit/c362049c59e11a8fb998f5b2e0df2cfb8fac4c9c)
+  (PR #281).
+- Local: d25f30bf309cae50201495deba84c5991edbed22.
+- Adaptation: retains the earlier fallback plus a complete prompt checkpoint;
+  exact retries can avoid prefill without extra model sessions.
+- Areas: `src/cli/serve/continuation_cache.cpp`,
+  `src/cli/serve/continuation_cache.hpp`,
+  `src/cli/serve/continuation_disk_store.cpp`,
+  `src/cli/serve/continuation_disk_store.hpp`,
+  `src/cli/serve/text_model_runner.cpp`,
+  `tests/cli/text_model_runner_test.cpp`,
+  `tests/models/qwen/tokenization/chat_template_test.cpp`,
+  `tools/serving/check-continuation.py`, `docs/SERVER.md`.
+- Validation: coverage added in `tests/cli/text_model_runner_test.cpp` and
+  `tests/models/qwen/tokenization/chat_template_test.cpp` in-commit; run
+  results were not verified while writing this entry.
+- Status: retained.
+
+### 2026-09-26 — Bounded disk staging with skipped-snapshot reporting
+
+- Source: [gufo-org/gufo@d9a84f13f35d1f98da22886a12eb25dc7062e392](https://github.com/gufo-org/gufo/commit/d9a84f13f35d1f98da22886a12eb25dc7062e392)
+  (PR #279, shared history with `official/main`).
+- Local: same SHA (present verbatim, not an adaptation).
+- Adaptation: none.
+- Areas: `src/cli/serve/continuation_disk_store.cpp`,
+  `src/cli/serve/continuation_disk_store.hpp`,
+  `src/cli/serve/inference_backend.cpp`, `src/cli/serve/inference_backend.hpp`,
+  `src/cli/serve/serve.cpp`, `src/cli/serve/text_model_runner.cpp`,
+  `src/cli/serve/text_model_runner.hpp`,
+  `tests/cli/continuation_disk_store_test.cpp`, `tests/cli/serve_test.py`,
+  `docs/SERVER.md`.
+- Validation: `tests/cli/continuation_disk_store_test.cpp` coverage added
+  upstream in-commit; run results were not verified while writing this entry.
+- Status: retained.
 
 ## Model-specific provenance
 
