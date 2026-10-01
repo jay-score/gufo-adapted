@@ -514,10 +514,12 @@ def check_sampling_ranges(client, model, checks):
     invalid = (
         ("temperature", -1), ("temperature", 2.01),
         ("temperature", "hot"), ("temperature", True),
-        ("top_p", 0), ("top_p", -0.1), ("top_p", 1.01), ("top_p", "0.9"),
+        ("top_p", -0.1), ("top_p", 1.01), ("top_p", "0.9"),
+        ("top_p", 1.00000001), ("temperature", 2.00000001),
         ("top_k", -1), ("top_k", 1.5), ("min_p", -0.1), ("min_p", 1.1),
         ("repeat_penalty", 0), ("repeat_last_n", -1), ("seed", -2),
         ("presence_penalty", 2.1), ("frequency_penalty", -2.1),
+        ("presence_penalty", 2.00000001), ("frequency_penalty", -2.00000001),
         ("draft_temperature", .7), ("typical_p", .9),
     )
     for endpoint, (create, body) in endpoints.items():
@@ -534,9 +536,11 @@ def check_sampling_ranges(client, model, checks):
                         response.close()
                     raise AssertionError(f"{endpoint} accepted invalid {name}={value!r}")
         # Boundaries are valid; use greedy selection to avoid probabilistic assertions.
-        for top_p in (.0001, 1.):
+        for top_p in (0., .0001, 1.):
             response = create(**body, temperature=0, top_p=top_p)
             checks[f"range_{endpoint}_valid_{top_p}"] = response.to_dict()
+        response = create(**body, temperature=.7, top_p=0, extra_body={"seed": 42})
+        checks[f"range_{endpoint}_sampled_zero"] = response.to_dict()
 
 
 def check_batches(client, model, checks, width, vision=False, speculative="off"):
@@ -663,7 +667,7 @@ def check_batches(client, model, checks, width, vision=False, speculative="off")
         if index:
             return cross_endpoint(index)
         try:
-            client.chat.completions.create(**{**cases[0], "top_p": 0}, stream=True)
+            client.chat.completions.create(**{**cases[0], "top_p": -0.1}, stream=True)
         except openai.BadRequestError:
             return None
         raise AssertionError("invalid peer entered generation")
@@ -1832,6 +1836,29 @@ def check_structured_limits(client, model, checks, vision=False):
         assert result["finish"] == "length" and result["usage"]["completion_tokens"] == n, result
         assert not result["text"] and not result["tools"], result
         record(f"schema_tool_limit_{n}", result)
+
+    # Greedy GPU winners include penalties, but still obey the tool grammar.
+    # Invalid speculative proposals must not mutate its state while staging
+    # conditional penalty histories.
+    for choice in ("auto", "required"):
+        request = dict(model=model, temperature=0, seed=79,
+            presence_penalty=1.5, frequency_penalty=.2,
+            max_completion_tokens=96, tool_choice=choice, parallel_tool_calls=False,
+            messages=[{"role": "user", "content": "Call echo with text alpha."}],
+            tools=[{"type": "function", "function": {"name": "echo", "strict": True,
+                "parameters": {"type": "object", "properties": {
+                    "text": {"type": "string", "const": "alpha"}},
+                    "required": ["text"], "additionalProperties": False}}}],
+            extra_body={"repeat_penalty": 1.1,
+                        "chat_template_kwargs": {"enable_thinking": False}})
+        first = chat_result(client, request, True)
+        replay = chat_result(client, request)
+        for result in (first, replay):
+            assert result["finish"] == "tool_calls" and len(result["tools"]) == 1, result
+            call = result["tools"][0]["function"]
+            assert call["name"] == "echo" and json.loads(call["arguments"]) == {"text": "alpha"}, result
+        assert replay["usage"]["cached_tokens"] > 0, replay
+        record(f"schema_greedy_tool_penalties_{choice}", [first, replay])
 
     # A non-strict tool schema can be broader than the response-format subset.
     result = chat_result(client, {**common, "tools": [{
