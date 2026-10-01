@@ -4,6 +4,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -94,6 +95,8 @@ public:
         return result;
       }
       result.text += piece;
+      if (after_piece)
+        after_piece();
       result.tokens.push_back(
           static_cast<gufo::tokenization::TokenId>(result.tokens.size()));
       if (block_after_first_piece &&
@@ -144,6 +147,7 @@ public:
   }
 
   std::vector<std::string> pieces;
+  std::function<void()> after_piece;
   std::string cache_miss_reason;
   FinishReason finish_reason{FinishReason::kStop};
   std::string stop_sequence;
@@ -2280,7 +2284,150 @@ void TestResponsesLiveAndCancellation() {
 
 }  // namespace
 
+struct ToolFixtureOutput {
+  std::string text;
+  std::string reasoning;
+  std::vector<gufo::json::Value> calls;
+  std::string error;
+};
+
+gufo::server::HttpResponse ToolFixtureResponse(gufo::json::Value body,
+                                               FakeBackend& backend,
+                                               bool responses, bool stream,
+                                               bool reasoning = false) {
+  body["stream"] = stream;
+  body["chat_template_kwargs"] = gufo::json::Value::object();
+  body["chat_template_kwargs"]["enable_thinking"] = reasoning;
+  if (!responses)
+    return gufo::server::HandleOpenAiChat(Request(body.dump()), backend);
+  auto input = *body.find("messages");
+  body["input"] = std::move(input);
+  auto chat = ResponseChat(body);
+  chat.reasoning.enabled = reasoning;
+  return gufo::server::CreateOpenAiResponse(Request(body.dump()), backend, chat,
+                                            0, {}, stream);
+}
+
+ToolFixtureOutput ReadToolFixture(const gufo::server::HttpResponse& response,
+                                  bool responses, bool stream) {
+  using gufo::json::Value;
+  ToolFixtureOutput output;
+  const auto read = [&](const Value& value) {
+    if (const auto* error = value.find("error"); error && error->is_object())
+      output.error = error->member_str("code");
+    if (responses) {
+      if (const auto* items = value.find("output")) {
+        for (const auto& item : items->items()) {
+          if (item.member_str("type") == "function_call")
+            output.calls.push_back(item);
+          for (const auto* field : {"content", "summary"}) {
+            if (const auto* parts = item.find(field)) {
+              for (const auto& part : parts->items())
+                (std::string_view(field) == "summary" ? output.reasoning
+                                                      : output.text) +=
+                    part.member_str("text");
+            }
+          }
+        }
+      }
+    } else if (const auto* choices = value.find("choices")) {
+      if (!choices->empty()) {
+        const auto& choice = choices->items()[0];
+        const auto* message = choice.find(stream ? "delta" : "message");
+        if (message) {
+          output.text += message->member_str("content");
+          output.reasoning += message->member_str("reasoning_content");
+          if (const auto* calls = message->find("tool_calls"))
+            for (const auto& call : calls->items())
+              output.calls.push_back(*call.find("function"));
+        }
+      }
+    }
+  };
+  if (!stream || response.status != 200) {
+    read(gufo::json::parse(response.body));
+  } else {
+    response.streaming_body([&](std::string_view chunk) {
+      const auto begin = chunk.find("data: ");
+      if (begin == std::string_view::npos)
+        return true;
+      auto payload = chunk.substr(begin + 6);
+      payload = payload.substr(0, payload.find('\n'));
+      if (payload == "[DONE]")
+        return true;
+      const auto event = gufo::json::parse(payload);
+      if (responses) {
+        if (const auto* value = event.find("response"))
+          read(*value);
+      } else {
+        read(event);
+      }
+      return true;
+    });
+  }
+  return output;
+}
+
+void TestDisabledToolMarkers() {
+  const auto base = gufo::json::parse(R"({"model":"test-model",
+    "messages":[{"role":"user","content":"copy literal markers"}]})");
+  const auto tool = gufo::json::parse(R"({"type":"function","function":{
+    "name":"f","parameters":{"type":"object"}}})");
+  const std::string literal =
+      "Example: <tool_call><function=f></function></tool_call> "
+      "<｜DSML｜tool_calls> </｜DSML｜tool_calls> π <tool_";
+  for (bool responses : {false, true}) {
+    for (bool declared : {false, true}) {
+      for (bool reasoning : {false, true}) {
+        for (bool closed : {false, true}) {
+          if (!reasoning && closed)
+            continue;
+          auto body = base;
+          if (declared) {
+            body["tools"] = gufo::json::Value::array();
+            body["tools"].push_back(tool);
+            body["tool_choice"] = "none";
+          }
+          const auto raw = literal + (closed ? "</think>\nAnswer" : "");
+          for (bool stream : {false, true}) {
+            FakeBackend backend;
+            for (char byte : raw)
+              backend.pieces.emplace_back(1, byte);
+            const auto response = ToolFixtureResponse(body, backend, responses,
+                                                      stream, reasoning);
+            Expect(response.status == 200, "Disabled markers are accepted");
+            const auto output = ReadToolFixture(response, responses, stream);
+            Expect(output.calls.empty() && output.error.empty(),
+                   "Disabled markers never become calls");
+            Expect(
+                output.text ==
+                        (reasoning ? (closed ? "Answer" : "") : literal) &&
+                    output.reasoning == (reasoning ? literal : ""),
+                "Disabled markers and split UTF-8 retain their output phase");
+          }
+          // A suffix resembling a disabled marker must be sent during the
+          // callback, rather than held until the generation finishes.
+          FakeBackend live;
+          live.pieces = {"Example: <tool_", "call>"};
+          std::string bytes;
+          live.after_piece = [&] {
+            Expect(bytes.find("Example: <tool_") != std::string::npos,
+                   "Disabled marker prefixes stream immediately");
+          };
+          const auto response =
+              ToolFixtureResponse(body, live, responses, true, reasoning);
+          response.streaming_body([&](std::string_view chunk) {
+            bytes += chunk;
+            return true;
+          });
+        }
+      }
+    }
+  }
+}
+
 int main() {
+  TestDisabledToolMarkers();
   TestStopSequencesAndDefaultFields();
   TestExplicitStopOutputFraming();
   TestStopInsideToolArguments();

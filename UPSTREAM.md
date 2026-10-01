@@ -36,6 +36,25 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-01 — Disabled-tool marker delivery
+
+- Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)
+  (PR #373).
+- Local: commit introducing this entry.
+- Adaptation: one recognition decision for buffered and streaming output in
+  both APIs. Disabled tool markers remain text/reasoning and their prefixes
+  stream immediately. Retains the fork's required thinking boundary and UTF-8
+  decoding. Does not import upstream constraints, prompting or sampling changes.
+- Areas: `src/cli/serve/openai_chat.cpp`, `tests/cli/openai_chat_test.cpp`,
+  `docs/SERVER.md`.
+- Validation: baseline Windows CPU `openai_chat_test` and `http_server_test`
+  passed at `c4dcca536af5dc73998f24b28e548985e7f91efc`; new deterministic
+  disabled-marker fixture reproduced delayed prefixes, then passed after the
+  adaptation. Both APIs, buffered/streaming, disabled declarations, reasoning,
+  byte-split markers/UTF-8 and immediate callback delivery are covered.
+  Real-model and Linux qualification remain outstanding.
+- Status: retained.
+
 ### 2026-10-01 — Conversation history-edit checkpoints
 
 - Source: [gufo-org/gufo@0c350ed3ef5f8db9783385071ff05eec6bd687f1](https://github.com/gufo-org/gufo/commit/0c350ed3ef5f8db9783385071ff05eec6bd687f1)

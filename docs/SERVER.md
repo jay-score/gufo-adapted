@@ -614,6 +614,10 @@ calling tools. An unmet `required` choice returns `tool_choice_unsatisfied`
 (HTTP 502, or an SSE error after streaming starts), unless a requested stop
 sequence interrupted generation first.
 
+With no declared tools or `tool_choice: "none"`, tool markers are ordinary
+text. They do not end reasoning or delay streaming; thinking delimiters and
+UTF-8 buffering still apply.
+
 Stop sequences match accepted output bytes, including reasoning and tool
 markup, before streaming or response parsing. Partial prefixes are buffered;
 matched sequences and subsequent text are excluded. OpenAI reports
