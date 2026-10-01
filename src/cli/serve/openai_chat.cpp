@@ -1453,13 +1453,13 @@ ParsedGeneration ParseStructuredGeneration(
   if (initial == TextGenerationBackend::InitialOutputState::kReasoning) {
     if (raw.starts_with("<think>"))
       raw.remove_prefix(7);
+    // Constrained decoding leaves reasoning only at </think>. Quoted tool
+    // markers are reasoning data, not alternative phase delimiters.
     const auto end = raw.find("</think>");
-    const auto tool = tool_only ? EarliestMarker(raw) : std::string_view::npos;
-    const auto boundary = std::min(end, tool);
-    parsed.reasoning_content = std::string(raw.substr(0, boundary));
-    if (boundary == std::string_view::npos)
+    parsed.reasoning_content = std::string(raw.substr(0, end));
+    if (end == std::string_view::npos)
       return parsed;
-    raw.remove_prefix(boundary + (boundary == end ? 8 : 0));
+    raw.remove_prefix(end + 8);
   }
   const auto content = tool_only ? raw : Trim(raw);
   if (const auto marker = EarliestMarker(content);
@@ -1696,9 +1696,8 @@ public:
     if (state_ == State::kThinking) {
       constexpr std::string_view kThinkEnd = "</think>";
       const std::size_t end_pos = pending_.find(kThinkEnd);
-      const auto marker = raw_content_ && !tool_only_
-                              ? std::string::npos
-                              : EarliestMarker(pending_);
+      const auto marker =
+          raw_content_ ? std::string::npos : EarliestMarker(pending_);
       if (marker < end_pos) {
         if (marker > 0 && !emit_piece_(pending_.substr(0, marker), true))
           return false;
@@ -1717,8 +1716,7 @@ public:
         state_ = State::kContent;
         trim_reasoning_separator_ = true;
       } else {
-        std::size_t held =
-            raw_content_ && !tool_only_ ? 0 : HeldMarkerPrefix(pending_);
+        std::size_t held = raw_content_ ? 0 : HeldMarkerPrefix(pending_);
         for (std::size_t len = std::min(pending_.size(), kThinkEnd.size() - 1);
              len > 0; --len) {
           if (kThinkEnd.starts_with(pending_.substr(pending_.size() - len))) {

@@ -24,6 +24,7 @@ import openai
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient, DefaultHttpxClient, OpenAI
 from openai.types import Completion, CompletionChoice
 from metrics import CaseComplete, Recorder
+from tool_reasoning import check_tool_reasoning
 
 
 class CompletionStreamChoice(CompletionChoice):
@@ -2326,7 +2327,7 @@ def check_server_metrics(client, model, checks, width):
     completed("metrics_after_cancel_cached", lambda: chat_result(client, common))
 
 
-SDK_SUITES = ("responses", "stops", "conversation", "structured", "structured-limits",
+SDK_SUITES = ("responses", "stops", "conversation", "structured", "structured-limits", "tool-reasoning",
               "tools", "auto-tools", "tool-edges", "sampling-defaults", "sampling-ranges", "batch",
               "long-context", "state-edges", "progress", "metrics")
 
@@ -2402,6 +2403,7 @@ def main():
             "native-tools": lambda: check_native_tools(client, args.model, checks, args.vision),
             "auto-tools": lambda: check_auto_tools(client, args.model, checks, args.vision),
             "tool-edges": lambda: check_tool_edges(client, args.model, checks),
+            "tool-reasoning": lambda: check_tool_reasoning(client, args.model, checks, chat_result),
             "state-edges": lambda: check_state_edges(
                 client, args.model, checks, args.speculative, args.vision),
             "sampling-defaults": lambda: check_sampling_defaults(

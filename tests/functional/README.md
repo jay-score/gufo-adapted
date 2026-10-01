@@ -48,6 +48,7 @@ draft limit for this suite. Audio and image/video generation have separate tests
 | `tools` | Required/named/auto, schemas, literal arguments and tool history |
 | `auto-tools` | Focused subset for optional tool calls |
 | `tool-edges` | Referenced argument types, literal CR, unusual keys and named Responses metadata |
+| `tool-reasoning` | Quoted tool tags stay in reasoning; edit arguments stay intact across Chat, Responses, streaming and early stops |
 | `state-edges` | Actual AR/draft execution, tiny thinking budgets, zero-argument tools, schema changes, stops, image retry and failed-request recovery |
 | `structured`, `structured-limits` | Request JSON schemas, SDK parsing, limits and stops |
 | `sampling-defaults`, `sampling-ranges` | CLI/request overrides, partial/null settings and range validation |

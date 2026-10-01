@@ -27,7 +27,7 @@ import zlib
 from metrics import compare, comparison_status, join_server_timings, timing_measurement
 
 TESTS = Path(__file__).resolve().parent
-SUITES = ("responses", "stops", "conversation", "structured", "structured-limits",
+SUITES = ("responses", "stops", "conversation", "structured", "structured-limits", "tool-reasoning",
           "tools", "auto-tools", "tool-edges", "sampling-defaults", "sampling-ranges", "batch",
           "long-context", "state-edges", "progress", "metrics", "cache")
 SAMPLING = {
@@ -45,7 +45,8 @@ COMPARISON_FIELDS = ("comparison_command", "sampling_preset", "sampling_override
 
 def provenance():
     source = hashlib.sha256()
-    for name in ("run.py", "metrics.py", "progress.py", "server_metrics.py", "openai_sdk.py", "continuation.py"):
+    for name in ("run.py", "metrics.py", "progress.py", "server_metrics.py", "openai_sdk.py", "continuation.py",
+                 "tool_reasoning.py"):
         source.update((TESTS / name).read_bytes())
     lock = TESTS.parents[1] / "flake.lock"
     kernel_command = Path("/proc/cmdline")

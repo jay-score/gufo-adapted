@@ -20,11 +20,23 @@ spec.loader.exec_module(functional)
 from metrics import (CaseComplete, Recorder, canonical, compare, join_server_timings,
                      qualify, summarize, validate_tool_events)
 from progress import ProgressTrace
+from tool_reasoning import ARGUMENTS, assert_edit
 from server_metrics import (COUNTERS, TYPES, PROMPT, GENERATED, PROCESSING,
                             parse_metrics, assert_accounting, validate_metrics_report)
 
 
 class FunctionalRunnerTest(unittest.TestCase):
+    def test_tool_reasoning_requires_the_bug_trigger_and_exact_edit(self):
+        result = {"text": "", "reasoning": "Quoted <tool_call> is file data.",
+                  "finish": "tool_calls", "tools": [{"function": {
+                      "name": "edit", "arguments": json.dumps(ARGUMENTS)}}]}
+        assert_edit(result)
+        for change in ({"reasoning": "No quoted tag."}, {"text": "leaked reasoning"},
+                       {"tools": []}, {"finish": "length"},
+                       {"tools": [{"function": {"name": "edit", "arguments": "{}"}}]}):
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                assert_edit({**result, **change})
+
     def test_prompt_progress_contract_and_output_order(self):
         def event(processed, elapsed=0):
             return {"prompt_progress": {"total": 10, "cache": 2,

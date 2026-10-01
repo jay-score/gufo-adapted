@@ -786,7 +786,8 @@ void TestQwenToolBoundariesAndSchema() {
         body["chat_template_kwargs"] = Value::object();
         body["chat_template_kwargs"]["enable_thinking"] = reasoning;
         FakeBackend backend;
-        const auto text = (reasoning ? "Considering. " : "") + item.text;
+        const auto text =
+            (reasoning ? "Considering. </think>" : "") + item.text;
         // Split every marker and argument across token callbacks.
         for (char c : text)
           backend.pieces.emplace_back(1, c);
@@ -2002,6 +2003,9 @@ void TestStopInsideToolArguments() {
                               : "") +
               partial;
           backend.pieces = {"safe"};
+          // Constrained reasoning must close before a tool can start.
+          if (thinking)
+            backend.pieces.emplace_back("</think>");
           // Exercise splits inside XML delimiters and multibyte DSML tags.
           for (const char byte : raw)
             backend.pieces.emplace_back(1, byte);
@@ -2039,6 +2043,166 @@ void TestStopInsideToolArguments() {
       }
     }
   }
+}
+
+void TestToolMarkersInsideConstrainedReasoning() {
+  using gufo::json::Value;
+  using Finish = gufo::server::TextGenerationBackend::FinishReason;
+  const std::string reasoning =
+      "Confirmed garbage on the docstring line. The broken line is:\n"
+      "`    \"\"\"The one BPA resource; find_resources maps logical id to a "
+      "Mapping.\"\"\"}}]}}</tool_call>\n\n<tool_call>('tool', '{`\n"
+      "A quoted <tool_call> is file data, not the end of reasoning.\n"
+      "Also <｜DSML｜tool_calls> is quoted data. Preserve oldText exactly.";
+  auto arguments = Value::object();
+  arguments["path"] = "tests/unit/shared/test_vpc_block_public_access.py";
+  arguments["edits"] = Value::array();
+  auto replacement = Value::object();
+  replacement["oldText"] =
+      "    \"\"\"The one BPA resource; find_resources maps logical id to a "
+      "Mapping.\"\"\"}}]}}</tool_call>\n\n<tool_call>('tool', '{";
+  replacement["newText"] =
+      "    \"\"\"The one BPA resource; find_resources maps logical id to a "
+      "Mapping.\"\"\"";
+  arguments["edits"].push_back(std::move(replacement));
+  const std::string call =
+      "<tool_call>\n<function=edit>\n<parameter=path>\n" +
+      arguments.member_str("path") + "\n</parameter>\n<parameter=edits>\n" +
+      arguments["edits"].dump() + "\n</parameter>\n</function>\n</tool_call>";
+  const std::string prose = "\nVerify the file, then run mypy and tests.";
+  const std::string complete = "</think>" + call + prose;
+  for (const bool responses : {false, true})
+    for (const bool stream : {false, true})
+      for (const bool bytewise : {false, true})
+        for (const bool strict : {false, true})
+          for (const std::string& tail :
+               {complete, std::string{}, std::string{"</thi"}}) {
+            const bool truncated = tail != complete;
+            const std::string expected_reasoning =
+                reasoning + (truncated ? tail : "");
+            const std::string expected_content = truncated ? "" : prose;
+            auto body = gufo::json::parse(R"({
+            "model":"test-model","messages":[{"role":"user","content":"fix the docstring"}],
+            "chat_template_kwargs":{"enable_thinking":true},
+            "parallel_tool_calls":false,"tool_choice":"auto",
+            "tools":[{"type":"function","function":{"name":"edit",
+              "parameters":{"type":"object","properties":{
+                "path":{"type":"string"},"edits":{"type":"array","items":{
+                  "type":"object","properties":{"oldText":{"type":"string"},"newText":{"type":"string"}},
+                  "required":["oldText","newText"],"additionalProperties":false}}},
+                "required":["path","edits"],"additionalProperties":false}}}]
+          })");
+            body["stream"] = stream;
+            auto tool = body["tools"].items()[0];
+            tool["function"]["strict"] = strict;
+            body["tools"] = Value::array();
+            body["tools"].push_back(std::move(tool));
+            FakeBackend backend;
+            backend.finish_reason = truncated ? Finish::kLength : Finish::kStop;
+            const std::string raw = reasoning + tail;
+            if (bytewise)
+              for (char byte : raw)
+                backend.pieces.emplace_back(1, byte);
+            else
+              backend.pieces = {raw};
+            gufo::server::HttpResponse response;
+            if (responses) {
+              auto flat = *body["tools"].items()[0].find("function");
+              flat["type"] = "function";
+              body["tools"] = Value::array();
+              body["tools"].push_back(std::move(flat));
+              gufo::server::ChatRequest chat;
+              chat.reasoning.enabled = true;
+              Expect(!gufo::server::ParseOpenAiResponseControls(body, &chat),
+                     "reasoning marker fixture has valid Responses controls");
+              response = gufo::server::CreateOpenAiResponse(
+                  Request(body.dump()), backend, chat, 4096, {}, stream);
+            } else {
+              response =
+                  gufo::server::HandleOpenAiChat(Request(body.dump()), backend);
+            }
+            Expect(response.status == 200, "reasoning marker fixture succeeds");
+            std::vector<Value> events;
+            if (stream)
+              response.streaming_body([&](std::string_view chunk) {
+                const auto pos = chunk.find("data: ");
+                if (pos != std::string_view::npos &&
+                    !chunk.substr(pos + 6).starts_with("[DONE]"))
+                  events.push_back(gufo::json::parse(chunk.substr(pos + 6)));
+                return true;
+              });
+            else
+              events.push_back(gufo::json::parse(response.body));
+            std::string content, thought, emitted_arguments;
+            std::string streamed_content, streamed_thought;
+            std::size_t calls = 0;
+            bool terminal = false;
+            for (const auto& event : events) {
+              if (responses) {
+                if (event.member_str("type") == "response.output_text.delta")
+                  streamed_content += event.member_str("delta");
+                if (event.member_str("type") ==
+                    "response.reasoning_summary_text.delta")
+                  streamed_thought += event.member_str("delta");
+                // Terminal Responses items are authoritative in both modes.
+                const auto* result = stream ? event.find("response") : &event;
+                if (result && result->member_str("status") ==
+                                  (truncated ? "incomplete" : "completed")) {
+                  terminal = true;
+                  for (const auto& item : result->find("output")->items()) {
+                    if (item.member_str("type") == "function_call") {
+                      ++calls;
+                      emitted_arguments = item.member_str("arguments");
+                    } else if (item.member_str("type") == "reasoning") {
+                      for (const auto& part : item.find("summary")->items())
+                        thought += part.member_str("text");
+                    } else if (item.member_str("type") == "message") {
+                      for (const auto& part : item.find("content")->items())
+                        content += part.member_str("text");
+                    }
+                  }
+                }
+              } else if (const auto* choices = event.find("choices")) {
+                for (const auto& choice : choices->items()) {
+                  if (!choice.member_str("finish_reason").empty()) {
+                    terminal = true;
+                    Expect(choice.member_str("finish_reason") ==
+                               (truncated ? "length" : "tool_calls"),
+                           "reasoning limits retain the correct finish reason");
+                  }
+                  const auto* message =
+                      choice.find(stream ? "delta" : "message");
+                  if (!message)
+                    continue;
+                  thought += message->member_str("reasoning_content");
+                  content += message->member_str("content");
+                  if (const auto* tools = message->find("tool_calls"))
+                    for (const auto& tool : tools->items()) {
+                      ++calls;
+                      emitted_arguments +=
+                          tool.find("function")->member_str("arguments");
+                    }
+                }
+              }
+            }
+            Expect(terminal, "reasoning marker fixture has a terminal result");
+            Expect(
+                thought == expected_reasoning,
+                "literal tool openers cannot terminate constrained reasoning");
+            Expect(
+                content == expected_content,
+                "reasoning text and closing think tags never leak as content");
+            Expect(truncated
+                       ? calls == 0 && emitted_arguments.empty()
+                       : calls == 1 && emitted_arguments == arguments.dump(),
+                   "the edit preserves exact file data without protocol "
+                   "pollution");
+            if (responses && stream)
+              Expect(
+                  streamed_content == expected_content &&
+                      streamed_thought == expected_reasoning,
+                  "Responses deltas agree with the buffered phase boundaries");
+          }
 }
 
 void TestNativeToolTransports() {
@@ -2537,6 +2701,7 @@ void TestResponsesPromptProgress() {
 int main() {
   TestStreamingPromptProgress();
   TestResponsesPromptProgress();
+  TestToolMarkersInsideConstrainedReasoning();
   TestStopSequencesAndDefaultFields();
   TestStructuredResponseFormat();
   TestStructuredToolTruncation();

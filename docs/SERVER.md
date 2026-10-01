@@ -691,6 +691,13 @@ Constraints apply before target sampling in AR, DFlash2, MTP and DSpark, includi
 streaming, images and concurrent requests. Reasoning stays separate from JSON
 and counts toward the output budget. Changing the schema changes the cache prefix.
 
+For constrained tool or JSON output, only `</think>` ends the initial reasoning
+phase. Literal tool markers such as `<tool_call>` quoted during reasoning remain
+reasoning data; they do not start a call or move reasoning into visible content.
+This boundary is identical for buffered responses and SSE deltas in Chat
+Completions and Responses. Tool parsing starts after the reasoning delimiter,
+and markers inside tool argument strings remain argument data.
+
 Parse the returned content: leading whitespace is valid JSON, and stops or token
 limits can leave it incomplete. `finish_reason: "stop"` includes matched stop
 sequences and does not guarantee complete JSON. Token limits return `"length"`
