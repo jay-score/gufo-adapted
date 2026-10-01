@@ -292,6 +292,18 @@ ReasoningOptions PromptReasoningOptions(const PromptOptions& options) {
   return reasoning;
 }
 
+// CLI sessions run a fixed 4096-token context (kDefaultContext under HIP,
+// the CPU generator default otherwise), so the rendered-prompt bound is sized
+// from it exactly like the server sizes its bound from the session context.
+tokenization::ChatTemplateOptions QwenPromptOptions(
+    const ReasoningOptions& reasoning, bool add_vision_id,
+    std::uint32_t max_context = 4096) {
+  auto options = tokenization::ResolveQwenChatOptions(reasoning, add_vision_id);
+  options.max_output_bytes =
+      tokenization::RenderedPromptBoundBytes(max_context);
+  return options;
+}
+
 #if defined(ENGINE_ENABLE_HIP)
 constexpr std::uint32_t kDefaultContext = 4096;
 
@@ -637,7 +649,7 @@ std::shared_ptr<const models::qwen::vision::Prompt> PrepareVision(
   return std::make_shared<models::qwen::vision::Prompt>(
       models::qwen::vision::Prepare(
           tokenizer, messages, {},
-          tokenization::ResolveQwenChatOptions(reasoning, opt.add_vision_id),
+          QwenPromptOptions(reasoning, opt.add_vision_id, kDefaultContext),
           encoder->identity(), kDefaultContext));
 }
 
@@ -1013,8 +1025,7 @@ int RunPrompt(std::span<const char* const> args) {
         {tokenization::ChatRole::kUser, opt.prompt_text, "", ""});
     const auto reasoning = PromptReasoningOptions(opt);
     const auto rendered = tokenization::QwenChatTemplate::Render(
-        messages,
-        tokenization::ResolveQwenChatOptions(reasoning, opt.add_vision_id));
+        messages, QwenPromptOptions(reasoning, opt.add_vision_id));
     if (rendered.has_value()) {
       rendered_prompt = *rendered;
     } else {
@@ -1314,8 +1325,7 @@ int RunChat(std::span<const char* const> args) {
     history.push_back({tokenization::ChatRole::kUser, user_input, "", ""});
     const auto reasoning = PromptReasoningOptions(opt);
     const auto rendered_prompt = tokenization::QwenChatTemplate::Render(
-        history,
-        tokenization::ResolveQwenChatOptions(reasoning, opt.add_vision_id));
+        history, QwenPromptOptions(reasoning, opt.add_vision_id));
     if (!rendered_prompt.has_value()) {
       std::cerr << "Error formatting chat template.\n";
       return 1;
@@ -1368,8 +1378,7 @@ int RunChat(std::span<const char* const> args) {
 
     std::cout << '\n';
     tokenization::ChatMessage reply{tokenization::ChatRole::kAssistant, ""};
-    if (tokenization::ResolveQwenChatOptions(reasoning, opt.add_vision_id)
-            .enable_thinking) {
+    if (QwenPromptOptions(reasoning, opt.add_vision_id).enable_thinking) {
       constexpr std::string_view end = "</think>";
       const auto boundary = assistant_reply.find(end);
       reply.thought = assistant_reply.substr(0, boundary);

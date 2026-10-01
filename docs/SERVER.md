@@ -76,6 +76,9 @@ Text serving defaults match llama.cpp for context and generation length:
 | `--sessions` | `1` |
 | Thinking / reasoning effort | Model template defaults |
 
+Qwen chat prompts are bounded by the session context, not a fixed size: the
+rendered template may use up to 128 bytes per context token (at least 1 MiB).
+
 Clients can set a positive `max_tokens` / `max_completion_tokens` (Chat
 Completions) or `max_output_tokens` (Responses). These include reasoning tokens.
 Omitting the field uses the server default. A response cannot exceed remaining
@@ -198,7 +201,7 @@ reasoning replay, greedy/seeded sampling, and explicit cache bypass. Use
 `--prefix-repetitions 5500` for a roughly 50K-token prefix.
 For persistence, enable `--cache-disk` before the check, restart the same server,
 and add `--restore /tmp/cache-check.json`.
-Use `--image /path/to/image.png` for Qwen image conversations.
+Use `--image /path/to/image.png` for Qwen image conversations. Add `--append-image` to introduce the image after a cached text turn, and `--reasoning-effort high` to check a specific thinking effort.
 Each case continues for a third turn; repeat `--case NAME` to select only the
 cases needed for a change.
 The check requires exact snapshot and matched-history replay. It separately
@@ -574,8 +577,16 @@ and template-aware message counting are not implemented.
   Chat Completions shape and the flat Responses-style `{type,name,parameters}`
   shape. Missing or null `parameters` become `{}`. `parametersJsonSchema` is
   accepted as an alias for `parameters`. Flat definitions retain all function
-  fields, including `strict`. Unsupported tool types, malformed entries and
-  non-object parameters return 400 `invalid_tools` before generation.
+  fields, including `strict`. A function name holds 1-64 printable ASCII
+  characters and may use any of them except a space, `<`, `>`, `"` and `\`,
+  which frame a rendered call; dotted and namespaced names such as
+  `github.create_issue` are accepted. OpenAI itself documents a narrower set
+  for this field, so a name outside `[A-Za-z0-9_-]` is portable to gufo but not
+  to every OpenAI-compatible service. The same name rule applies to an
+  assistant `tool_calls` entry that replays a call. Unsupported tool types,
+  malformed entries, unrenderable declared names and non-object parameters
+  return 400 `invalid_tools` before generation; because messages parse first,
+  an unrenderable name in a replayed call returns 400 `invalid_messages`.
 - shared top-k, min-p, repeat, frequency and presence sampling controls
 
 Streaming objects use `chat.completion.chunk` and end with the compatibility
