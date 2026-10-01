@@ -1,0 +1,329 @@
+# Tool-calling improvements from upstream PR #373
+
+Date: 2026-10-01. Status: implementation pending.
+
+## Objective and agreed approach
+
+Improve tool-call parsing, history replay and disabled-tool streaming in the
+Windows fork through small adaptations of upstream fixes. Start with parser
+changes and deterministic regression tests, then measure real agent behavior.
+Decide whether generation-time schema enforcement is necessary after that work.
+
+The user selected this approach to avoid importing the complete upstream #283
+and #324 ports just to obtain useful parts of #373. This document records the
+implementation plan; no implementation or runtime qualification has been done
+as part of writing it.
+
+The first phase should preserve native Qwen/DeepSeek prompts, existing Windows
+sampling optimizations, cache behavior and the fork's thinking-boundary fix.
+It should primarily change the API parser and tests. Do not introduce a separate
+partial JSON Schema validator or heuristic suppression of repeated tool calls.
+
+## Pinned context and evidence
+
+| Item | Revision or source |
+| --- | --- |
+| Fork used for the initial review | `windows-port`, `7ab8dd9c33d0beeca388ef44263b7c652b1e649d` |
+| Fork when this plan was written | `windows-port`, `20846606e884f97a2e985cfed5ebf8ee5f28dfe3` |
+| Shared official merge base from the review | `d9a84f13f35d1f98da22886a12eb25dc7062e392` |
+| Official merged #373 | [594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e) |
+| Final PR head, with an identical tree to the merge | [3b8dd1691907a4499a17c8ae70a3f256754877d4](https://github.com/gufo-org/gufo/commit/3b8dd1691907a4499a17c8ae70a3f256754877d4) |
+| Revision criticized in the linked review | `3424539ae42d5c8683541db3e791d077da8c89b4` |
+| Base used by that reviewer | `d707143223c52b91da3f0fb231ba85ac3eab247c` |
+
+The change from the initial review's fork HEAD to the planning HEAD is a
+documentation commit. Reconfirm the actual code and HEAD when resuming; these
+identities are historical checkpoints, not moving branch guarantees.
+
+Primary references:
+
+- [PR #373: preserve native tool schemas and historical calls](https://github.com/gufo-org/gufo/pull/373).
+- [Detailed regression review](https://github.com/gufo-org/gufo/pull/373#issuecomment-5941397880).
+- [Initial native-tool and literal-marker change](https://github.com/gufo-org/gufo/commit/5b509f6239d78a3c8305c55eb8cd9a10df362b4e).
+- [Multiline edit regression coverage](https://github.com/gufo-org/gufo/commit/78cbefe9c50c6f8fe33153642a5ec916b8ec5b81).
+- [Untyped tools and historical-call change](https://github.com/gufo-org/gufo/commit/0b245fd7709504908ca97168c747db682f6c5f07).
+- [Final grammar safety tests](https://github.com/gufo-org/gufo/blob/594a623913b4109e4499885e9f73ed4d4ad3698e/tests/core/json_constraint_test.cpp#L1398)
+  and [HTTP schema-edge fixtures](https://github.com/gufo-org/gufo/blob/594a623913b4109e4499885e9f73ed4d4ad3698e/tests/functional/tool_agent.py#L405).
+
+The review fetched official history, inspected patches and test source, checked
+the live GitHub merge state, and confirmed final-head/merged-tree equality.
+A read-only patch check failed because the server files diverge and the fork
+lacks `json_constraint.cpp`/`.hpp`. Upstream hosted CPU CI succeeded on the
+merge. Local C++ tests, GPU correctness, Pi workloads and timings were not run
+for this review. Upstream runtime results are author/reviewer reports, not
+Windows qualification of this fork.
+
+## Why the smaller adaptation is appropriate
+
+At the planning revision the fork has no `JsonConstraint`/`TokenConstraint`
+integration. Tools are rendered in their native template, then generated calls
+are parsed. It does not automatically switch every tool to an injected JSON
+protocol when a schema is unsupported.
+
+The current `ParseQwenCalls` uses root `properties` to interpret parameter types.
+Unknown parameters default to text. This is a concrete place to improve typed
+wildcard handling, independent of a grammar engine. Historical Chat Completions
+calls receive the current declaration-name restrictions; Responses history
+already accepts broader names. The streaming filter recognizes tool markers
+even when no tools are active, which provides another independent adaptation.
+
+| Finding from upstream review | Final upstream disposition | Implication here |
+| --- | --- | --- |
+| Typed Qwen wildcard values become strings | Ambiguous wildcard calls use JSON fallback | Improve declared-type lookup where unambiguous; native text alone cannot recover arbitrary untyped values |
+| Conditional schemas exclude valid branch fields | Best-effort grammar keeps those objects open | That grammar restriction is absent here; do not add a conditional-schema compiler just to reproduce its fix |
+| Impossible native grammar reaches generation and causes HTTP 500 | Productivity checking/pruning and non-strict JSON-object fallback | That grammar failure path is absent here |
+| Optional `metadata:{}` erases nested requirements | Unconstrained leaf preserves surrounding grammar constraints | This fork has no generation-time requirement enforcement; parser changes do not reproduce that guarantee |
+| URI/nested required calls gain extra output framing and latency | Required extended calls keep compact JSON | Preserve the fork's existing framing; do not promise upstream timing gains |
+
+Upstream's final author report qualifies the specific Q4 required-call controls:
+81 timing comparisons passed existing margins, with maximum observed total
+request slowdown of 0.4%. Earlier automatic Flash URI calls were 7% slower,
+and those earlier snapshot timings remained unqualified. These are workload-
+specific observations, not a general speedup claim.
+
+The upstream long-context fixture's shared-message-list mutation was fixed.
+The Q4 literal-copy failure was shared with the baseline model, rather than
+shown to be a PR regression. Use synthetic backend output for exact parser
+assertions so a model's failure to copy `Example:` does not obscure the contract.
+
+## Relevant local areas
+
+- [API parser](../../src/cli/serve/openai_chat.cpp): `ParseMessage`,
+  `ParseArguments`, `ParseTools`, `SchemaAccepts`, `ParseQwenCalls`,
+  `ParseDsmlCalls`, `ParseGeneration`, `StreamingTextFilter`, and the
+  Chat Completions/Responses callers.
+- [API regression tests](../../tests/cli/openai_chat_test.cpp) and
+  [HTTP contracts](../../tests/cli/http_server_test.cpp).
+- [Backend/error contracts](../../src/cli/serve/text_generation_backend.hpp).
+- [Existing prompt preparation](../../src/cli/serve/inference_backend.cpp),
+  useful for checking that parser work leaves rendered prompts unchanged.
+- [Qwen template tests](../../tests/models/qwen/tokenization/chat_template_test.cpp).
+- [Server documentation](../SERVER.md), [testing guidance](../TESTING.md),
+  [Windows constraints](../WINDOWS.md), and [upstream ledger](../../UPSTREAM.md).
+
+Local commits `6b570d4` and `c8c5b30` implement/document the thinking-boundary
+behavior. Preserve it: quoted markers inside tool reasoning must not close
+reasoning before `</think>`. Do not replace the entire parser with upstream's
+file; adapt the relevant branches to the existing `require_think_end_` logic.
+
+## Implementation sequence
+
+### 0. Re-establish the baseline
+
+1. Read current [AGENTS.md](../../AGENTS.md), this plan and the linked contracts.
+2. Check root, branch, HEAD, worktree status and remotes. Use CodeGraph before
+   code lookup if `.codegraph/` exists; do not create an index.
+3. Work in an isolated branch/worktree using the repository's
+   [upstream workflow](../UPSTREAM_SYNC.md). Preserve unrelated edits and the
+   running server; do not overwrite its executable or DLLs.
+4. Locate existing parser fixtures, and build/run the two API test targets on
+   the actual baseline. Retain failing baseline cases before changing code.
+5. Recheck whether subsequent local work already implements any item below.
+
+Expected source remotes at planning time: `origin` is `thomas9120/gufo`,
+`official` is `gufo-org/gufo`, and `upstream` is `pixmaate/gufo`. Verify URLs.
+Pin any newly fetched official tip immediately; use immutable revisions for
+provenance instead of relying on `FETCH_HEAD` after another fetch.
+
+### 1. Treat markers as ordinary data when tools are disabled
+
+Add one consistent recognition decision based on tools being declared and
+`tool_choice` allowing calls. Apply it to both buffered parsing and streaming
+marker/prefix handling, through both API callers. Preserve the current
+thinking delimiter and UTF-8 buffering rules.
+
+Acceptance fixtures:
+
+- No tools, and declared tools with `tool_choice:"none"`.
+- Qwen and DeepSeek marker literals in visible text and reasoning.
+- Marker split across callbacks, marker-prefix suffix, and split UTF-8 bytes.
+- Immediate delivery of ordinary content once no active delimiter requires
+  buffering; do not wait for end-of-generation merely because it resembles a
+  disabled tool marker.
+- Enabled-tool parsing still recognizes real calls and hides their markup.
+- Existing required-choice, reasoning cutoff and stop behavior stays covered.
+
+Keep this as one focused improvement with the upstream source SHA recorded.
+
+### 2. Preserve historical names consistently
+
+Adapt upstream's historical-call parsing helper rather than weakening
+`RenderableToolName` for declarations. Reuse it for Chat Completions assistant
+history and Responses `function_call` history.
+
+Acceptance fixtures:
+
+- Past names absent from today's tools, Unicode names and names rejected by
+  current declaration rules are preserved as history.
+- Empty/non-string names, embedded NUL and invalid/non-object JSON arguments
+  are rejected before generation.
+- `call_id`/tool-result identity, image ordering and assistant-item grouping in
+  stateless Responses replay are retained.
+- New calls remain limited to today's declared functions; declaration-name
+  validation stays intact.
+- Cover delimiter-bearing historical names against the actual renderers. The
+  history relaxation must not be mistaken for authorization to invoke them.
+
+Responses already permits broad historical names, so its main changes may be
+consistent validation and helper reuse. Include template checks if rendering
+or historical framing needs any adaptation.
+
+### 3. Resolve declared Qwen argument types without guessing
+
+Start from a fixture using this non-strict declaration:
+
+```json
+{
+  "type": "object",
+  "properties": {"value": {"type": "string"}},
+  "required": ["value"],
+  "patternProperties": {"^x_": {"type": "integer"}}
+}
+```
+
+Given a native `x_count` parameter containing `1`, the current parser treats it
+as the string `"1"`; the declared type should allow recovery of integer `1`.
+Keep a named string parameter containing `1` as a string.
+
+Implement bounded schema lookup for named properties and local references,
+then typed `patternProperties` and schema-valued `additionalProperties` as
+needed for retained fixtures. A named property can also match patterns; all
+applicable type constraints must be considered. Additional properties apply
+only when neither a named property nor a pattern matches. Multiple matching
+patterns are not a first-match choice.
+
+Keep lookup results explicit about unsupported, cyclic or ambiguous schemas.
+Preserve existing non-strict guidance semantics when type information cannot
+be resolved safely. Do not infer arbitrary types from the spelling of a value,
+and do not claim support for all JSON Schema applicators.
+
+If pattern matching is needed, inspect the existing ICU dependency before
+adding an engine. Use JSON Schema-compatible matching and bounded execution;
+do not substitute an incompatible regex dialect silently. CMake currently
+finds ICU `uc` and `i18n`, but `gufo_core` links only `ICU::uc`. Add `ICU::i18n`
+only if this implementation needs it and verify the pinned Windows libraries.
+
+Acceptance fixtures should cover integer, number, boolean, null, array and
+object types; declared strings that look like JSON; escaped/Unicode keys;
+multiple patterns; local reference chains and cycles; and additional-property
+precedence. Existing Python-literal compatibility, duplicate-parameter rules
+and whitespace preservation must continue to pass.
+
+String/non-string unions and genuinely untyped wildcard values remain a
+documented limitation: identical native Qwen text may represent different
+JSON values. Do not introduce automatic JSON prompt switching in this phase.
+
+### 4. Retain multiline edits and diagnose malformed calls
+
+Adapt the upstream multiline regression into local fixtures before changing
+parsing. Valid escaped newlines inside an array/object must reach the client
+unchanged, including indentation and literal protocol text in edit strings.
+Raw unescaped controls in JSON remain invalid; do not repair them with a
+blanket replacement or strip meaningful whitespace.
+
+Separate complete malformed tool-shaped output from output interrupted by a
+stop, token limit or cancellation. The latter must terminate normally without
+emitting an incomplete call. Ordinary prose mentioning tool syntax is also
+distinct from an attempted call.
+
+Reproduce the current malformed-call behavior and select an explicit error
+contract using the existing backend/API error machinery. Check buffered HTTP
+errors and SSE errors after headers have been sent. A complete recognized
+malformed attempt should not silently look like successful task completion.
+If robust classification requires prompt/sampler changes or breaks ordinary
+prose, retain the regression and defer that diagnostic change separately.
+
+This step improves parsing and observability. It does not enforce nested
+required fields during generation or guarantee that agent loops disappear.
+
+## Validation and completion criteria
+
+For each improvement, add the smallest deterministic fixtures that reproduce
+the defect, build the affected targets freshly, and run the relevant checks.
+Exercise both APIs and buffered/streaming delivery. Include `http_server_test`
+when error/status contracts change, and Qwen template tests when history or
+rendering behavior changes.
+
+Examples from the current Windows workflow, run from the repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\windows\build.ps1 -Preset gpu-test -Target openai_chat_test -Jobs 4
+powershell -ExecutionPolicy Bypass -File tools\windows\build.ps1 -Preset gpu-test -Target http_server_test -Jobs 4
+ctest --test-dir build/gpu-test -R '^(openai_chat_test|http_server_test)$' --output-on-failure --no-tests=error
+python tools/ci/check-format.py
+python tools/ci/check-docs.py
+```
+
+Use the repository-compatible formatter. Pass tool-location overrides when
+installations differ. For bounded Windows CPU checks, follow
+[CI](../../.github/workflows/ci.yml); Linux shared-code CI is also required.
+These commands are proposed checks, not recorded passes for an implementation.
+
+After parser contracts pass, retain a bounded real-model agent workload:
+
+- Qwen27B AR and DFlash2, and Flash-Next AR and MTP when artifacts are available.
+- A nested/multiline edit, tool-result replay, disabled marker literals, and
+  typed wildcard calls through both APIs.
+- A read/edit/verify/finish sequence with independently checked file contents,
+  capped turns and recorded repeated actions without progress.
+- Fresh, cached and replayed requests; an interruption/resume case if affected.
+- Baseline/candidate prompt tokens and unchanged-template controls, plus total
+  request latency and completion counts. Preserve identical workloads and
+  cache histories; a throughput benchmark alone is insufficient.
+
+Record executable/source identities, toolchain, model hashes/revisions,
+quantization, sidecars, context, sampling, speculation, requests and responses.
+Use isolated client settings/cache. Keep large logs under ignored `build/`;
+retain concise results and exact reproduction commands in the implementation
+record. Missing artifacts and skipped checks remain coverage gaps.
+
+For changes affecting inference correctness, follow
+[matched-token validation](../TESTING.md#matched-token-and-layer-comparisons):
+retain matched full-logit and perplexity checks, requiring exact full-logit
+equality when arithmetic is unchanged. Parser fixtures remain necessary even
+when logits match. If work reaches sampling/speculation, also cover rejection,
+rollback, residual draws and snapshot interleaving.
+
+Finish each improvement with a focused Conventional Commit, immutable
+`Upstream-Commit:` provenance for manual adaptations, and an accurate
+[UPSTREAM.md](../../UPSTREAM.md) entry documenting imports, omissions and checks
+actually run. This planning document itself is not an integrated change and
+does not warrant a ledger entry. Do not push unless requested.
+
+## Optional later phase: generation-time enforcement
+
+Revisit this only if measured agent failures require prevention during
+generation, or the user requests strict structured-output behavior. Parser
+validation can reject a completed bad call; it cannot prevent the model from
+generating one or recover information absent from the native representation.
+
+The efficient full integration would adapt final versions of the required
+constraint components directly, rather than replay every overlapping PR:
+
+- [#283 foundation](https://github.com/gufo-org/gufo/commit/982bffea86fd5568759a420c4808c5b2123161c8):
+  schema grammar/lexeme/regex code, response-format contracts, vocabulary masks,
+  sampler state and required model connections.
+- [#324 native-tool support](https://github.com/gufo-org/gufo/commit/b26de0d30caa363cc6694bddd094af9bd88ec62b):
+  native tool grammars and constraint-aware AR/speculative execution.
+- [Final #373](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e):
+  open nested schemas, faithful fallback routing, finite grammars, required-call
+  compact routing, and relevant regression coverage.
+
+This remains a substantive inference change. Preserve Windows fast-sampling
+paths, device-memory handling, cache adaptations and per-request controls.
+Keep unrelated sampler-default migrations, metrics/progress features and GUI
+changes outside the port. Do not replace the upstream grammar with a homemade
+subset validator or count parser-only work as full strict-schema support.
+
+## Resume checklist
+
+- [ ] Reconfirm HEAD, clean/owned paths, worktree and current AGENTS instructions.
+- [ ] Verify which planned improvements are already present.
+- [ ] Capture baseline API fixture results and identify the test executable.
+- [ ] Implement/validate disabled-tool marker handling.
+- [ ] Implement/validate historical-call name handling.
+- [ ] Implement/validate bounded declared-type resolution.
+- [ ] Add multiline fixtures and resolve or explicitly defer error diagnostics.
+- [ ] Retain bounded agent and matched latency results; document coverage gaps.
+- [ ] Update provenance, server contracts and actual validation records.
+- [ ] Decide separately whether the optional inference phase is warranted.
