@@ -1155,9 +1155,20 @@ ParsedGeneration ParseGeneration(
     if (content.starts_with(kThinkStart)) {
       content.remove_prefix(kThinkStart.size());
     }
-    std::size_t think_end = content.find(kThinkEnd);
-    if (EarliestMarker(content) < think_end)
-      think_end = std::string_view::npos;
+    // Only </think> ends the thinking phase. A model may quote tool
+    // markers (for example a `<tool_call>` opener inside damaged file
+    // contents) while reasoning; such markers are reasoning data, not the
+    // start of a call, and must not truncate reasoning or leak it into
+    // visible output. Without a closing delimiter no call has started yet,
+    // so a tool request keeps the whole output as reasoning. This also
+    // skips the required-call check below: a cut-off mid-reasoning is
+    // reported through the finish reason, not as an unsatisfied choice.
+    const std::size_t think_end = content.find(kThinkEnd);
+    if (think_end == std::string_view::npos &&
+        choice != ChatRequest::ToolChoice::kNone && !tools.empty()) {
+      parsed.reasoning_content = std::string(Trim(content));
+      return parsed;
+    }
     if (think_end == std::string_view::npos) {
       const auto marker = EarliestMarker(content);
       parsed.reasoning_content = std::string(Trim(content.substr(0, marker)));
@@ -1183,11 +1194,12 @@ ParsedGeneration ParseGeneration(
     const std::size_t think_start = content.find(kThinkStart);
     if (think_start != std::string_view::npos) {
       const std::size_t think_content_start = think_start + kThinkStart.size();
-      std::size_t think_end = content.find(kThinkEnd, think_content_start);
-      const auto marker = EarliestMarker(content.substr(think_content_start));
-      if (marker != std::string_view::npos &&
-          think_content_start + marker < think_end)
-        think_end = std::string_view::npos;
+      // Quoted markers inside the thinking span are data, as above; only
+      // </think> closes the span. (Streaming delta parity for this
+      // inline-span path is out of scope: the streaming filter only
+      // enters thinking from a leading delimiter, never from content.)
+      const std::size_t think_end =
+          content.find(kThinkEnd, think_content_start);
       if (think_end != std::string_view::npos) {
         parsed.reasoning_content = std::string(Trim(content.substr(
             think_content_start, think_end - think_content_start)));
@@ -1372,8 +1384,9 @@ public:
 
   StreamingTextFilter(
       TextGenerationBackend::InitialOutputState initial_output_state,
-      EmitCallback emit_piece)
-      : emit_piece_(std::move(emit_piece)) {
+      EmitCallback emit_piece, bool require_think_end = false)
+      : emit_piece_(std::move(emit_piece)),
+        require_think_end_(require_think_end) {
     if (initial_output_state ==
         TextGenerationBackend::InitialOutputState::kReasoning) {
       state_ = State::kThinking;
@@ -1415,7 +1428,11 @@ public:
     if (state_ == State::kThinking) {
       constexpr std::string_view kThinkEnd = "</think>";
       const std::size_t end_pos = pending_.find(kThinkEnd);
-      const auto marker = EarliestMarker(pending_);
+      // Thinking tool requests end reasoning only at </think>: a quoted
+      // marker arriving before the delimiter is reasoning data, so it is
+      // streamed as reasoning instead of starting tool capture early.
+      const auto marker =
+          require_think_end_ ? std::string::npos : EarliestMarker(pending_);
       if (marker < end_pos) {
         if (marker > 0 && !emit_piece_(pending_.substr(0, marker), true))
           return false;
@@ -1434,7 +1451,7 @@ public:
         state_ = State::kContent;
         trim_reasoning_separator_ = true;
       } else {
-        std::size_t held = HeldMarkerPrefix(pending_);
+        std::size_t held = require_think_end_ ? 0 : HeldMarkerPrefix(pending_);
         for (std::size_t len = std::min(pending_.size(), kThinkEnd.size() - 1);
              len > 0; --len) {
           if (kThinkEnd.starts_with(pending_.substr(pending_.size() - len))) {
@@ -1510,6 +1527,7 @@ private:
   };
 
   EmitCallback emit_piece_;
+  bool require_think_end_{false};
   core::Utf8Decoder decoder_;
   std::string raw_;
   std::string pending_;
@@ -1846,7 +1864,11 @@ HttpResponse StreamingResponse(
                   connected = writer(
                       Sse(ChoiceChunk(id, created, model, std::move(delta))));
                   return connected;
-                });
+                },
+                initial_output_state ==
+                        TextGenerationBackend::InitialOutputState::kReasoning &&
+                    !request.chat.tools.empty() &&
+                    request.chat.tool_choice != ChatRequest::ToolChoice::kNone);
 
             try {
               const auto result = generation->Wait([&](std::string_view piece) {
@@ -2116,13 +2138,17 @@ HttpResponse CreateOpenAiResponse(const HttpRequest& request,
       generation->Cancel();
       return json::Value();
     }
-    StreamingTextFilter filter(initial,
-                               [&](std::string_view piece, bool reasoning) {
-                                 if (output.Append(piece, reasoning))
-                                   return true;
-                                 generation->Cancel();
-                                 return false;
-                               });
+    StreamingTextFilter filter(
+        initial,
+        [&](std::string_view piece, bool reasoning) {
+          if (output.Append(piece, reasoning))
+            return true;
+          generation->Cancel();
+          return false;
+        },
+        initial == TextGenerationBackend::InitialOutputState::kReasoning &&
+            !chat.tools.empty() &&
+            chat.tool_choice != ChatRequest::ToolChoice::kNone);
     try {
       const auto result = writer
                               ? generation->Wait([&](std::string_view piece) {
