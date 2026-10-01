@@ -127,13 +127,17 @@
       <section class="performance" aria-labelledby="performance-heading">
         <h3 id="performance-heading">Performance</h3>
         <dl class="metrics-grid">
-          <div><dt>Prefill speed <span>tok/s</span></dt><dd id="prefill-speed">—</dd></div>
-          <div><dt>Generation speed <span>tok/s</span></dt><dd id="generation-speed">—</dd></div>
+          <div><dt>Live prefill <span>tok/s</span></dt><dd id="live-prefill-speed">—</dd></div>
+          <div><dt>Live generation <span>tok/s</span></dt><dd id="live-generation-speed">—</dd></div>
+          <div><dt>Last completed prefill <span>tok/s</span></dt><dd id="prefill-speed">—</dd></div>
+          <div><dt>Last completed generation <span>tok/s</span></dt><dd id="generation-speed">—</dd></div>
           <div><dt>Prompt tokens <span>total</span></dt><dd id="prompt-total">—</dd></div>
           <div><dt>Generated tokens <span>total</span></dt><dd id="generated-total">—</dd></div>
+          <div><dt>Processing requests</dt><dd id="requests-processing">—</dd></div>
+          <div><dt>Queued requests</dt><dd id="requests-deferred">—</dd></div>
         </dl>
         <p class="hint" id="metrics-note">Start Gufo to see performance.</p>
-        <p class="hint">Speeds are the last completed nonzero measurements, not live rates. Fully cached prompts retain the previous prefill speed. Token totals cover this server run and include cached prompt tokens.</p>
+        <p class="hint" id="metrics-detail">Live rates cover all requests between polls. Prompt totals and live prefill exclude cached tokens. Completed speeds retain the latest nonzero measurement.</p>
       </section>
       <details id="logs-details"><summary>Process log <span>Last 300 lines</span></summary><pre id="logs">No process output yet.</pre></details>
       <details><summary>Command preview <span>Next launch</span></summary><pre id="command">Choose a model to get started.</pre></details>

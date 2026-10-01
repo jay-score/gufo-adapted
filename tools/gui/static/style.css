@@ -184,7 +184,7 @@ code { font: 12px/1.5 Consolas, monospace; overflow-wrap: anywhere; }
 .runtime details { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 15px; }
 .performance { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 16px; }
 .performance h3 { font-size: 13px; margin: 0 0 12px; }
-.metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 0; }
+.metrics-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0; }
 .metrics-grid > div { background: var(--sunken); border-radius: 8px; padding: 12px 14px; min-width: 0; }
 .metrics-grid dt { font-size: 11px; color: var(--muted); }
 .metrics-grid dt span { margin-left: 4px; }
@@ -207,5 +207,6 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
 .file-list small { color: var(--muted); margin-left: auto; white-space: nowrap; }
 .dialog-footer { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-top: 14px; }
 @media (max-width: 1170px) { main { margin-inline: 24px; } }
+@media (max-width: 900px) { .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { main { margin-inline: 16px; padding-top: 23px; } .columns { grid-template-columns: 1fr; } .local-label, .brand small { display: none; } h1 { font-size: 29px; } .card { padding: 19px; } .launch-bar { flex-wrap: wrap; padding: 16px; } .actions { width: 100%; } .actions .primary { flex: 1; } .advanced-grid { grid-template-columns: 1fr 1fr; } summary span { display: block; margin-left: 15px; } footer { flex-direction: column; gap: 6px; } }
 @media (prefers-reduced-motion: no-preference) { button { transition: background .12s, border-color .12s; } }
