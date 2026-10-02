@@ -152,14 +152,14 @@ class Check:
         record["passed"] = record["status"] == 200 and text.strip() == "ALPHA" and not calls
         return edits
 
-    def agent(self, api, edits):
+    def agent(self, api, edits, *, replacement=NEW):
         fixture = self.out / (api + "-fixture.txt")
         fixture.write_text(OLD, encoding="utf-8", newline="")
         tools = [function("read_fixture", {"type": "object", "properties": {}}),
                  edits, function("finish", {"type": "object", "properties": {}})]
         messages = [{"role": "system", "content":
                      "Use tools in this order: read_fixture, edit_fixture, read_fixture to verify, finish. "
-                     "Edit the fixture by replacing its old text with exactly " + json.dumps(NEW) +
+                     "Edit the fixture by replacing its old text with exactly " + json.dumps(replacement) +
                      ". Preserve indentation and protocol literals. Do not repeat an action without progress."},
                     {"role": "user", "content": "Read, edit, verify and finish the fixture."}]
         actions, seen, repeats = [], set(), 0
@@ -207,9 +207,11 @@ class Check:
                     messages.append({"type": "function_call_output", "call_id": call["call_id"], "output": result})
             if finished:
                 break
+        file_matches = fixture.read_bytes() == replacement.encode()
         return {"actions": actions, "repeated_without_progress": repeats,
                 "file_contents": fixture.read_text(encoding="utf-8"),
-                "passed": fixture.read_bytes() == NEW.encode() and
+                "file_matches": file_matches,
+                "passed": file_matches and
                 actions == ["read_fixture", "edit_fixture", "read_fixture", "finish"] and repeats == 0}
 
 

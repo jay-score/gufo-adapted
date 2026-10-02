@@ -521,6 +521,12 @@ still contain a semantically wrong edit, as the agent file checks demonstrate;
 strict structure alone does not establish task success. Do not promote this
 record to complete structured-output or agent-quality qualification.
 
+The subsequent [source investigation](tool-calling-followup.md) found that the
+reference-derived Qwen renderer trimmed whitespace from tool results before
+generation. The original agent failures therefore cannot be attributed solely
+to model copying. That follow-up preserves tool-result bytes and separately
+records remaining semantic errors, prompt controls and the Flash EOS trace.
+
 Linux shared-code CI remains unrun: the available WSL installation lacks the
 build toolchain, and no push was requested. Full matched-token logit/perplexity,
 image inference and DeepSeek real-model checks were not run. No model arithmetic,

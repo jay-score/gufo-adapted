@@ -102,6 +102,23 @@ failures remain failures; deterministic API fixtures establish parser contracts
 independently. Compare baseline/candidate controls with identical cache histories
 before interpreting timings; a single run does not qualify a performance gain.
 
+For controlled whitespace/edit diagnostics, run
+[tool_whitespace_diagnose.py](../tests/tools/tool_whitespace_diagnose.py) against
+the same isolated server:
+
+```powershell
+python tests/tools/tool_whitespace_diagnose.py --url http://127.0.0.1:18080 --out build/tool-whitespace --case raw --case plain_raw --case plain_recovery_json --case escaped_recovery_json
+```
+
+The original `raw` case remains a control. Other cases change the replacement
+text, JSON-encode read results, describe exact replacement semantics, or make
+verification and correction explicit. Escaped cases encode literal angle
+brackets in the JSON example inside the prompt; they do not change the expected
+file bytes. Recovery cases allow corrective edits within the same six-turn cap.
+All cases independently check the file; failures still exit 1. Select `--api`
+to bound a run to one API. See the [diagnosis record](plans/tool-calling-followup.md)
+for retained results and the separate Flash termination investigation.
+
 Model-owned procedures and outstanding qualification gaps live with the model:
 
 - [DeepSeek V4 Flash](models/deepseek-v4-flash/QUALITY.md)
