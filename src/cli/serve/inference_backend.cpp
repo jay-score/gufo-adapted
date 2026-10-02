@@ -212,7 +212,7 @@ std::vector<std::uint8_t> QwenFlashNextCompatibilityIdentity(
            << "artifact_id=" << core::kGgufIdentityScheme << ':'
            << artifact_fingerprint << '\n'
            << "tokenizer=embedded-in-artifact\n"
-           << "chat_template=qwen38-reasoning-compiled-v3\n"
+           << "chat_template=qwen38-reasoning-compiled-v4\n"
            << "chat_template_reference_sha256="
            << tokenization::QwenChatTemplate::OfficialTemplateSha256() << '\n'
            << "state_abi=qwen38-flash-next-rocm-session-v1\n"
@@ -255,7 +255,7 @@ std::vector<std::uint8_t> QwenCompatibilityIdentity(
            << "artifact_id=" << core::kGgufIdentityScheme << ':'
            << artifact_fingerprint << '\n'
            << "tokenizer=embedded-in-artifact\n"
-           << "chat_template=qwen38-reasoning-compiled-v3\n"
+           << "chat_template=qwen38-reasoning-compiled-v4\n"
            << "chat_template_reference_sha256="
            << tokenization::QwenChatTemplate::OfficialTemplateSha256() << '\n'
            << "state_abi=" << state_abi << '\n'

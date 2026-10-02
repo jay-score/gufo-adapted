@@ -569,6 +569,23 @@ void TestToolRendering() {
          "Required tool choice is included in the model prompt");
 }
 
+void TestToolResultWhitespace() {
+  using namespace gufo::tokenization;
+  const std::vector<ChatMessage> messages{
+      {ChatRole::kUser, "Read both files."},
+      {ChatRole::kTool, "  before\n\n"},
+      {ChatRole::kTool, " \t\r\n"},
+  };
+  const auto rendered =
+      QwenChatTemplate::Render(messages, ChatTemplateOptions{});
+  Expect(rendered.has_value(), "Whitespace-bearing tool results render");
+  Expect(rendered->find("<tool_response>\n  before\n\n\n</tool_response>\n"
+                        "<tool_response>\n \t\r\n\n</tool_response>") !=
+             std::string::npos,
+         "File tool results preserve indentation, blank lines and "
+         "whitespace-only content");
+}
+
 void TestToolImages() {
   using namespace gufo::tokenization;
   const auto image = std::make_shared<const std::vector<std::uint8_t>>(1, 0);
@@ -586,10 +603,11 @@ void TestToolImages() {
          "Tool images retain placeholder offsets");
   Expect(
       rendered->find(
-          "<tool_response>\nleft Picture 1: "
-          "<|vision_start|><|image_pad|><|vision_end|>right\n</tool_response>\n"
-          "<tool_response>\nPicture 2: "
-          "<|vision_start|><|image_pad|><|vision_end|>\n</tool_response>") !=
+          "<tool_response>\n  left Picture 1: "
+          "<|vision_start|><|image_pad|><|vision_end|>right  "
+          "\n</tool_response>\n"
+          "<tool_response>\n \tPicture 2: "
+          "<|vision_start|><|image_pad|><|vision_end|> \n</tool_response>") !=
           std::string::npos,
       "Consecutive tool results render images inside their tool response with "
       "correct whitespace");
@@ -763,6 +781,7 @@ int main() {
   TestRenderAndTokenize();
   TestChatCorpusConformance();
   TestToolRendering();
+  TestToolResultWhitespace();
   TestToolImages();
   TestToolReplayPreservesGeneratedPrefix();
   TestEmptyReasoningReplayChangesThinkingSuffixTokens();

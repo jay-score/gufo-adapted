@@ -270,6 +270,12 @@ The server uses compiled model-specific formatters and validates recognized
 artifact template hashes during model loading. It does not accept custom Jinja
 or claim to enforce a reasoning-token budget.
 
+Qwen tool results retain their leading spaces, trailing newlines and
+whitespace-only content, including text adjacent to images. This deliberately
+differs from the reference template's outer trimming: file contents returned by
+tools must reach the model intact. Other message roles keep the reference
+trimming behavior. Persistent Qwen continuation caches use formatter version 4.
+
 Diagnostic telemetry is limited to status, token counts, timing, and
 cancellation state. It must not contain prompt text, model paths, machine
 identity, request IDs, or token IDs.
