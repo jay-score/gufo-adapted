@@ -61,6 +61,7 @@ before integrating more changes.
 - [ ] Revisit the omitted portions of #301 if disk image-history reuse or
   Qwen27B cancellation becomes a priority; preserve the fork's existing vision
   and cache-identity behavior.
+- [ ] https://github.com/gufo-org/gufo/pull/384 - consider bringing in if it lands
 
 Background: [issue #259](https://github.com/gufo-org/gufo/issues/259) discusses
 Pi agent loops, side requests displacing the only live session, disk staging,
