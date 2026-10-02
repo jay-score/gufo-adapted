@@ -118,3 +118,4 @@ tests/quality/compsec.json
 
 # Claude Code local settings
 .claude/settings.local.json
+GUFO_MODEL_MODULARITY_IDEAS.md
