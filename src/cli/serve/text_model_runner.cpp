@@ -277,6 +277,8 @@ std::string_view DiskEventReasonName(
       return "staging_capacity";
     case ContinuationDiskEventReason::kLru:
       return "lru";
+    case ContinuationDiskEventReason::kMinStep:
+      return "min_step";
     case ContinuationDiskEventReason::kExactReplacement:
       return "exact_replacement";
     case ContinuationDiskEventReason::kCorrupt:
@@ -325,10 +327,12 @@ void EmitDiskEvent(const ContinuationDiskEvent& event) noexcept {
     if (event.reason == ContinuationDiskEventReason::kSaved) {
       line << " write_ms=" << event.elapsed_ms;
       Logger::Info("cache", line.str());
-    } else if (event.reason == ContinuationDiskEventReason::kLru) {
-      // Staying inside a configured budget is expected operation, but it has
-      // to be visible: otherwise a run that evicts every other conversation
-      // looks identical to one that never cached anything.
+    } else if (event.reason == ContinuationDiskEventReason::kLru ||
+               event.reason == ContinuationDiskEventReason::kMinStep) {
+      // Staying inside a configured budget or skipping a checkpoint that
+      // barely advances is expected operation, but it has to be visible:
+      // otherwise a run that evicts every other conversation looks identical
+      // to one that never cached anything.
       Logger::Info("cache", line.str());
     } else {
       Logger::Warn("cache", line.str());
@@ -496,6 +500,8 @@ struct TextRunnerPool::Impl {
               .capacity_bytes = disk_cache_options->capacity_bytes,
               .staging_capacity_bytes =
                   disk_cache_options->staging_capacity_bytes,
+              .min_checkpoint_step_tokens =
+                  disk_cache_options->min_checkpoint_step_tokens,
           },
           EmitDiskEvent);
       Logger::Info("cache",
@@ -737,6 +743,12 @@ struct TextRunnerPool::Request::Impl {
       try {
         if (!disk_store)
           return;
+        // Copying device state only for disk is costly on the request path.
+        // Skip it when the disk store would discard the checkpoint anyway.
+        if (disk_store->WithinCheckpointStep(
+                *runner, snapshot_tokens,
+                InputIdentity(snapshot_tokens.size())))
+          return;
         disk_capture = disk_store->ReserveCapture(
             *runner, snapshot_tokens.size(), snapshot_bytes,
             InputIdentity(snapshot_tokens.size()));
@@ -890,7 +902,8 @@ struct TextRunnerPool::Request::Impl {
       if (snapshot && persistence) {
         const auto saved = disk_store->SaveAsync(
             runner, {prefix.begin(), prefix.end()}, std::move(snapshot),
-            {identity.begin(), identity.end()}, std::move(persistence));
+            {identity.begin(), identity.end()}, std::move(persistence),
+            /*shared_prefix=*/true);
         if (saved != 0) {
           ++snapshot_metrics.shared_prefix_snapshots;
           snapshot_metrics.shared_prefix_bytes += saved;
