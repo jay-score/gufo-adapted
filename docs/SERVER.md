@@ -270,6 +270,12 @@ The server uses compiled model-specific formatters and validates recognized
 artifact template hashes during model loading. It does not accept custom Jinja
 or claim to enforce a reasoning-token budget.
 
+Qwen tool results retain their leading spaces, trailing newlines and
+whitespace-only content, including text adjacent to images. This deliberately
+differs from the reference template's outer trimming: file contents returned by
+tools must reach the model intact. Other message roles keep the reference
+trimming behavior. Persistent Qwen continuation caches use formatter version 4.
+
 Diagnostic telemetry is limited to status, token counts, timing, and
 cancellation state. It must not contain prompt text, model paths, machine
 identity, request IDs, or token IDs.
@@ -590,11 +596,15 @@ and template-aware message counting are not implemented.
   which frame a rendered call; dotted and namespaced names such as
   `github.create_issue` are accepted. OpenAI itself documents a narrower set
   for this field, so a name outside `[A-Za-z0-9_-]` is portable to gufo but not
-  to every OpenAI-compatible service. The same name rule applies to an
-  assistant `tool_calls` entry that replays a call. Unsupported tool types,
+  to every OpenAI-compatible service. Historical names in assistant
+  `tool_calls` and Responses `function_call` items are preserved verbatim,
+  including Unicode and names absent from current tools. This does not
+  authorize new calls to them. History requires a non-empty string name,
+  without embedded NUL, and string arguments encoding a JSON object.
+  Unsupported tool types,
   malformed entries, unrenderable declared names and non-object parameters
   return 400 `invalid_tools` before generation; because messages parse first,
-  an unrenderable name in a replayed call returns 400 `invalid_messages`.
+  malformed Chat Completions history returns 400 `invalid_messages`.
 - shared top-k, min-p, repeat, frequency and presence sampling controls
 
 Streaming objects use `chat.completion.chunk` and end with the compatibility
@@ -611,8 +621,48 @@ sampling replay retains independent request histories.
 
 Tool calls are emitted only for declared functions when `tool_choice` allows
 calling tools. An unmet `required` choice returns `tool_choice_unsatisfied`
-(HTTP 502, or an SSE error after streaming starts), unless a requested stop
-sequence interrupted generation first.
+(HTTP 502, or an SSE error after streaming starts). Requested stops, token limits
+and cancellation terminate normally without emitting incomplete calls.
+
+A complete framed call that fails parsing or names an undeclared function
+returns `malformed_tool_call` (HTTP 502, without automatic retry guidance) when
+generation ends at EOS. Chat Completions sends an SSE error after headers;
+Responses sends `response.failed` with its standard `server_error` wire code,
+retaining `malformed_tool_call` in request diagnostics. A valid call does not
+hide a complete malformed attempt in the same output. Ordinary prose mentioning
+tool markers remains text. Diagnostic classification requires recognized call
+framing; ambiguous or unfinished native syntax is not a schema-validation
+guarantee. With an interrupted generation, complete calls are retained and
+incomplete calls are omitted.
+
+With no declared tools or `tool_choice: "none"`, tool markers are ordinary
+text. They do not end reasoning or delay streaming; thinking delimiters and
+UTF-8 buffering still apply.
+
+Native Qwen parameter types are recovered from named properties, matching
+`patternProperties`, schema-valued `additionalProperties`, and local object
+JSON-pointer references. All applicable hints are intersected; additional
+properties apply only when no named property or pattern matches. String values
+that look like JSON remain strings. String/non-string unions, untyped fields,
+conflicting hints, cyclic/external references and unsupported rules retain
+best-effort text semantics. This is type recovery, not schema validation or
+generation-time enforcement.
+
+Pattern lookup uses ICU over a conservative ECMAScript-compatible subset:
+Unicode literals, anchors, dot, ordinary groups/lookahead, character classes,
+alternation, quantifiers and escaped punctuation or `\n`, `\r`, `\t`, `\f`.
+Other escapes (including shorthand classes), engine-specific groups and class
+set operations remain guidance. Lookup permits at most 32 schema levels,
+128 visited nodes, 64 patterns per object, 512 bytes per pattern and 2048 bytes
+per key; each regex search has a 10 ms time limit and a 64 KiB stack limit.
+Exceeding a bound retains text. `anyOf`/`oneOf` type hints are unioned and
+`allOf` type hints intersected at a parameter; object-level applicators and
+conditional schemas remain guidance. Nested requirements are not enforced.
+
+Escaped newlines, indentation and literal protocol text in JSON array/object
+edit arguments survive parsing. Raw unescaped JSON controls remain invalid.
+Native scalar strings remain subject to their protocol's delimiter ambiguity;
+the parser does not guess missing structure or switch prompts automatically.
 
 Stop sequences match accepted output bytes, including reasoning and tool
 markup, before streaming or response parsing. Partial prefixes are buffered;

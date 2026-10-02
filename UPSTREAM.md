@@ -36,6 +36,95 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-01 — Multiline edit boundaries and malformed-call diagnostics
+
+- Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)
+  (PR #373 multiline edit regressions).
+- Local: 55ff2aff89dfa6c01a45a1b15c13f55fa09b9b8c.
+- Adaptation: delimiters inside JSON strings are data in native Qwen/DeepSeek
+  array/object arguments; thinking markers after an enabled tool opener do not
+  start inline reasoning. DeepSeek raw string quotes retain native semantics.
+  Added a fork-specific, non-retryable `malformed_tool_call` 502/SSE contract for
+  complete framed attempts rejected at EOS. Stops, limits and cancellation omit
+  incomplete calls normally, including required choice. Retains the fork's
+  thinking boundary, duplicate rules and interrupted-call recovery. No blanket
+  control repair, schema enforcement, automatic JSON routing or loop suppression.
+- Areas: parser, backend error contract, API/HTTP fixtures and server contracts.
+- Validation: multiline fixture failed before the boundary adaptation. Fresh
+  Windows CPU `openai_chat_test`, `http_server_test`, `qwen_chat_template_test`
+  and `ds4.template` passed. Covers both APIs buffered/streaming, mixed valid/bad
+  output, escaped/raw newlines, literal Qwen/DSML/thinking delimiters, native
+  string quotes, non-retryable buffered errors, SSE failure after headers and
+  required calls at token limits. The [implementation record](docs/plans/tool-calling-pr373.md#implementation-record)
+  retains the partial real-model results and remaining failures. Linux CI is
+  outstanding.
+- Status: retained.
+
+### 2026-10-01 — Bounded Qwen declared-type recovery
+
+- Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)
+  (PR #373 typed wildcard regression and native-schema review).
+- Local: 5935c53e99b451a1cd26a37c7cf47aa5391d036b.
+- Adaptation: parser-only type hints from named properties, all matching
+  patterns, additional-property schemas and bounded local references. Uses
+  existing ICU with `ICU::i18n` linkage and a documented portable regex subset.
+  Ambiguous/unsupported hints retain text. This is an independent adaptation,
+  not upstream's wildcard JSON fallback or a schema validator. Does not import
+  automatic protocol switching, constraints or inference changes.
+- Areas: `CMakeLists.txt`, API parser/fixtures and server contracts.
+- Validation: baseline fixture reproduced integer `x_count` becoming a string.
+  Fresh Windows CPU `openai_chat_test` and `http_server_test` pass; coverage
+  includes all JSON types, intersections, precedence, Unicode/escaped keys,
+  reference chains/cycles, bounded lookup and guidance fallback. Pinned ICU 78.3
+  Windows import libraries and `icuin78.dll` linked/staged successfully.
+  Real-model wildcard probes pass in all four tested modes; the
+  [implementation record](docs/plans/tool-calling-pr373.md#implementation-record)
+  retains the partial qualification and remaining failures. Linux CI is
+  outstanding.
+- Status: retained.
+
+### 2026-10-01 — Historical function-name preservation
+
+- Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)
+  (PR #373).
+- Local: 5a95703c90afac4a448047e28044ed64a4d3bb2c.
+- Adaptation: shared historical-function parsing for Chat Completions and
+  Responses. Preserves non-empty string names except embedded NUL and requires
+  JSON-object arguments. Declaration rules and generated-call allowlists remain
+  intact. The native renderers retain historical names verbatim, including
+  delimiter-bearing names; this is history preservation, not escaping or new
+  invocation authorization. No upstream grammar or renderer changes imported.
+- Areas: API parser, API fixtures, Qwen/DeepSeek template fixtures and server
+  contracts.
+- Validation: new history fixture failed against the previous parser. Fresh
+  Windows CPU API and Qwen/DeepSeek template targets passed after adaptation;
+  existing stateless grouping, call/result identity and image-order fixtures
+  remain covered. Real-model Unicode history probes pass; the
+  [implementation record](docs/plans/tool-calling-pr373.md#implementation-record)
+  retains the failed exact-file agent goals. Linux CI is outstanding.
+- Status: retained.
+
+### 2026-10-01 — Disabled-tool marker delivery
+
+- Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)
+  (PR #373).
+- Local: f997a39f14da75719a407ee99931736cdf1b4a4b.
+- Adaptation: one recognition decision for buffered and streaming output in
+  both APIs. Disabled tool markers remain text/reasoning and their prefixes
+  stream immediately. Retains the fork's required thinking boundary and UTF-8
+  decoding. Does not import upstream constraints, prompting or sampling changes.
+- Areas: `src/cli/serve/openai_chat.cpp`, `tests/cli/openai_chat_test.cpp`,
+  `docs/SERVER.md`.
+- Validation: baseline Windows CPU `openai_chat_test` and `http_server_test`
+  passed at `c4dcca536af5dc73998f24b28e548985e7f91efc`; new deterministic
+  disabled-marker fixture reproduced delayed prefixes, then passed after the
+  adaptation. Both APIs, buffered/streaming, disabled declarations, reasoning,
+  byte-split markers/UTF-8 and immediate callback delivery are covered.
+  Real-model literal probes pass; the
+  [implementation record](docs/plans/tool-calling-pr373.md#implementation-record)
+  retains the partial qualification. Linux CI is outstanding.
+- Status: retained.
+
 ### 2026-10-01 — Conversation history-edit checkpoints
 
 - Source: [gufo-org/gufo@0c350ed3ef5f8db9783385071ff05eec6bd687f1](https://github.com/gufo-org/gufo/commit/0c350ed3ef5f8db9783385071ff05eec6bd687f1)

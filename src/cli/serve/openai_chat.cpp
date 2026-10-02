@@ -1,5 +1,7 @@
 #include "src/cli/serve/openai_chat.hpp"
 
+#include <unicode/regex.h>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -226,12 +228,14 @@ bool ParseContent(const json::Value* content,
   return true;
 }
 
-// A tool name reaches the Qwen and DeepSeek renderers unescaped, inside
+// Declared tool names reach the Qwen and DeepSeek renderers unescaped, inside
 // "<function=NAME>" and "name=\"NAME\"", so the characters that frame a call
 // are excluded. The dots, colons and slashes that agent harnesses give bridged
 // tool names are data and are kept. Non-ASCII bytes are excluded as well: a
 // name is placed in a prompt the model reads and in operator logs, where
 // confusable and invisible characters buy a client nothing.
+// Historical names describe past output and are preserved by the renderers;
+// they do not declare tools the model is allowed to call now.
 constexpr std::string_view kToolNameRule =
     "function names require 1-64 printable ASCII characters other than "
     "spaces, '<', '>', '\"' and '\\'";
@@ -267,6 +271,27 @@ bool ParseArguments(std::string_view arguments,
     });
   }
   return true;
+}
+
+bool ParseHistoricalFunction(const json::Value& function,
+                             tokenization::ChatMessage::ToolCall* call,
+                             std::string* error) {
+  const auto* name = function.find("name");
+  const auto* arguments = function.find("arguments");
+  if (!name || !name->is_string() || name->str().empty() || !arguments ||
+      !arguments->is_string()) {
+    *error =
+        "historical function calls require a non-empty string name and "
+        "string arguments";
+    return false;
+  }
+  // NUL cannot pass through the DeepSeek tokenizer's C-string interface.
+  if (name->str().find('\0') != std::string::npos) {
+    *error = "historical function names cannot contain NUL";
+    return false;
+  }
+  call->name = name->str();
+  return ParseArguments(arguments->str(), &call->arguments, error);
 }
 
 bool ParseMessage(const json::Value& value, tokenization::ChatMessage* message,
@@ -321,19 +346,7 @@ bool ParseMessage(const json::Value& value, tokenization::ChatMessage* message,
     }
     tokenization::ChatMessage::ToolCall call;
     call.id = item.member_str("id");
-    call.name = function->member_str("name");
-    const std::string arguments = function->member_str("arguments");
-    // A replayed call is rendered like a fresh one, so it carries the same
-    // name rule: a name that cannot be framed is rejected wherever it enters.
-    if (!call.name.empty() && !RenderableToolName(call.name)) {
-      *error = std::string(kToolNameRule);
-      return false;
-    }
-    if (call.name.empty() || arguments.empty() ||
-        !ParseArguments(arguments, &call.arguments, error)) {
-      if (error->empty()) {
-        *error = "assistant tool calls require a name and JSON arguments";
-      }
+    if (!ParseHistoricalFunction(*function, &call, error)) {
       return false;
     }
     message->tool_calls.push_back(std::move(call));
@@ -870,42 +883,275 @@ std::string ArgumentsJson(
   return object.dump();
 }
 
-// Qwen's XML-like arguments carry no type marker. The advertised schema is
-// needed to distinguish a string such as 42 from the JSON number 42.
-bool SchemaAccepts(const json::Value& schema, const json::Value& value) {
-  const auto matches = [&](std::string_view type) {
-    return (type == "string" && value.is_string()) ||
-           (type == "number" && value.is_number()) ||
-           (type == "integer" && value.is_number() &&
-            std::floor(value.as_double()) == value.as_double()) ||
-           (type == "boolean" && value.is_bool()) ||
-           (type == "null" && value.is_null()) ||
-           (type == "array" && value.is_array()) ||
-           (type == "object" && value.is_object());
-  };
-  if (const auto* type = schema.find("type")) {
-    if (type->is_string())
-      return matches(type->get_str());
-    if (type->is_array())
-      return std::ranges::any_of(type->items(), [&](const auto& item) {
-        return item.is_string() && matches(item.get_str());
-      });
-    return false;
-  }
-  for (const auto* name : {"anyOf", "oneOf"}) {
-    if (const auto* choices = schema.find(name); choices && choices->is_array())
-      return std::ranges::any_of(choices->items(), [&](const auto& item) {
-        return SchemaAccepts(item, value);
-      });
-  }
-  return true;
+// Native Qwen parameters have no type marker. These are decoding hints, not
+// a JSON Schema validator: unsupported rules retain non-strict text semantics.
+constexpr unsigned kStringType = 1;
+constexpr unsigned kIntegerType = 2;
+constexpr unsigned kFractionalType = 4;
+constexpr unsigned kBooleanType = 8;
+constexpr unsigned kNullType = 16;
+constexpr unsigned kArrayType = 32;
+constexpr unsigned kObjectType = 64;
+constexpr unsigned kAllTypes = 127;
+
+unsigned JsonType(std::string_view type) {
+  if (type == "string")
+    return kStringType;
+  if (type == "integer")
+    return kIntegerType;
+  if (type == "number")
+    return kIntegerType | kFractionalType;
+  if (type == "boolean")
+    return kBooleanType;
+  if (type == "null")
+    return kNullType;
+  if (type == "array")
+    return kArrayType;
+  if (type == "object")
+    return kObjectType;
+  return 0;
 }
 
-void ParseQwenCalls(std::string_view text,
-                    std::span<const tokenization::ChatTool> tools,
-                    std::vector<ParsedToolCall>* calls) {
+struct TypeHint {
+  enum class Resolution { kResolved, kUnsupported, kCyclic, kBounded };
+  unsigned types{kAllTypes};
+  Resolution resolution{Resolution::kResolved};
+
+  void Intersect(const TypeHint& other) {
+    types &= other.types;
+    if (other.resolution != Resolution::kResolved)
+      resolution = other.resolution;
+  }
+  bool PreferString() const {
+    return resolution != Resolution::kResolved || types == 0 ||
+           (types & kStringType) != 0;
+  }
+  bool Accepts(const json::Value& value) const {
+    const auto type = value.is_number()
+                          ? (std::floor(value.as_double()) == value.as_double()
+                                 ? kIntegerType
+                                 : kFractionalType)
+                          : JsonType(value.is_null()     ? "null"
+                                     : value.is_bool()   ? "boolean"
+                                     : value.is_array()  ? "array"
+                                     : value.is_object() ? "object"
+                                                         : "string");
+    return (types & type) != 0;
+  }
+};
+
+// ICU is not an ECMAScript engine. Admit only a portable subset and normalize
+// dot/end-anchor semantics; ICU-only escapes, groups and set operations remain
+// guidance. Search is unanchored, as JSON Schema patternProperties requires.
+std::optional<bool> MatchesPropertyPattern(std::string_view pattern,
+                                           std::string_view name) {
+  if (pattern.size() > 512 || name.size() > 2048)
+    return std::nullopt;
+  std::string portable;
+  bool in_class = false;
+  for (std::size_t i = 0; i < pattern.size(); ++i) {
+    const char c = pattern[i];
+    if (c == '\\') {
+      if (++i == pattern.size() ||
+          std::string_view{R"(\.^$|?*+()[]{}-/nrtf)"}.find(pattern[i]) ==
+              std::string_view::npos)
+        return std::nullopt;
+      portable += '\\';
+      portable += pattern[i];
+    } else if (in_class) {
+      if (c == '[' || c == '&' || c == '{' || c == '}' ||
+          (c == '-' && i + 1 < pattern.size() && pattern[i + 1] == '-'))
+        return std::nullopt;
+      in_class = c != ']';
+      portable += c;
+    } else {
+      if (c == '(' && i + 1 < pattern.size() && pattern[i + 1] == '?' &&
+          (i + 2 == pattern.size() ||
+           std::string_view{":=!"}.find(pattern[i + 2]) ==
+               std::string_view::npos))
+        return std::nullopt;
+      if (c == '+' && i > 0 &&
+          std::string_view{"*+?}"}.find(pattern[i - 1]) !=
+              std::string_view::npos)
+        return std::nullopt;
+      in_class = c == '[';
+      portable += c == '.'   ? R"([^\r\n\u2028\u2029])"
+                  : c == '$' ? R"(\z)"
+                             : std::string(1, c);
+    }
+  }
+  UErrorCode status = U_ZERO_ERROR;
+  const auto input = icu::UnicodeString::fromUTF8(name);
+  const std::unique_ptr<icu::RegexPattern> compiled(
+      icu::RegexPattern::compile(icu::UnicodeString::fromUTF8(portable),
+                                 UREGEX_ERROR_ON_UNKNOWN_ESCAPES, status));
+  if (U_FAILURE(status) || !compiled)
+    return std::nullopt;
+  const std::unique_ptr<icu::RegexMatcher> matcher(
+      compiled->matcher(input, status));
+  if (U_FAILURE(status) || !matcher)
+    return std::nullopt;
+  matcher->setTimeLimit(10, status);
+  matcher->setStackLimit(64 * 1024, status);
+  const bool matches = matcher->find(status);
+  return U_FAILURE(status) ? std::nullopt : std::optional(matches);
+}
+
+const json::Value* LocalSchemaReference(const json::Value& root,
+                                        std::string_view reference) {
+  if (reference == "#")
+    return &root;
+  if (!reference.starts_with("#/") ||
+      reference.find('%') != std::string_view::npos)
+    return nullptr;
+  reference.remove_prefix(2);
+  const auto* schema = &root;
+  while (true) {
+    const auto end = reference.find('/');
+    const auto part = reference.substr(0, end);
+    std::string key;
+    for (std::size_t i = 0; i < part.size(); ++i) {
+      if (part[i] != '~') {
+        key += part[i];
+      } else {
+        if (++i == part.size() || (part[i] != '0' && part[i] != '1'))
+          return nullptr;
+        key += part[i] == '0' ? '~' : '/';
+      }
+    }
+    schema = schema->is_object() ? schema->find(key) : nullptr;
+    if (!schema || end == std::string_view::npos)
+      return schema;
+    reference.remove_prefix(end + 1);
+  }
+}
+
+TypeHint ResolveDeclaredTypes(const json::Value& root,
+                              const json::Value& schema,
+                              std::optional<std::string_view> property,
+                              std::vector<const json::Value*> path,
+                              std::size_t* budget) {
+  using Resolution = TypeHint::Resolution;
+  if (path.size() >= 32 || *budget == 0)
+    return {.resolution = Resolution::kBounded};
+  --*budget;
+  if (std::ranges::find(path, &schema) != path.end())
+    return {.resolution = Resolution::kCyclic};
+  path.push_back(&schema);
+  if (!schema.is_object())
+    return schema.is_bool() && schema.as_bool()
+               ? TypeHint{}
+               : TypeHint{.resolution = Resolution::kUnsupported};
+  for (const auto* rule :
+       {"if", "then", "else", "not", "$dynamicRef", "unevaluatedProperties"})
+    if (schema.contains(rule))
+      return {.resolution = Resolution::kUnsupported};
+  TypeHint hint;
+  if (const auto* reference = schema.find("$ref")) {
+    const auto* target = reference->is_string()
+                             ? LocalSchemaReference(root, reference->str())
+                             : nullptr;
+    if (!target)
+      return {.resolution = Resolution::kUnsupported};
+    hint.Intersect(ResolveDeclaredTypes(root, *target, property, path, budget));
+  }
+  if (property) {
+    for (const auto* rule : {"anyOf", "oneOf", "allOf"})
+      if (schema.contains(rule))
+        return {.resolution = Resolution::kUnsupported};
+    bool matched = false;
+    if (const auto* properties = schema.find("properties")) {
+      if (!properties->is_object())
+        return {.resolution = Resolution::kUnsupported};
+      if (const auto* named = properties->find(std::string(*property))) {
+        matched = true;
+        hint.Intersect(ResolveDeclaredTypes(root, *named, {}, path, budget));
+      }
+    }
+    if (const auto* patterns = schema.find("patternProperties")) {
+      if (!patterns->is_object() || patterns->size() > 64)
+        return {.resolution = Resolution::kBounded};
+      for (const auto& [pattern, value] : patterns->members()) {
+        const auto match = MatchesPropertyPattern(pattern, *property);
+        if (!match)
+          return {.resolution = Resolution::kUnsupported};
+        if (*match) {
+          matched = true;
+          hint.Intersect(ResolveDeclaredTypes(root, value, {}, path, budget));
+        }
+      }
+    }
+    if (!matched) {
+      if (const auto* additional = schema.find("additionalProperties"))
+        hint.Intersect(
+            ResolveDeclaredTypes(root, *additional, {}, path, budget));
+    }
+    return hint;
+  }
+  if (const auto* type = schema.find("type")) {
+    unsigned mask = 0;
+    if (type->is_string()) {
+      mask = JsonType(type->str());
+    } else if (type->is_array()) {
+      for (const auto& item : type->items()) {
+        if (!item.is_string() || JsonType(item.str()) == 0)
+          return {.resolution = Resolution::kUnsupported};
+        mask |= JsonType(item.str());
+      }
+    }
+    if (mask == 0)
+      return {.resolution = Resolution::kUnsupported};
+    hint.types &= mask;
+  }
+  for (const auto* rule : {"anyOf", "oneOf", "allOf"}) {
+    if (const auto* choices = schema.find(rule)) {
+      if (!choices->is_array() || choices->empty())
+        return {.resolution = Resolution::kUnsupported};
+      const bool intersection = std::string_view(rule) == "allOf";
+      TypeHint combined{.types = intersection ? kAllTypes : 0};
+      for (const auto& branch : choices->items()) {
+        const auto resolved =
+            ResolveDeclaredTypes(root, branch, {}, path, budget);
+        if (resolved.resolution != Resolution::kResolved)
+          return resolved;
+        if (intersection)
+          combined.types &= resolved.types;
+        else
+          combined.types |= resolved.types;
+      }
+      hint.Intersect(combined);
+    }
+  }
+  return hint;
+}
+
+// JSON strings may contain protocol delimiters. Locate framing outside them
+// without modifying whitespace or repairing invalid control characters.
+std::size_t FindUnquoted(std::string_view text, std::string_view marker) {
+  bool quoted = false;
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    if (quoted && text[i] == '\\' && i + 1 < text.size()) {
+      ++i;
+    } else if (text[i] == '"') {
+      quoted = !quoted;
+    } else if (!quoted && text.substr(i).starts_with(marker)) {
+      return i;
+    }
+  }
+  return std::string_view::npos;
+}
+
+struct ToolParsing {
+  bool attempted{false};
+  std::size_t malformed_frames{0};
+};
+
+ToolParsing ParseQwenCalls(std::string_view text,
+                           std::span<const tokenization::ChatTool> tools,
+                           std::vector<ParsedToolCall>* calls) {
   constexpr std::string_view start = "<tool_call>";
   constexpr std::string_view end = "</tool_call>";
+  ToolParsing parsing;
   std::size_t cursor = 0;
   while ((cursor = text.find(start, cursor)) != std::string_view::npos) {
     const auto begin = cursor + start.size();
@@ -919,6 +1165,13 @@ void ParseQwenCalls(std::string_view text,
       return true;
     };
     body = Trim(body);
+    const bool attempted =
+        body.starts_with("<function=") || body.starts_with('{');
+    parsing.attempted |= attempted;
+    const auto closing = FindUnquoted(body, end);
+    const bool framed = attempted && closing != std::string_view::npos &&
+                        FindUnquoted(body, start) > closing;
+    parsing.malformed_frames += framed;
     ParsedToolCall call;
     bool complete = false;
     if (consume("<function=")) {
@@ -945,30 +1198,31 @@ void ParseQwenCalls(std::string_view text,
         }
         const std::string name(Trim(body.substr(0, name_end)));
         body.remove_prefix(name_end + 1);
+        std::size_t budget = 128;
+        const auto hint =
+            schema ? ResolveDeclaredTypes(*schema, *schema, name, {}, &budget)
+                   : TypeHint{};
+        const bool is_string = hint.PreferString();
         // Outer closing tags inside a parameter are data, not structure.
-        const auto close = body.find("</parameter>");
-        if (close == std::string_view::npos || body.find(start) < close ||
-            name.empty()) {
+        const auto close = is_string ? body.find("</parameter>")
+                                     : FindUnquoted(body, "</parameter>");
+        const auto nested =
+            is_string ? body.find(start) : FindUnquoted(body, start);
+        if (close == std::string_view::npos || nested < close || name.empty()) {
           valid = false;
           break;
         }
         const auto value = StripFramingNewlines(body.substr(0, close));
-        const auto* properties = schema ? schema->find("properties") : nullptr;
-        const auto* property = properties ? properties->find(name) : nullptr;
-        const bool string_allowed =
-            !property ||
-            SchemaAccepts(*property, json::Value(std::string(value)));
         // Prefer text if the schema permits it; parsing ambiguous scalars
         // as JSON would silently change a caller's declared string type.
-        const bool is_string = string_allowed;
         std::string raw(is_string ? value : Trim(value));
         if (!is_string) {
           auto parsed = TryParseJson(raw);
-          if (!parsed || !SchemaAccepts(*property, *parsed)) {
+          if (!parsed || !hint.Accepts(*parsed)) {
             raw = PythonLiteralsToJson(raw);
             parsed = TryParseJson(raw);
           }
-          if (!parsed || !SchemaAccepts(*property, *parsed)) {
+          if (!parsed || !hint.Accepts(*parsed)) {
             valid = false;
             break;
           }
@@ -1016,11 +1270,13 @@ void ParseQwenCalls(std::string_view text,
             tools, [&](const auto& tool) { return tool.name == call.name; }))
       complete = false;
     if (complete) {
+      parsing.malformed_frames -= framed;
       call.id = RandomId("call_");
       calls->push_back(std::move(call));
       cursor = text.size() - body.size();
     }
   }
+  return parsing;
 }
 
 std::optional<std::string> Attribute(std::string_view tag,
@@ -1038,7 +1294,32 @@ std::optional<std::string> Attribute(std::string_view tag,
   return std::string(tag.substr(value_start, end - value_start));
 }
 
-void ParseDsmlCalls(std::string_view text, std::vector<ParsedToolCall>* calls) {
+std::size_t DsmlInvokeEnd(std::string_view text, std::size_t cursor,
+                          std::string_view invoke_end,
+                          std::string_view parameter_start,
+                          std::string_view parameter_end) {
+  while (cursor < text.size()) {
+    const auto end = text.find(invoke_end, cursor);
+    const auto parameter = text.find(parameter_start, cursor);
+    if (end < parameter || parameter == std::string_view::npos)
+      return end;
+    const auto tag_end = text.find('>', parameter);
+    if (tag_end == std::string_view::npos)
+      return tag_end;
+    const auto tag = text.substr(parameter, tag_end - parameter + 1);
+    const auto value = text.substr(tag_end + 1);
+    const auto close = Attribute(tag, "string").value_or("true") != "false"
+                           ? value.find(parameter_end)
+                           : FindUnquoted(value, parameter_end);
+    if (close == std::string_view::npos)
+      return close;
+    cursor = tag_end + 1 + close + parameter_end.size();
+  }
+  return std::string_view::npos;
+}
+
+ToolParsing ParseDsmlCalls(std::string_view text,
+                           std::vector<ParsedToolCall>* calls) {
   constexpr std::array<std::string_view, 4> kInvokeStarts{
       "<｜DSML｜invoke",
       "<DSML｜invoke",
@@ -1064,6 +1345,7 @@ void ParseDsmlCalls(std::string_view text, std::vector<ParsedToolCall>* calls) {
       "</DS｜parameter>",
   };
 
+  ToolParsing parsing;
   std::size_t cursor = 0;
   while (cursor < text.size()) {
     std::size_t invoke_start = std::string_view::npos;
@@ -1078,12 +1360,18 @@ void ParseDsmlCalls(std::string_view text, std::vector<ParsedToolCall>* calls) {
     if (invoke_start == std::string_view::npos) {
       break;
     }
+    parsing.attempted = true;
     const std::size_t tag_end = text.find('>', invoke_start);
-    const std::size_t invoke_end = text.find(kInvokeEnds[syntax], tag_end);
+    const auto invoke_end =
+        tag_end == std::string_view::npos
+            ? tag_end
+            : DsmlInvokeEnd(text, tag_end + 1, kInvokeEnds[syntax],
+                            kParameterStarts[syntax], kParameterEnds[syntax]);
     if (tag_end == std::string_view::npos ||
         invoke_end == std::string_view::npos) {
       break;
     }
+    ++parsing.malformed_frames;
     ParsedToolCall call;
     call.id = RandomId("call_");
     const auto name = Attribute(
@@ -1097,27 +1385,51 @@ void ParseDsmlCalls(std::string_view text, std::vector<ParsedToolCall>* calls) {
           text.find(kParameterStarts[syntax], parameter_cursor);
       if (parameter_start == std::string_view::npos ||
           parameter_start >= invoke_end) {
+        valid =
+            Trim(text.substr(parameter_cursor, invoke_end - parameter_cursor))
+                .empty();
+        break;
+      }
+      if (!Trim(text.substr(parameter_cursor,
+                            parameter_start - parameter_cursor))
+               .empty()) {
+        valid = false;
         break;
       }
       const std::size_t parameter_tag_end = text.find('>', parameter_start);
-      const std::size_t parameter_end =
-          text.find(kParameterEnds[syntax], parameter_tag_end);
-      if (parameter_tag_end == std::string_view::npos ||
-          parameter_end == std::string_view::npos ||
-          parameter_end > invoke_end) {
+      if (parameter_tag_end == std::string_view::npos) {
+        valid = false;
         break;
       }
       const std::string_view tag =
           text.substr(parameter_start, parameter_tag_end - parameter_start + 1);
       const auto parameter_name = Attribute(tag, "name");
       const auto string_value = Attribute(tag, "string");
+      const bool is_string = string_value.value_or("true") != "false";
+      const auto value_start = parameter_tag_end + 1;
+      const auto close =
+          is_string
+              ? text.substr(value_start).find(kParameterEnds[syntax])
+              : FindUnquoted(text.substr(value_start), kParameterEnds[syntax]);
+      const auto parameter_end =
+          close == std::string_view::npos ? close : value_start + close;
+      if (parameter_end == std::string_view::npos ||
+          parameter_end > invoke_end) {
+        valid = false;
+        break;
+      }
       if (parameter_name.has_value()) {
         tokenization::ChatMessage::ToolArgument argument{
             .name = *parameter_name,
             .value = std::string(Trim(text.substr(
                 parameter_tag_end + 1, parameter_end - parameter_tag_end - 1))),
-            .is_string = string_value.value_or("true") != "false",
+            .is_string = is_string,
         };
+        if (argument.name.empty() ||
+            (!is_string && !TryParseJson(argument.value))) {
+          valid = false;
+          break;
+        }
         // As for Qwen calls: drop an identical repeat and reject a
         // conflicting one instead of letting the last value win.
         const auto previous =
@@ -1130,14 +1442,24 @@ void ParseDsmlCalls(std::string_view text, std::vector<ParsedToolCall>* calls) {
           valid = false;
           break;
         }
+      } else {
+        valid = false;
+        break;
       }
       parameter_cursor = parameter_end + kParameterEnds[syntax].size();
     }
     if (valid && !call.name.empty()) {
+      --parsing.malformed_frames;
       calls->push_back(std::move(call));
     }
     cursor = invoke_end + kInvokeEnds[syntax].size();
   }
+  return parsing;
+}
+
+bool RecognizeTools(std::span<const tokenization::ChatTool> tools,
+                    ChatRequest::ToolChoice choice) {
+  return !tools.empty() && choice != ChatRequest::ToolChoice::kNone;
 }
 
 ParsedGeneration ParseGeneration(
@@ -1147,6 +1469,10 @@ ParsedGeneration ParseGeneration(
     ChatRequest::ToolChoice choice, bool enforce_required) {
   ParsedGeneration parsed;
   std::string_view content = raw;
+  const bool recognize_tools = RecognizeTools(tools, choice);
+  const auto tool_marker = [recognize_tools](std::string_view text) {
+    return recognize_tools ? EarliestMarker(text) : std::string_view::npos;
+  };
 
   constexpr std::string_view kThinkStart = "<think>";
   constexpr std::string_view kThinkEnd = "</think>";
@@ -1164,13 +1490,12 @@ ParsedGeneration ParseGeneration(
     // skips the required-call check below: a cut-off mid-reasoning is
     // reported through the finish reason, not as an unsatisfied choice.
     const std::size_t think_end = content.find(kThinkEnd);
-    if (think_end == std::string_view::npos &&
-        choice != ChatRequest::ToolChoice::kNone && !tools.empty()) {
+    if (think_end == std::string_view::npos && recognize_tools) {
       parsed.reasoning_content = std::string(Trim(content));
       return parsed;
     }
     if (think_end == std::string_view::npos) {
-      const auto marker = EarliestMarker(content);
+      const auto marker = tool_marker(content);
       parsed.reasoning_content = std::string(Trim(content.substr(0, marker)));
       if (marker == std::string_view::npos) {
         if (enforce_required && choice == ChatRequest::ToolChoice::kRequired)
@@ -1192,7 +1517,8 @@ ParsedGeneration ParseGeneration(
     }
   } else {
     const std::size_t think_start = content.find(kThinkStart);
-    if (think_start != std::string_view::npos) {
+    if (think_start != std::string_view::npos &&
+        tool_marker(content) > think_start) {
       const std::size_t think_content_start = think_start + kThinkStart.size();
       // Quoted markers inside the thinking span are data, as above; only
       // </think> closes the span. (Streaming delta parity for this
@@ -1216,7 +1542,7 @@ ParsedGeneration ParseGeneration(
         }
       } else {
         const auto remaining = content.substr(think_content_start);
-        const auto marker = EarliestMarker(remaining);
+        const auto marker = tool_marker(remaining);
         parsed.reasoning_content =
             std::string(Trim(remaining.substr(0, marker)));
         parsed.text = std::string(content.substr(0, think_start));
@@ -1228,20 +1554,33 @@ ParsedGeneration ParseGeneration(
     }
   }
 
-  const std::size_t marker = EarliestMarker(parsed.text);
-  if (choice != ChatRequest::ToolChoice::kNone && !tools.empty() &&
-      marker != std::string_view::npos) {
+  const std::size_t marker = tool_marker(parsed.text);
+  bool malformed = false;
+  if (marker != std::string_view::npos) {
     const std::string text_before_tools = parsed.text.substr(0, marker);
     const std::string text_from_tools = parsed.text.substr(marker);
-    ParseQwenCalls(text_from_tools, tools, &parsed.tool_calls);
-    ParseDsmlCalls(text_from_tools, &parsed.tool_calls);
+    // A native output uses one call protocol. Feeding its JSON argument strings
+    // through the other parser would reinterpret literal examples as calls
+    // after the primary parser has consumed them.
+    const bool qwen_format = text_from_tools.starts_with("<tool_call>");
+    const auto qwen =
+        qwen_format ? ParseQwenCalls(text_from_tools, tools, &parsed.tool_calls)
+                    : ToolParsing{};
+    const auto deepseek =
+        qwen_format ? ToolParsing{}
+                    : ParseDsmlCalls(text_from_tools, &parsed.tool_calls);
+    malformed = qwen.malformed_frames != 0 || deepseek.malformed_frames != 0;
+    const auto parsed_call_count = parsed.tool_calls.size();
     std::erase_if(parsed.tool_calls, [&](const auto& call) {
       return std::ranges::none_of(
           tools, [&](const auto& tool) { return tool.name == call.name; });
     });
+    malformed |= parsed_call_count != parsed.tool_calls.size();
     // An explicit stop can interrupt a call before its closing tags. Keep
     // complete calls, but do not expose an unfinished call as ordinary text.
-    if (!parsed.tool_calls.empty() || !enforce_required) {
+    if (!parsed.tool_calls.empty() || qwen.attempted || deepseek.attempted ||
+        (!enforce_required &&
+         Trim(text_from_tools.substr(text_from_tools.find('>') + 1)).empty())) {
       parsed.text = text_before_tools;
       parsed.hide_tool_markup = true;
     }
@@ -1250,6 +1589,9 @@ ParsedGeneration ParseGeneration(
       parsed.tool_calls.empty())
     throw TextGenerationError(TextGenerationErrorCode::kToolChoiceUnsatisfied,
                               "model did not produce a declared tool call");
+  if (enforce_required && malformed)
+    throw TextGenerationError(TextGenerationErrorCode::kMalformedToolCall,
+                              "model produced a malformed tool call");
   return parsed;
 }
 
@@ -1384,9 +1726,13 @@ public:
 
   StreamingTextFilter(
       TextGenerationBackend::InitialOutputState initial_output_state,
-      EmitCallback emit_piece, bool require_think_end = false)
+      EmitCallback emit_piece, bool recognize_tools)
       : emit_piece_(std::move(emit_piece)),
-        require_think_end_(require_think_end) {
+        require_think_end_(
+            recognize_tools &&
+            initial_output_state ==
+                TextGenerationBackend::InitialOutputState::kReasoning),
+        recognize_tools_(recognize_tools) {
     if (initial_output_state ==
         TextGenerationBackend::InitialOutputState::kReasoning) {
       state_ = State::kThinking;
@@ -1431,8 +1777,9 @@ public:
       // Thinking tool requests end reasoning only at </think>: a quoted
       // marker arriving before the delimiter is reasoning data, so it is
       // streamed as reasoning instead of starting tool capture early.
-      const auto marker =
-          require_think_end_ ? std::string::npos : EarliestMarker(pending_);
+      const auto marker = require_think_end_ || !recognize_tools_
+                              ? std::string::npos
+                              : EarliestMarker(pending_);
       if (marker < end_pos) {
         if (marker > 0 && !emit_piece_(pending_.substr(0, marker), true))
           return false;
@@ -1451,7 +1798,9 @@ public:
         state_ = State::kContent;
         trim_reasoning_separator_ = true;
       } else {
-        std::size_t held = require_think_end_ ? 0 : HeldMarkerPrefix(pending_);
+        std::size_t held = require_think_end_ || !recognize_tools_
+                               ? 0
+                               : HeldMarkerPrefix(pending_);
         for (std::size_t len = std::min(pending_.size(), kThinkEnd.size() - 1);
              len > 0; --len) {
           if (kThinkEnd.starts_with(pending_.substr(pending_.size() - len))) {
@@ -1478,7 +1827,8 @@ public:
         pending_.erase(0, first);
         trim_reasoning_separator_ = false;
       }
-      const std::size_t marker = EarliestMarker(pending_);
+      const std::size_t marker =
+          recognize_tools_ ? EarliestMarker(pending_) : std::string::npos;
       if (marker != std::string::npos) {
         if (marker > 0 && !emit_piece_(pending_.substr(0, marker), false)) {
           return false;
@@ -1489,7 +1839,8 @@ public:
         return true;
       }
 
-      const std::size_t held = HeldMarkerPrefix(pending_);
+      const std::size_t held =
+          recognize_tools_ ? HeldMarkerPrefix(pending_) : 0;
       const std::size_t ready = pending_.size() - held;
       if (ready > 0 && !emit_piece_(pending_.substr(0, ready), false)) {
         return false;
@@ -1528,6 +1879,7 @@ private:
 
   EmitCallback emit_piece_;
   bool require_think_end_{false};
+  bool recognize_tools_{false};
   core::Utf8Decoder decoder_;
   std::string raw_;
   std::string pending_;
@@ -1768,11 +2120,11 @@ HttpResponse NonStreamingResponse(
     TextGenerationBackend::InitialOutputState initial_output_state) {
   const auto result = generation->Wait();
   core::Utf8Decoder decoder;
-  const ParsedGeneration generated =
-      ParseGeneration(decoder.Push(result.text, true), initial_output_state,
-                      request.chat.tools, request.chat.tool_choice,
-                      result.finish_reason !=
-                          TextGenerationBackend::FinishReason::kStopSequence);
+  const ParsedGeneration generated = ParseGeneration(
+      decoder.Push(result.text, true), initial_output_state, request.chat.tools,
+      request.chat.tool_choice,
+      !result.cancelled &&
+          result.finish_reason == TextGenerationBackend::FinishReason::kStop);
 
   json::Value response = json::Value::object();
   response["id"] = RandomId("chatcmpl-");
@@ -1865,10 +2217,7 @@ HttpResponse StreamingResponse(
                       Sse(ChoiceChunk(id, created, model, std::move(delta))));
                   return connected;
                 },
-                initial_output_state ==
-                        TextGenerationBackend::InitialOutputState::kReasoning &&
-                    !request.chat.tools.empty() &&
-                    request.chat.tool_choice != ChatRequest::ToolChoice::kNone);
+                RecognizeTools(request.chat.tools, request.chat.tool_choice));
 
             try {
               const auto result = generation->Wait([&](std::string_view piece) {
@@ -1885,8 +2234,8 @@ HttpResponse StreamingResponse(
               const ParsedGeneration generated = ParseGeneration(
                   filter.raw(), initial_output_state, request.chat.tools,
                   request.chat.tool_choice,
-                  result.finish_reason !=
-                      TextGenerationBackend::FinishReason::kStopSequence);
+                  result.finish_reason ==
+                      TextGenerationBackend::FinishReason::kStop);
               if (!filter.Finish(generated.hide_tool_markup)) {
                 return;
               }
@@ -2066,10 +2415,7 @@ bool ParseOpenAiResponseChat(const json::Value& body, ChatRequest* chat,
       message.role = tokenization::ChatRole::kAssistant;
       tokenization::ChatMessage::ToolCall call;
       call.id = item.member_str("call_id");
-      call.name = item.member_str("name");
-      const auto arguments = item.member_str("arguments");
-      if (call.id.empty() || call.name.empty() || arguments.empty() ||
-          !ParseArguments(arguments, &call.arguments, error))
+      if (call.id.empty() || !ParseHistoricalFunction(item, &call, error))
         return false;
       message.tool_calls.push_back(std::move(call));
     } else if (type == "function_call_output") {
@@ -2146,9 +2492,7 @@ HttpResponse CreateOpenAiResponse(const HttpRequest& request,
           generation->Cancel();
           return false;
         },
-        initial == TextGenerationBackend::InitialOutputState::kReasoning &&
-            !chat.tools.empty() &&
-            chat.tool_choice != ChatRequest::ToolChoice::kNone);
+        RecognizeTools(chat.tools, chat.tool_choice));
     try {
       const auto result = writer
                               ? generation->Wait([&](std::string_view piece) {
@@ -2175,8 +2519,7 @@ HttpResponse CreateOpenAiResponse(const HttpRequest& request,
       }
       const auto generated = ParseGeneration(
           filter.raw(), initial, chat.tools, chat.tool_choice,
-          result.finish_reason !=
-              TextGenerationBackend::FinishReason::kStopSequence);
+          result.finish_reason == TextGenerationBackend::FinishReason::kStop);
       if (!parallel_tool_calls && generated.tool_calls.size() > 1)
         throw TextGenerationError(
             TextGenerationErrorCode::kToolChoiceUnsatisfied,

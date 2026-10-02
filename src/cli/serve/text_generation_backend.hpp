@@ -28,6 +28,7 @@ enum class TextGenerationErrorCode : std::uint8_t {
   kOutputBackpressure,
   kSchedulerStopping,
   kToolChoiceUnsatisfied,
+  kMalformedToolCall,
 };
 
 class TextGenerationError final : public std::runtime_error {
@@ -48,6 +49,7 @@ public:
       case TextGenerationErrorCode::kSchedulerStopping:
         return 503;
       case TextGenerationErrorCode::kToolChoiceUnsatisfied:
+      case TextGenerationErrorCode::kMalformedToolCall:
         return 502;
     }
     return 500;
@@ -68,12 +70,15 @@ public:
         return "scheduler_stopping";
       case TextGenerationErrorCode::kToolChoiceUnsatisfied:
         return "tool_choice_unsatisfied";
+      case TextGenerationErrorCode::kMalformedToolCall:
+        return "malformed_tool_call";
     }
     return "generation_error";
   }
   [[nodiscard]] bool retryable() const noexcept {
     return code_ != TextGenerationErrorCode::kOutputLimit &&
-           code_ != TextGenerationErrorCode::kToolChoiceUnsatisfied;
+           code_ != TextGenerationErrorCode::kToolChoiceUnsatisfied &&
+           code_ != TextGenerationErrorCode::kMalformedToolCall;
   }
 
 private:

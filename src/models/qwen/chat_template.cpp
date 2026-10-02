@@ -457,11 +457,13 @@ std::optional<std::string> QwenChatTemplate::Render(
       }
       image_content.append(std::string_view(msg.content).substr(cursor));
     }
-    // Trim rendered content so image placement retains adjacent whitespace.
+    // Tool results may contain file contents: their outer whitespace is data.
+    // Other roles retain the reference template's trimming after image layout.
     const std::string_view untrimmed = msg.images.empty()
                                            ? std::string_view(msg.content)
                                            : std::string_view(image_content);
-    const std::string_view content = Trim(untrimmed);
+    const std::string_view content =
+        msg.role == ChatRole::kTool ? untrimmed : Trim(untrimmed);
     if (image_offsets != nullptr && !local_image_offsets.empty()) {
       const auto removed =
           static_cast<std::size_t>(content.data() - untrimmed.data());

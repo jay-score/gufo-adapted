@@ -84,6 +84,41 @@ Broaden testing when a change crosses shared ownership boundaries or a failure
 reveals an unresolved risk. Full model sweeps, media generation, and repeated
 timing runs are not the default development loop.
 
+For a bounded real-model tool/parser check, run
+[tool_parser_agent_check.py](../tests/tools/tool_parser_agent_check.py) against
+an isolated text server with a 4096-token context, thinking disabled and matched
+model/sampling/speculative settings:
+
+```powershell
+python tests/tools/tool_parser_agent_check.py --url http://127.0.0.1:18080 --out build/tool-parser-check
+```
+
+It exercises both APIs with literal markers, disabled tools, typed wildcard
+arguments, multiline edits, Unicode history, repeated requests and required
+call interruption/resume. A six-turn read/edit/verify/finish loop operates only
+on its fixture file under the output directory. Exact requests/responses,
+latency, usage and independently checked contents are retained. Model copying
+failures remain failures; deterministic API fixtures establish parser contracts
+independently. Compare baseline/candidate controls with identical cache histories
+before interpreting timings; a single run does not qualify a performance gain.
+
+For controlled whitespace/edit diagnostics, run
+[tool_whitespace_diagnose.py](../tests/tools/tool_whitespace_diagnose.py) against
+the same isolated server:
+
+```powershell
+python tests/tools/tool_whitespace_diagnose.py --url http://127.0.0.1:18080 --out build/tool-whitespace --case raw --case plain_raw --case plain_recovery_json --case escaped_recovery_json
+```
+
+The original `raw` case remains a control. Other cases change the replacement
+text, JSON-encode read results, describe exact replacement semantics, or make
+verification and correction explicit. Escaped cases encode literal angle
+brackets in the JSON example inside the prompt; they do not change the expected
+file bytes. Recovery cases allow corrective edits within the same six-turn cap.
+All cases independently check the file; failures still exit 1. Select `--api`
+to bound a run to one API. See the [diagnosis record](plans/tool-calling-followup.md)
+for retained results and the separate Flash termination investigation.
+
 Model-owned procedures and outstanding qualification gaps live with the model:
 
 - [DeepSeek V4 Flash](models/deepseek-v4-flash/QUALITY.md)

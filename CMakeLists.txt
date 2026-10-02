@@ -161,7 +161,7 @@ target_include_directories(gufo_core PUBLIC ${CMAKE_SOURCE_DIR})
 target_compile_definitions(gufo_core PRIVATE
   GUFO_FFMPEG_EXECUTABLE="${GUFO_FFMPEG_EXECUTABLE}"
   GUFO_FFPROBE_EXECUTABLE="${GUFO_FFPROBE_EXECUTABLE}")
-target_link_libraries(gufo_core PUBLIC ICU::uc Threads::Threads
+target_link_libraries(gufo_core PUBLIC ICU::uc ICU::i18n Threads::Threads
   PNG::PNG JPEG::JPEG CURL::libcurl OpenSSL::Crypto)
 
 add_subdirectory(src/models/qwen)
