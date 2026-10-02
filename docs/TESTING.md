@@ -84,6 +84,24 @@ Broaden testing when a change crosses shared ownership boundaries or a failure
 reveals an unresolved risk. Full model sweeps, media generation, and repeated
 timing runs are not the default development loop.
 
+For a bounded real-model tool/parser check, run
+[tool_parser_agent_check.py](../tests/tools/tool_parser_agent_check.py) against
+an isolated text server with a 4096-token context, thinking disabled and matched
+model/sampling/speculative settings:
+
+```powershell
+python tests/tools/tool_parser_agent_check.py --url http://127.0.0.1:18080 --out build/tool-parser-check
+```
+
+It exercises both APIs with literal markers, disabled tools, typed wildcard
+arguments, multiline edits, Unicode history, repeated requests and required
+call interruption/resume. A six-turn read/edit/verify/finish loop operates only
+on its fixture file under the output directory. Exact requests/responses,
+latency, usage and independently checked contents are retained. Model copying
+failures remain failures; deterministic API fixtures establish parser contracts
+independently. Compare baseline/candidate controls with identical cache histories
+before interpreting timings; a single run does not qualify a performance gain.
+
 Model-owned procedures and outstanding qualification gaps live with the model:
 
 - [DeepSeek V4 Flash](models/deepseek-v4-flash/QUALITY.md)

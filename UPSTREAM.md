@@ -40,7 +40,7 @@ Use this entry format:
 
 - Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)
   (PR #373 multiline edit regressions).
-- Local: commit introducing this entry.
+- Local: 55ff2aff89dfa6c01a45a1b15c13f55fa09b9b8c.
 - Adaptation: delimiters inside JSON strings are data in native Qwen/DeepSeek
   array/object arguments; thinking markers after an enabled tool opener do not
   start inline reasoning. DeepSeek raw string quotes retain native semantics.
@@ -55,15 +55,16 @@ Use this entry format:
   and `ds4.template` passed. Covers both APIs buffered/streaming, mixed valid/bad
   output, escaped/raw newlines, literal Qwen/DSML/thinking delimiters, native
   string quotes, non-retryable buffered errors, SSE failure after headers and
-  required calls at token limits. Linux and real-model qualification are recorded
-  separately in the implementation plan.
+  required calls at token limits. The [implementation record](docs/plans/tool-calling-pr373.md#implementation-record)
+  retains the partial real-model results and remaining failures. Linux CI is
+  outstanding.
 - Status: retained.
 
 ### 2026-10-01 — Bounded Qwen declared-type recovery
 
 - Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)
   (PR #373 typed wildcard regression and native-schema review).
-- Local: commit introducing this entry.
+- Local: 5935c53e99b451a1cd26a37c7cf47aa5391d036b.
 - Adaptation: parser-only type hints from named properties, all matching
   patterns, additional-property schemas and bounded local references. Uses
   existing ICU with `ICU::i18n` linkage and a documented portable regex subset.
@@ -76,14 +77,17 @@ Use this entry format:
   includes all JSON types, intersections, precedence, Unicode/escaped keys,
   reference chains/cycles, bounded lookup and guidance fallback. Pinned ICU 78.3
   Windows import libraries and `icuin78.dll` linked/staged successfully.
-  Linux and real-model qualification remain outstanding.
+  Real-model wildcard probes pass in all four tested modes; the
+  [implementation record](docs/plans/tool-calling-pr373.md#implementation-record)
+  retains the partial qualification and remaining failures. Linux CI is
+  outstanding.
 - Status: retained.
 
 ### 2026-10-01 — Historical function-name preservation
 
 - Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)
   (PR #373).
-- Local: commit introducing this entry.
+- Local: 5a95703c90afac4a448047e28044ed64a4d3bb2c.
 - Adaptation: shared historical-function parsing for Chat Completions and
   Responses. Preserves non-empty string names except embedded NUL and requires
   JSON-object arguments. Declaration rules and generated-call allowlists remain
@@ -95,14 +99,16 @@ Use this entry format:
 - Validation: new history fixture failed against the previous parser. Fresh
   Windows CPU API and Qwen/DeepSeek template targets passed after adaptation;
   existing stateless grouping, call/result identity and image-order fixtures
-  remain covered. Linux and real-model agent qualification remain outstanding.
+  remain covered. Real-model Unicode history probes pass; the
+  [implementation record](docs/plans/tool-calling-pr373.md#implementation-record)
+  retains the failed exact-file agent goals. Linux CI is outstanding.
 - Status: retained.
 
 ### 2026-10-01 — Disabled-tool marker delivery
 
 - Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)
   (PR #373).
-- Local: commit introducing this entry.
+- Local: f997a39f14da75719a407ee99931736cdf1b4a4b.
 - Adaptation: one recognition decision for buffered and streaming output in
   both APIs. Disabled tool markers remain text/reasoning and their prefixes
   stream immediately. Retains the fork's required thinking boundary and UTF-8
@@ -114,7 +120,9 @@ Use this entry format:
   disabled-marker fixture reproduced delayed prefixes, then passed after the
   adaptation. Both APIs, buffered/streaming, disabled declarations, reasoning,
   byte-split markers/UTF-8 and immediate callback delivery are covered.
-  Real-model and Linux qualification remain outstanding.
+  Real-model literal probes pass; the
+  [implementation record](docs/plans/tool-calling-pr373.md#implementation-record)
+  retains the partial qualification. Linux CI is outstanding.
 - Status: retained.
 
 ### 2026-10-01 — Conversation history-edit checkpoints
