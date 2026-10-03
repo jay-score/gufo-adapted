@@ -123,6 +123,8 @@ public:
     // A failure on a device that still accepts work.
     if (failure == 4)
       throw std::runtime_error("unspecified launch failure");
+    if (failure == 5)
+      throw std::runtime_error("");
     Result result;
     if (wait_for_disconnect) {
       entered.release();
@@ -960,15 +962,34 @@ void TestRawCompletionStreaming() {
   assert(without_usage.find("\"timings\":") != std::string::npos);
   assert(without_usage.find("\"usage\":") == std::string::npos);
 
-  server.backend->failure = 1;
-  const auto failed = server.Post(
-      "/v1/completions",
-      R"({"prompt":"hello","stream":true,"stream_options":{"include_usage":true}})");
-  ExpectStatus(failed, 200);
-  assert(failed.find("\"code\":\"generation_failed\"") != std::string::npos);
-  assert(failed.find("\"message\":\"generation failed\"") != std::string::npos);
-  assert(failed.find("context exceeded") == std::string::npos);
-  assert(failed.find("data: [DONE]\n\n") != std::string::npos);
+  for (const int failure : {1, 5}) {
+    server.backend->failure = failure;
+    const std::string message =
+        failure == 1 ? "context exceeded" : "generation failed";
+    for (
+        const auto& [path, body] : {
+            std::pair{
+                "/v1/completions",
+                R"({"prompt":"hello","stream":true,"stream_options":{"include_usage":true}})"},
+            std::pair{
+                "/v1/chat/completions",
+                R"({"model":"test","messages":[{"role":"user","content":"hello"}],"stream":true})"},
+            std::pair{"/v1/responses", R"({"input":"hello","stream":true})"},
+        }) {
+      const auto failed = server.Post(path, body);
+      ExpectStatus(failed, 200);
+      assert(failed.find("\"message\":\"" + message + "\"") !=
+             std::string::npos);
+      const bool responses = std::string_view(path) == "/v1/responses";
+      assert(failed.find(responses ? "\"code\":\"server_error\""
+                                   : "\"code\":\"generation_failed\"") !=
+             std::string::npos);
+      assert(failed.find(responses ? "event: response.failed"
+                                   : "data: [DONE]\n\n") != std::string::npos);
+      assert(failed.find("event: response.completed") == std::string::npos);
+      assert(failed.ends_with("0\r\n\r\n"));
+    }
+  }
   server.backend->failure = 0;
 
   for (

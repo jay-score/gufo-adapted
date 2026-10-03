@@ -899,10 +899,12 @@ HttpResponse OpenAiCompletions(const HttpRequest& req,
                 stream_log->error_event_sent =
                     writer("data: " + event.dump() + "\n\n");
                 (void)writer("data: [DONE]\n\n");
-              } catch (const std::exception&) {
+              } catch (const std::exception& error) {
                 stream_log->error_code = "generation_failed";
                 json::Value detail = json::Value::object();
-                detail["message"] = "generation failed";
+                const char* message = error.what();
+                detail["message"] =
+                    message && *message ? message : "generation failed";
                 detail["type"] = "server_error";
                 detail["code"] = "generation_failed";
                 json::Value event = json::Value::object();
