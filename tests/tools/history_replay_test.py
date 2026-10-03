@@ -11,7 +11,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from urllib.error import HTTPError
 
 
-def check(url, results, literal=False):
+def check(url, results, literal=False, images=False):
     client = build_opener(ProxyHandler({}))
 
     def request(label, responses, body):
@@ -84,16 +84,28 @@ def check(url, results, literal=False):
                     'required': ['data', 'literal']}}
     for responses in (False, True):
         for stream in (False, True):
+            def content(text):
+                if not images:
+                    return text
+                image = ('data:image/png;base64,'
+                         'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAYklEQVR4nO3PMQ0AIADAMEAD'
+                         '/jUiAREcDcmqYJtn7/GzpQNeNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWg'
+                         'NaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaBdCLsBmEpLi1UAAAAASUVORK5CYII=')
+                return ([{'type': 'input_text', 'text': text},
+                         {'type': 'input_image', 'image_url': image}] if responses else
+                        [{'type': 'text', 'text': text},
+                         {'type': 'image_url', 'image_url': {'url': image}}])
+
             label = ('responses' if responses else 'chat') + ('_stream' if stream else '')
             prompt = 'Call store with exactly these arguments: ' + json.dumps(expected, ensure_ascii=False)
             body = {'model': 'gufo', 'temperature': 0, 'seed': 47, 'stream': stream,
                     'tool_choice': 'auto'}
             if responses:
-                body.update(input=[{'role': 'user', 'content': prompt}],
+                body.update(input=[{'role': 'user', 'content': content(prompt)}],
                             max_output_tokens=192, reasoning={'effort': 'none'},
                             tools=[{'type': 'function', **function}])
             else:
-                body.update(messages=[{'role': 'user', 'content': prompt}],
+                body.update(messages=[{'role': 'user', 'content': content(prompt)}],
                             max_tokens=192, reasoning_effort='none',
                             tools=[{'type': 'function', 'function': function}])
                 if stream:
@@ -115,17 +127,19 @@ def check(url, results, literal=False):
                     '<|endoftext|> <|im_end|> <|image_pad|> <|not_a_token|>')
                 historical_function = historical_call if responses else historical_call['function']
                 historical_function['arguments'] = json.dumps(historical_args)
-                replay[key][0]['content'] = 'Store these exact values: ' + json.dumps(historical_args)
+                replay[key][0]['content'] = content('Store these exact values: ' + json.dumps(historical_args))
                 result_text = 'Stored literal data: ' + historical_args['literal'] + '\n' + result_text
             if responses:
                 replay[key] += [historical_call, {'type': 'function_call_output',
                                                 'call_id': historical_call['call_id'],
-                                                'output': result_text}]
+                                                'output': content(result_text)}]
             else:
                 assistant = deepcopy(value['choices'][0]['message'])
                 assistant['tool_calls'] = [historical_call]
                 replay[key] += [assistant,
                                 {'role': 'tool', 'tool_call_id': historical_call['id'],
+                                 # Chat accepts images in user messages;
+                                 # Responses also accepts images in tool output.
                                  'content': result_text}]
             signatures = []
             # Responses currently has no cache_prompt override. Chat cold
@@ -155,10 +169,12 @@ def main():
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--literal', action='store_true',
                         help='Include literal control spellings in user, tool-call and tool-result history')
+    parser.add_argument('--images', action='store_true',
+                        help='Include a PNG in user input and Responses tool output; requires matching mmproj')
     args = parser.parse_args()
     results = {}
     try:
-        check(args.url, results, args.literal)
+        check(args.url, results, args.literal, args.images)
     finally:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(results, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')

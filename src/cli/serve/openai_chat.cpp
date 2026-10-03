@@ -1631,7 +1631,13 @@ public:
               if (!Admits(marker))
                 continue;
               if (tail.starts_with(marker)) {
-                Emit(pending_.substr(0, cursor), false);
+                // DeepSeek's formatter owns exactly two newlines before a
+                // call block. Hold them until this opener proves to be a call.
+                frame_separator_ = marker == "<｜DSML｜tool_calls>" &&
+                                   cursor >= 2 &&
+                                   pending_.compare(cursor - 2, 2, "\n\n") == 0;
+                Emit(pending_.substr(0, cursor - (frame_separator_ ? 2 : 0)),
+                     false);
                 pending_.erase(0, cursor);
                 BeginFrame(marker);
                 break;
@@ -1643,8 +1649,16 @@ public:
           }
         }
         if (state_ == State::kContent) {
-          Emit(pending_.substr(0, cursor), false);
-          pending_.erase(0, cursor);
+          // Streaming may split the separator from its opener. Retain only
+          // its bounded suffix, including before a partial opener.
+          auto ready = cursor;
+          if (!final && Admits("<｜DSML｜tool_calls>")) {
+            while (ready > 0 && cursor - ready < 2 &&
+                   pending_[ready - 1] == '\n')
+              --ready;
+          }
+          Emit(pending_.substr(0, ready), false);
+          pending_.erase(0, ready);
           return connected_;
         }
       }
@@ -1665,8 +1679,11 @@ public:
       } else if (enforce_required ||
                  !Trim(std::string_view(pending_).substr(marker_.size()))
                       .empty()) {
-        Emit(pending_, false);
+        EmitFrame(pending_);
       }
+      if (!frame_attempted_)
+        EmitFrame({});
+      frame_separator_ = false;
       pending_.clear();
     }
     if (enforce_required && state_ != State::kReasoning) {
@@ -1722,6 +1739,14 @@ private:
     schema_.reset();
   }
 
+  void EmitFrame(std::string_view piece) {
+    if (frame_separator_) {
+      Emit("\n\n", false);
+      frame_separator_ = false;
+    }
+    Emit(piece, false);
+  }
+
   void DecodeFrame(std::string_view frame, bool complete = false) {
     const auto first = parsed_.tool_calls.size();
     auto body = frame.substr(marker_.size());
@@ -1775,7 +1800,7 @@ private:
             json_body_ = true;
           } else {
             // An ordinary mention of the opener is visible prose.
-            Emit(pending_.substr(0, frame_cursor_), false);
+            EmitFrame(pending_.substr(0, frame_cursor_));
             pending_.erase(0, frame_cursor_);
             state_ = State::kContent;
             return true;
@@ -1817,10 +1842,11 @@ private:
         // Recover an interrupted native call only outside JSON strings. The
         // old frame has no complete outer boundary, so it is not an EOS error.
         if (!frame_attempted_)
-          Emit(pending_.substr(0, frame_cursor_), false);
+          EmitFrame(pending_.substr(0, frame_cursor_));
         else if (marker_ != "<tool_call>")
           DecodeFrame(std::string_view(pending_).substr(0, frame_cursor_));
         pending_.erase(0, frame_cursor_);
+        frame_separator_ = false;
         BeginFrame(*nested);
         continue;
       }
@@ -1831,8 +1857,9 @@ private:
           DecodeFrame(std::string_view(pending_).substr(0, end + 1), true);
           malformed_ |= count == parsed_.tool_calls.size();
         } else {
-          Emit(pending_.substr(0, end + 1), false);
+          EmitFrame(pending_.substr(0, end + 1));
         }
+        frame_separator_ = false;
         pending_.erase(0, end + 1);
         state_ = State::kContent;
         return true;
@@ -1869,7 +1896,7 @@ private:
         }
       }
       if (!frame_attempted_ && tag != marker_) {
-        Emit(pending_.substr(0, end + 1), false);
+        EmitFrame(pending_.substr(0, end + 1));
         pending_.erase(0, end + 1);
         state_ = State::kContent;
         return true;
@@ -1893,6 +1920,7 @@ private:
   std::size_t frame_cursor_{0};
   std::size_t code_ticks_{0};
   bool frame_attempted_{false};
+  bool frame_separator_{false};
   bool json_body_{false};
   bool parameter_json_{false};
   bool quoted_{false};

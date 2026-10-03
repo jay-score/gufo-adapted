@@ -36,6 +36,28 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-03 — DeepSeek call-block separator replay
+
+- Source: [gufo-org/gufo@43e8351daa37f3115249372809b5a4bd0bc3d481](https://github.com/gufo-org/gufo/commit/43e8351daa37f3115249372809b5a4bd0bc3d481)
+  (#404).
+- Local: commit introducing this entry.
+- Adaptation: the consolidated parser retains at most two trailing newlines
+  until the next opener is known. The canonical DeepSeek call separator belongs
+  to framing once a call is attempted; literal mentions and empty examples keep
+  their original bytes. Qwen, prose, code, suffixes and other whitespace retain
+  their contracts. No separate buffered/streamed separator implementations.
+- Areas: shared API output parser and framing fixtures; completed real-model
+  replay harness and validation record.
+- Validation: fresh five-target Windows CPU suite and production GPU build pass.
+  Both APIs and response modes agree at every two-piece and byte-by-byte split.
+  Qwen27B candidate passes 70 HTTP checks, including AR/DFlash2, literal history,
+  user images and Responses image tool results. Forty-two matched HTTP
+  signatures and all 27 full-logit rows match their recorded baselines exactly;
+  perplexity is unchanged. Formatting/docs checks pass. Real DeepSeek and Linux
+  runtime validation remain unrun; see the
+  [validation record](docs/plans/history-replay.md).
+- Status: retained.
+
 ### 2026-10-03 — Literal prompt control-token handling
 
 - Source: history replay problem investigated alongside
@@ -52,9 +74,9 @@ Use this entry format:
 - Areas: Qwen renderer/tokenizer, HTTP vision preparation, compatibility identity,
   deterministic prompt/image fixtures and explicit real-model replay checks.
 - Validation: fresh five-target Windows CPU suite and production GPU build pass.
-  Fourteen real Qwen27B autoregressive typed replay checks pass; first warm
-  replay reuses 413 tokens versus baseline 353. Additional numerical,
-  DFlash2 and literal-history checks are documented in the
+  Qwen27B AR/DFlash2 typed and literal replay checks pass; first canonical warm
+  replay reuses 413 tokens versus baseline 353. All 27 full-logit rows and
+  perplexity match exactly. Vision and matched HTTP checks are documented in the
   [validation record](docs/plans/history-replay.md). Linux execution is unrun.
 - Status: retained.
 
@@ -72,8 +94,8 @@ Use this entry format:
 - Areas: shared JSON serializer, both model formatters, compatibility identities,
   CPU fixtures and the explicit `history_replay_test.py` real-model harness.
 - Validation: fresh Windows JSON, Qwen/DeepSeek template, API and HTTP tests pass
-  (five targets). Qwen27B baseline captured before edits; GPU comparison and
-  HTTP results are recorded with the remaining history fixes in
+  (five targets). Qwen27B GPU comparison and HTTP checks pass, with exact
+  full-logit equality and improved canonical call replay. Results are recorded in
   [history replay validation](docs/plans/history-replay.md).
 - Status: retained.
 

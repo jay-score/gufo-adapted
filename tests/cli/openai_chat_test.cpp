@@ -2869,6 +2869,22 @@ void TestConsolidatedOutputParsing() {
       {"before " + qwen + " between " + qwen + " after π",
        "before  between  after π", 2},
       {"before " + dsml + " after " + invoke, "before  after " + invoke, 1},
+      {"before\n\n" + dsml + " after", "before after", 1, Format::kDeepSeek},
+      {"\n\n" + dsml, "", 1, Format::kDeepSeek},
+      {"before\n\n\n" + dsml, "before\n", 1, Format::kDeepSeek},
+      {"before\n" + dsml, "before\n", 1, Format::kDeepSeek},
+      {"before\r\n\r\n" + dsml, "before\r\n\r\n", 1, Format::kDeepSeek},
+      {"before\n\n<｜DSML｜tool_calls> is a marker.",
+       "before\n\n<｜DSML｜tool_calls> is a marker.", 0, Format::kDeepSeek},
+      {"before\n\n<｜DSML｜tool_calls></｜DSML｜tool_calls>",
+       "before\n\n<｜DSML｜tool_calls></｜DSML｜tool_calls>", 0,
+       Format::kDeepSeek},
+      {"before\n\n", "before\n\n", 0, Format::kDeepSeek},
+      {"before\n\n<｜DSML｜tool_", "before\n\n<｜DSML｜tool_", 0,
+       Format::kDeepSeek},
+      {"`before\n\n" + dsml + "`", "`before\n\n" + dsml + "`", 0,
+       Format::kDeepSeek},
+      {"before\n\n" + qwen, "before\n\n", 1, Format::kQwen},
       {"<｜DSML｜tool_calls></｜DSML｜tool_calls> example " + invoke,
        "<｜DSML｜tool_calls></｜DSML｜tool_calls> example " + invoke, 0},
       {"`" + qwen + "`\n```xml\n" + dsml + "\n```\n" + qwen,
@@ -2901,14 +2917,19 @@ void TestConsolidatedOutputParsing() {
   for (bool responses : {false, true}) {
     for (bool stream : {false, true}) {
       for (const auto& fixture : fixtures) {
-        // Whole output and every possible two-piece split, including inside
-        // UTF-8, escaped quotes, tags and backtick runs, must agree.
-        for (std::size_t split = 0; split <= fixture.raw.size(); ++split) {
+        // Whole output, every two-piece split and one byte per chunk,
+        // including UTF-8, quotes, tags and separators, must agree.
+        for (std::size_t split = 0; split <= fixture.raw.size() + 1; ++split) {
           FakeBackend backend;
           backend.format = fixture.format;
           backend.finish_reason = fixture.finish;
-          backend.pieces = {fixture.raw.substr(0, split),
-                            fixture.raw.substr(split)};
+          if (split > fixture.raw.size()) {
+            for (char byte : fixture.raw)
+              backend.pieces.emplace_back(1, byte);
+          } else {
+            backend.pieces = {fixture.raw.substr(0, split),
+                              fixture.raw.substr(split)};
+          }
           ToolFixtureOutput output;
           try {
             const auto response =

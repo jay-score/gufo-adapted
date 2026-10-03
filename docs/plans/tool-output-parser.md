@@ -97,9 +97,10 @@ text-only requests. Commands and normalized results are in
 
 ## Remaining work
 
-History replay remains separate: Qwen typed argument rendering and DeepSeek
-separator handling from [#404](https://github.com/gufo-org/gufo/pull/404), plus
-Flash-Next speculative/history accounting investigated in
+History replay was subsequently addressed in the
+[separate history fixes](history-replay.md): Qwen typed argument rendering,
+literal prompt controls and DeepSeek separator handling. Flash-Next
+speculative/history accounting investigated in
 [#400](https://github.com/gufo-org/gufo/pull/400). No templates, prompt tokens,
 samplers, cache formats or speculative accounting changed here.
 
