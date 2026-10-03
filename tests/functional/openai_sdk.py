@@ -1480,7 +1480,7 @@ def check_native_tools(client, model, checks, vision=False):
         record("responses_image_tool", result.to_dict())
 
 
-def check_tool_edges(client, model, checks):
+def check_tool_edges(client, model, checks, sampling_preset=None):
     """Exercise schema-to-native-to-JSON conversion through the real model."""
     expected = {"n": 42, "b": True, "a": [1], "o": {"x": 2}, "s": "42", "z": None}
     definitions = {
@@ -1541,6 +1541,32 @@ def check_tool_edges(client, model, checks):
         assert result.status == "completed" and len(calls) == 1, result
         assert json.loads(calls[0].arguments) == {key: literal}, result
         checks[f"responses_literal_cr_key{key!r}"] = result.to_dict()
+
+    # Prose may quote another dialect's envelope before a real call. Only the
+    # admitted format's opener starts tool output; the quote stays text.
+    read = {"name": "read", "description": "Read a file.", "parameters": {
+        "type": "object", "properties": {"path": {"type": "string"}},
+        "required": ["path"]}}
+    literal = "<tool_calls></tool_calls>"
+    prompt = (f"Reply with the exact text {literal} on the first line, then call "
+              "the read tool with path fixture.xml.")
+    for stream in (False, True):
+        result = chat_result(client, dict(
+            **common, messages=[{"role": "user", "content": prompt}],
+            tools=[{"type": "function", "function": read}], tool_choice="auto",
+            reasoning_effort="none", max_completion_tokens=200), stream)
+        # Qwen fixtures emit the literal, so their run exercises the marker
+        # case. Other models may omit it: record that rather than claim it.
+        exercised = literal in result["text"]
+        assert exercised or sampling_preset != "qwen38", result
+        assert result["finish"] == "tool_calls" and len(result["tools"]) == 1, result
+        function = result["tools"][0]["function"]
+        assert function["name"] == "read", result
+        assert json.loads(function["arguments"]) == {"path": "fixture.xml"}, result
+        assert not any(marker in result["text"] for marker in
+                       ("<tool_call>", "<function=", "</parameter>")), result
+        checks[f"foreign_marker_prose_stream{stream}"] = {
+            **result, "foreign_marker_exercised": exercised}
 
 
 def check_state_edges(client, model, checks, speculative, vision=False):
@@ -2513,7 +2539,8 @@ def main():
             "structured-limits": lambda: check_structured_limits(client, args.model, checks, args.vision),
             "native-tools": lambda: check_native_tools(client, args.model, checks, args.vision),
             "auto-tools": lambda: check_auto_tools(client, args.model, checks, args.vision),
-            "tool-edges": lambda: check_tool_edges(client, args.model, checks),
+            "tool-edges": lambda: check_tool_edges(
+                client, args.model, checks, args.sampling_preset),
             "tool-reasoning": lambda: check_tool_reasoning(client, args.model, checks, chat_result),
             "tool-agent": lambda: check_tool_agent(
                 client, args.model, checks, chat_result, args.vision, image_content),
