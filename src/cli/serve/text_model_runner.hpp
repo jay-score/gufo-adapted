@@ -245,6 +245,9 @@ public:
   InitialOutputState(const ChatRequest&) const {
     return TextGenerationBackend::InitialOutputState::kAuto;
   }
+  [[nodiscard]] virtual TextGenerationBackend::ToolFormat ToolFormat() const {
+    return TextGenerationBackend::ToolFormat::kUnknown;
+  }
   [[nodiscard]] virtual std::string Decode(
       std::span<const TextRunnerToken> tokens) const = 0;
 

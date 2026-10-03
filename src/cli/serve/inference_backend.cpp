@@ -963,6 +963,10 @@ public:
                                                        model_->VisionEncoder());
   }
 
+  [[nodiscard]] TextGenerationBackend::ToolFormat ToolFormat() const override {
+    return TextGenerationBackend::ToolFormat::kQwen;
+  }
+
   [[nodiscard]] TextGenerationBackend::InitialOutputState InitialOutputState(
       const ChatRequest& request) const override {
     return QwenChatOptions(request, max_context_).enable_thinking
@@ -1729,6 +1733,10 @@ public:
     return tokens;
   }
 
+  [[nodiscard]] TextGenerationBackend::ToolFormat ToolFormat() const override {
+    return TextGenerationBackend::ToolFormat::kDeepSeek;
+  }
+
   [[nodiscard]] TextGenerationBackend::InitialOutputState InitialOutputState(
       const ChatRequest& request) const override {
     return request.reasoning.enabled.value_or(false)
@@ -2428,6 +2436,10 @@ public:
         QwenPrompt(context));
   }
 
+  [[nodiscard]] TextGenerationBackend::ToolFormat ToolFormat() const override {
+    return TextGenerationBackend::ToolFormat::kQwen;
+  }
+
   [[nodiscard]] TextGenerationBackend::InitialOutputState InitialOutputState(
       const ChatRequest& request) const override {
     return QwenChatOptions(request, max_context_).enable_thinking
@@ -2811,6 +2823,10 @@ struct InferenceBackend::Impl {
             static_cast<std::size_t>(end - result.tokens.begin());
       }
       return result;
+    }
+
+    [[nodiscard]] ToolFormat tool_format() const override {
+      return state_->scheduler->runner().ToolFormat();
     }
 
     void Cancel() noexcept override { request_.Cancel(); }

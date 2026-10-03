@@ -251,6 +251,9 @@ Jinja; a non-off top-level `reasoning_effort` explicitly enables reasoning.
 Generated reasoning is returned as `reasoning_content` in ordinary and
 streaming Chat Completions responses. Per-model effort mappings and history
 policies are documented in the model cards under `docs/models/`.
+When the model explicitly starts in content mode, literal `<think>` tags remain
+content in both APIs. Only unknown initial output state detects a leading
+`<think>` opener automatically.
 
 `POST /v1/responses` accepts the same effort levels through
 `reasoning.effort`, for example `"reasoning": {"effort": "low"}`.
@@ -634,6 +637,15 @@ tool markers remains text. Diagnostic classification requires recognized call
 framing; ambiguous or unfinished native syntax is not a schema-validation
 guarantee. With an interrupted generation, complete calls are retained and
 incomplete calls are omitted.
+
+Buffered output and streaming deltas use the same framing parser. The admitted
+Qwen/Flash-Next request recognizes `<tool_call>`; DeepSeek recognizes
+`<｜DSML｜tool_calls>`. Unknown backends retain the legacy wrapper spellings.
+Other wrappers remain visible text and cannot select the request's protocol.
+DeepSeek invokes are recognized only inside their outer envelope. Prose before,
+between and after complete envelopes is preserved. Backtick spans and fenced
+code examples remain text. An unfinished JSON string owns its remaining bytes:
+quoted tool openers cannot recover into a new call.
 
 With no declared tools or `tool_choice: "none"`, tool markers are ordinary
 text. They do not end reasoning or delay streaming; thinking delimiters and

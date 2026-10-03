@@ -194,6 +194,9 @@ public:
     bool token_metrics_recorded{false};
   };
 
+  /// Native output protocol; unknown backends retain legacy compatibility.
+  enum class ToolFormat { kUnknown, kQwen, kDeepSeek };
+
   class GenerationRequest {
   public:
     GenerationRequest() = default;
@@ -206,6 +209,9 @@ public:
 
     virtual Result Wait(const TokenCallback& on_token = {}) = 0;
     virtual void Cancel() noexcept = 0;
+    [[nodiscard]] virtual ToolFormat tool_format() const {
+      return ToolFormat::kUnknown;
+    }
   };
 
   TextGenerationBackend() = default;
@@ -229,6 +235,9 @@ public:
   [[nodiscard]] virtual InitialOutputState initial_output_state(
       const ChatRequest&) const {
     return InitialOutputState::kAuto;
+  }
+  [[nodiscard]] virtual ToolFormat tool_format() const {
+    return ToolFormat::kUnknown;
   }
 
   virtual Result complete(
@@ -300,7 +309,12 @@ TextGenerationBackend::start_chat(const ChatRequest& request,
           request_(std::move(chat_request)),
           max_tokens_(token_limit),
           sampling_(sampling_config),
-          external_cancellation_(std::move(external_cancellation)) {}
+          external_cancellation_(std::move(external_cancellation)),
+          tool_format_(backend.tool_format()) {}
+
+    [[nodiscard]] ToolFormat tool_format() const override {
+      return tool_format_;
+    }
 
     Result Wait(const TokenCallback& on_token) override {
       if (waited_.exchange(true, std::memory_order_acq_rel)) {
@@ -325,6 +339,7 @@ TextGenerationBackend::start_chat(const ChatRequest& request,
     std::size_t max_tokens_;
     sampling::SamplingConfig sampling_;
     CancellationCheck external_cancellation_;
+    const ToolFormat tool_format_;
     std::atomic<bool> waited_{false};
     std::atomic<bool> cancelled_{false};
   };

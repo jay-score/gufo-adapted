@@ -36,6 +36,31 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-03 — Consolidated tool output framing
+
+- Source: [gufo-org/gufo@c33e050eced6389852617994fe7349367df4c900](https://github.com/gufo-org/gufo/commit/c33e050eced6389852617994fe7349367df4c900)
+  (#393), [2c6a1064f39a4d3ea0b8d92efea0beedf18150f1](https://github.com/gufo-org/gufo/commit/2c6a1064f39a4d3ea0b8d92efea0beedf18150f1)
+  (#396), [d91674a4dd8479a6e6c7044e0b784099ff25b31f](https://github.com/gufo-org/gufo/commit/d91674a4dd8479a6e6c7044e0b784099ff25b31f)
+  (#397 draft), and [6718dba3293a0e89696029ccf036bfb4646dd251](https://github.com/gufo-org/gufo/commit/6718dba3293a0e89696029ccf036bfb4646dd251)
+  (#391 draft).
+- Local: commit introducing this entry.
+- Adaptation: one incremental framing parser for both APIs and response modes,
+  request-owned native format, JSON quote/escape ownership, bounded DSML
+  envelopes, preserved suffix prose/code examples and explicit content-mode
+  thinking tags. Retains the fork's argument/type decoding and error contracts.
+  Omitted upstream grammar infrastructure and automatic format switching;
+  history rendering, DeepSeek separators and speculative/history accounting
+  remain separate. No broad delimiter sanitization was imported.
+- Areas: API output parser, generation request/runner metadata, regression
+  fixtures and server contracts.
+- Validation: fresh Windows CPU API/HTTP tests and production GPU build pass;
+  all 174 full-logit rows and three binary dumps match the baseline exactly,
+  with identical perplexity. Eight matched HTTP cases and four required-tool
+  cases pass. Formatting and docs checks pass. Linux execution and real
+  DeepSeek/Qwen27B model checks remain unrun; see the
+  [validation record](docs/plans/tool-output-parser.md).
+- Status: retained.
+
 ### 2026-10-02 — Exit immediately after confirmed text-device loss
 
 - Source: [gufo-org/gufo@7d893a020372502757933ec80231927fc9d25a96](https://github.com/gufo-org/gufo/commit/7d893a020372502757933ec80231927fc9d25a96)
