@@ -267,7 +267,7 @@ void TestGgufTemplateExtraction() {
   Expect(tpl->GetProfile() ==
              gufo::tokenization::QwenChatTemplate::Profile::kQwen38Reasoning,
          "Recognized Qwen3.8 template profile is classified");
-  Expect(tpl->GetTemplateId() == "qwen38-reasoning-compiled-v3",
+  Expect(tpl->GetTemplateId() == "qwen38-reasoning-compiled-v5",
          "Compiled template version is stable");
   Expect(tpl->GetTemplateSha256().size() == 64,
          "Embedded template provenance is hashed");
@@ -767,7 +767,41 @@ void TestHistoricalToolNames() {
   }
 }
 
+void TestTypedToolReplay() {
+  using namespace gufo::tokenization;
+  ChatMessage assistant{ChatRole::kAssistant, "", "", ""};
+  assistant.tool_calls.push_back(
+      {.id = "past",
+       .name = "store",
+       .arguments = {
+           {.name = "data",
+            .value = R"({"z":[1,true,null],"a":{"text":"é, : \\\""}})",
+            .is_string = false},
+           {.name = "string",
+            .value = "{\"z\":[1,true,null]}",
+            .is_string = true},
+           {.name = "spaced", .value = "[ 1,  2 ]", .is_string = false},
+       }});
+  const std::vector<ChatMessage> messages{{ChatRole::kUser, "store"},
+                                          assistant};
+  const auto rendered =
+      QwenChatTemplate::Render(messages, ChatTemplateOptions{});
+  Expect(rendered.has_value(), "Typed historical call renders");
+  Expect(rendered->find("<parameter=data>\n"
+                        R"({"z": [1, true, null], "a": {"text": "é, : \\\""}})"
+                        "\n</parameter>") != std::string::npos,
+         "Typed replay uses reference JSON separators, order and UTF-8");
+  Expect(rendered->find(
+             "<parameter=string>\n{\"z\":[1,true,null]}\n</parameter>") !=
+             std::string::npos,
+         "String argument retains its exact bytes");
+  Expect(rendered->find("<parameter=spaced>\n[1, 2]\n</parameter>") !=
+             std::string::npos,
+         "Typed replay normalizes existing whitespace once");
+}
+
 int main() {
+  TestTypedToolReplay();
   TestHistoricalToolNames();
   std::cout << "Running QwenChatTemplate unit tests...\n";
   TestBasicChatRendering();

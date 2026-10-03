@@ -359,7 +359,39 @@ void TestHistoricalToolNames() {
   }
 }
 
+void TestTypedToolReplay() {
+  ChatMessage assistant{
+      .role = "assistant", .content = {}, .reasoning_content = {}};
+  assistant.tool_calls.push_back(
+      {.id = "past",
+       .name = "store",
+       .arguments = {
+           {.name = "data",
+            .value = R"({"z":[1,true,null],"a":{"text":"é, : \\\""}})",
+            .is_string = false},
+           {.name = "string",
+            .value = "{\"z\":[1,true,null]}",
+            .is_string = true},
+           {.name = "spaced", .value = "[ 1,  2 ]", .is_string = false},
+       }});
+  const std::vector<ChatMessage> messages{
+      {.role = "user", .content = "store", .reasoning_content = {}}, assistant};
+  const auto rendered = gufo::models::deepseek_v4_flash::RenderChat(messages);
+  Expect(rendered.find("<｜DSML｜parameter name=\"data\" string=\"false\">"
+                       R"({"z": [1, true, null], "a": {"text": "é, : \\\""}})"
+                       "</｜DSML｜parameter>") != std::string::npos,
+         "Typed replay uses reference JSON separators, order and UTF-8");
+  Expect(rendered.find("<｜DSML｜parameter name=\"string\" string=\"true\">"
+                       "{\"z\":[1,true,null]}</｜DSML｜parameter>") !=
+             std::string::npos,
+         "String argument retains its exact bytes");
+  Expect(rendered.find("<｜DSML｜parameter name=\"spaced\" string=\"false\">"
+                       "[1, 2]</｜DSML｜parameter>") != std::string::npos,
+         "Typed replay normalizes existing whitespace once");
+}
+
 int main() {
+  TestTypedToolReplay();
   TestHistoricalToolNames();
   {
     const std::vector<ChatMessage> messages{

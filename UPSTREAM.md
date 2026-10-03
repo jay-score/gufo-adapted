@@ -36,6 +36,25 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-03 — Typed argument history replay
+
+- Source: [gufo-org/gufo@f51d33bd553b42f57cc2a291f2584933c956614f](https://github.com/gufo-org/gufo/commit/f51d33bd553b42f57cc2a291f2584933c956614f)
+  (#404).
+- Local: commit introducing this entry.
+- Adaptation: serialize non-string historical arguments at the Qwen/DeepSeek
+  rendering boundary with ordered UTF-8 JSON and reference separator spacing.
+  Strings and compact API JSON retain their existing representation. This also
+  covers internal template callers. Bump persistent formatter identities;
+  payload formats and inference arithmetic are unchanged. Omitted upstream's
+  union-grammar work because this fork has no corresponding grammar fallback.
+- Areas: shared JSON serializer, both model formatters, compatibility identities,
+  CPU fixtures and the explicit `history_replay_test.py` real-model harness.
+- Validation: fresh Windows JSON, Qwen/DeepSeek template, API and HTTP tests pass
+  (five targets). Qwen27B baseline captured before edits; GPU comparison and
+  HTTP results are recorded with the remaining history fixes in
+  [history replay validation](docs/plans/history-replay.md).
+- Status: retained.
+
 ### 2026-10-03 — Consolidated tool output framing
 
 - Source: [gufo-org/gufo@c33e050eced6389852617994fe7349367df4c900](https://github.com/gufo-org/gufo/commit/c33e050eced6389852617994fe7349367df4c900)

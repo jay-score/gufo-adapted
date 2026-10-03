@@ -62,7 +62,7 @@ struct ChatTemplateOptions {
                                         std::string* error_msg = nullptr);
 
 [[nodiscard]] constexpr std::string_view ChatTemplateId() noexcept {
-  return "deepseek-v4-flash-0731-compiled-v3";
+  return "deepseek-v4-flash-0731-compiled-v4";
 }
 
 [[nodiscard]] constexpr std::string_view ArtifactTemplateSha256() noexcept {

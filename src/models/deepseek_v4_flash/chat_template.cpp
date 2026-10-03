@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "src/core/crypto/sha256.hpp"
+#include "src/core/json.hpp"
 
 namespace gufo::models::deepseek_v4_flash {
 namespace {
@@ -225,7 +226,8 @@ void AppendToolCalls(std::string& output,
       output.append("\" string=\"");
       output.append(argument.is_string ? "true" : "false");
       output.append("\">");
-      output.append(argument.value);
+      output.append(argument.is_string ? argument.value
+                                       : json::parse(argument.value).tojson());
       output.append("</｜DSML｜parameter>");
       if (argument_index + 1 < call.arguments.size()) {
         output.push_back('\n');

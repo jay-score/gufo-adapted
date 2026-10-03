@@ -16,6 +16,7 @@
 
 #include "src/core/crypto/sha256.hpp"
 #include "src/core/gguf_reader.hpp"
+#include "src/core/json.hpp"
 #include "src/models/qwen/tokenizer.hpp"
 
 namespace gufo::tokenization {
@@ -253,7 +254,8 @@ void AppendToolCalls(std::string& output,
       output.append("<parameter=");
       output.append(argument.name);
       output.append(">\n");
-      output.append(argument.value);
+      output.append(argument.is_string ? argument.value
+                                       : json::parse(argument.value).tojson());
       output.append("\n</parameter>\n");
     }
     output.append("</function>\n</tool_call>");
@@ -321,7 +323,7 @@ std::string_view QwenChatTemplate::GetTemplateId() const noexcept {
     case Profile::kLegacyChatMl:
       return "qwen-chatml-compiled-v1";
     case Profile::kQwen38Reasoning:
-      return "qwen38-reasoning-compiled-v3";
+      return "qwen38-reasoning-compiled-v5";
   }
   return "qwen-chatml-compiled-v1";
 }
