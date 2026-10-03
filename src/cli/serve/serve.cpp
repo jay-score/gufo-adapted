@@ -697,7 +697,8 @@ void PrintServeHelp(std::string_view program_name,
         "Scheduling", &max_buffered_output_bytes_total);
     parser.AddOption(
         "", "--cache-ram-bytes", "N",
-        "Retained RAM-cache byte budget (default: 0 = auto, at most 32 GiB)",
+        "Retained RAM-cache byte budget (default: 0 = auto: half of free "
+        "RAM, at most 32 GiB; explicit values may use free RAM minus 4 GiB)",
         "Cache", &cache_ram_bytes);
     parser.AddOption("", "--cache-disk", "DIR",
                      "Opt-in restart-safe continuation cache directory",
@@ -1225,7 +1226,8 @@ int RunServe(std::span<const char* const> args) {
         "Scheduling", &max_buffered_output_bytes_total);
     llm_parser.AddOption(
         "", "--cache-ram-bytes", "N",
-        "Retained RAM-cache byte budget (default: 0 = auto, at most 32 GiB)",
+        "Retained RAM-cache byte budget (default: 0 = auto: half of free "
+        "RAM, at most 32 GiB; explicit values may use free RAM minus 4 GiB)",
         "Cache", &cache_ram_bytes);
     llm_parser.AddOption("", "--cache-disk", "DIR",
                          "Opt-in restart-safe continuation cache directory",

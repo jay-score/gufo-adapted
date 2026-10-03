@@ -259,7 +259,7 @@ still lose reuse; this is not unlimited retention.
 The actual selected limits are reported at startup:
 
 ```text
-event=snapshot_cache_configured sessions=1 snapshot_entries=128 capacity_bytes=8589934592
+event=snapshot_cache_configured sessions=1 snapshot_entries=128 capacity_bytes=8589934592 automatic_bytes=8589934592 max_bytes=13958643712
 ```
 
 ## Invariants
@@ -290,24 +290,26 @@ captured; RAM-retained snapshots and their captures in progress share the RAM bu
 
 | Limit | Default | Set by |
 | --- | --- | --- |
-| Retained snapshot bytes, RAM | smaller of 32 GiB and half the available host RAM; 27B also checks HIP free memory | `--cache-ram-bytes` |
+| Retained snapshot bytes, RAM | smaller of 32 GiB and half the available host RAM; an explicit value up to the available host RAM minus 4 GiB; 27B also checks HIP free memory | `--cache-ram-bytes` |
 | RAM checkpoint records | 128, independent of `--sessions` | internal safety limit |
 | Disk bytes | 8 GiB | `--cache-disk-bytes` |
 | Disk staging bytes | smallest of 1 GiB, `MemAvailable / 8`, the disk budget | `--cache-disk-staging-bytes` |
 
-`--cache-ram-bytes 0` selects automatic sizing. A positive value replaces the
-32 GiB automatic cap, but remains clamped to the model's reported budget.
-Zero does not disable reuse. For an 8 GiB cap, use
-`--cache-ram-bytes 8589934592`.
+`--cache-ram-bytes 0` selects automatic sizing. Zero does not disable reuse.
+A positive value replaces the automatic budget and may exceed it: it trades the
+free half of host RAM for retention, but always leaves 4 GiB to the OS and other
+processes. For an 8 GiB cap, use `--cache-ram-bytes 8589934592`. The startup
+line reports the selected `capacity_bytes`, the `automatic_bytes` budget and
+the `max_bytes` an explicit value may claim.
 
-The model budget is sampled after weights and execution states are allocated,
-then fixed for the server run. Flash-Next and Qwen3.8-27B use half the available
+Both are sampled after weights and execution states are allocated, then fixed
+for the server run. Flash-Next and Qwen3.8-27B use half the available
 host RAM, respecting container/cgroup limits. 27B also clamps this to HIP's free
 device memory. CPU and GPU allocations compete for the same physical RAM on
 Strix Halo, so HIP's free-memory estimate alone is not enough.
-For example, 44 GiB available at load gives at most a 22 GiB RAM cache,
-even when HIP reports more free memory. An explicit limit cannot bypass this
-model budget.
+For example, 44 GiB available at load gives a 22 GiB automatic RAM cache and
+allows an explicit limit of up to 40 GiB, even when HIP reports more free
+memory.
 The RAM payload budget excludes weights, execution states, token metadata
 and disk staging. It also excludes temporary host buffers used to save
 checkpoints to disk; this is not a limit on total server memory.
@@ -321,10 +323,25 @@ divide the byte budget by the retained checkpoint bytes per conversation.
 For example, 8 GiB holds at most eight sets of two 512 MiB checkpoints, or
 two sets of two 2 GiB checkpoints, before extra copies and in-flight captures.
 
-Increasing context or sessions can still reduce the reported memory budget.
-On Flash-Next at 262144 context a single snapshot reached 5.70 GB against a
-7.76 GB budget, so a second could not be retained **(measured)**. The automatic
-cap does not fix this large-context constraint. See #343.
+Increasing context or sessions reduces the memory left after loading, and
+with it both budgets, exactly when snapshots grow. On Flash-Next with
+`--sessions 2` at 262144 context, 14.8 GB remained after loading: a 7.76 GB
+automatic budget against 5.70 GB snapshots at 200k tokens, so only one deep
+conversation stays retained **(measured)**. A newer conversation's stable
+boundary then replaces the older one's checkpoint; only optional intermediate
+and retry copies are refused. This is a hardware ratio, not a cache policy:
+weights, execution states and the OS leave no more memory. To keep more deep
+conversations:
+
+- Raise `--cache-ram-bytes` towards the reported `max_bytes`: about 10.5 GB
+  here, enough for a 200k-token checkpoint plus a 50k one instead of only the
+  first.
+- Run fewer `--sessions`: each Flash-Next session at 262144 context holds about
+  6.3 GB of state that the cache can use instead.
+- Add `--cache-disk` with `--cache-disk-staging-bytes` above the snapshot size,
+  so checkpoints that leave RAM can still be restored from disk.
+
+See #343.
 
 Snapshot size scales with retained tokens and differs sharply between models:
 roughly 0.5 GB at 5k tokens on Flash-Next, and 3.7 GB at 24k tokens on
@@ -400,7 +417,7 @@ still populate the cache.
 
 | Log line | Meaning |
 | --- | --- |
-| `event=snapshot_cache_configured` | retained capacity, at startup |
+| `event=snapshot_cache_configured` | retained capacity at startup, with the automatic budget and the most an explicit `--cache-ram-bytes` may claim |
 | `event=snapshot action=removed reason=entry_capacity` | a retained prefix was evicted because every entry was taken |
 | `event=snapshot action=skipped reason=entry_capacity` | no checkpoint record could be replaced safely for this capture |
 | `event=snapshot action=skipped reason=byte_capacity` | a checkpoint did not fit the RAM budget |

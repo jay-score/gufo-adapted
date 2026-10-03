@@ -17,8 +17,11 @@
 
 namespace gufo::server {
 
-/// Ordinary host allocations use the host budget, not HIP's device capacity.
-std::size_t HostSnapshotBudgetBytes() {
+namespace {
+
+/// Host RAM still available, after cgroup limits. Unified-memory device
+/// allocations draw from the same RAM, so HIP's device capacity is not used.
+std::uint64_t HostAvailableBytes() {
   const long pages = sysconf(_SC_AVPHYS_PAGES);
   const long page_size = sysconf(_SC_PAGESIZE);
   if (pages <= 0 || page_size <= 0)
@@ -56,8 +59,25 @@ std::size_t HostSnapshotBudgetBytes() {
     }
     break;
   }
-  return static_cast<std::size_t>(std::min<std::uint64_t>(
-      available / 2, std::numeric_limits<std::size_t>::max()));
+  return available;
+}
+
+std::size_t ClampToSize(std::uint64_t bytes) {
+  return static_cast<std::size_t>(
+      std::min<std::uint64_t>(bytes, std::numeric_limits<std::size_t>::max()));
+}
+
+}  // namespace
+
+std::size_t HostSnapshotBudgetBytes() {
+  return ClampToSize(HostAvailableBytes() / 2);
+}
+
+std::size_t HostSnapshotCeilingBytes() {
+  const auto available = HostAvailableBytes();
+  return ClampToSize(available > kHostSnapshotHeadroomBytes
+                         ? available - kHostSnapshotHeadroomBytes
+                         : 0);
 }
 
 namespace {
@@ -67,6 +87,8 @@ struct ValidatedRunner {
   TextRunnerDescriptor descriptor;
   TextRunnerResourceClaim resources;
   std::vector<TextExecutionPlan> plans;
+  std::size_t snapshot_automatic_bytes{0};
+  std::size_t snapshot_max_bytes{0};
 };
 
 std::optional<std::size_t> PerStateReservationBytes(
@@ -365,12 +387,18 @@ ContinuationCache::SnapshotSupport MakeSnapshotSupport(
       .capacity_bytes =
           [validated, options] {
             const auto resources = validated->runner->ResourceClaim();
-            const auto limit =
-                options.capacity_bytes == 0
-                    ? TextRunnerRamCacheOptions::kAutomaticMaxBytes
-                    : options.capacity_bytes;
-            return std::min(
-                limit, resources.retained_snapshot_capacity_bytes.value_or(0));
+            const auto automatic =
+                resources.retained_snapshot_capacity_bytes.value_or(0);
+            validated->snapshot_automatic_bytes = std::min(
+                TextRunnerRamCacheOptions::kAutomaticMaxBytes, automatic);
+            validated->snapshot_max_bytes =
+                resources.retained_snapshot_ceiling_bytes.value_or(automatic);
+            if (options.capacity_bytes == 0)
+              return validated->snapshot_automatic_bytes;
+            // An explicit limit is the operator's choice to trade headroom
+            // for retention, bounded so the host keeps a fixed reserve.
+            return std::min(options.capacity_bytes,
+                            validated->snapshot_max_bytes);
           },
       .on_event = EmitSnapshotEvent,
   };
@@ -482,12 +510,16 @@ struct TextRunnerPool::Impl {
             TextRunnerRamCacheOptions::kMaxEntries) {
     // Entry and byte limits constrain retention independently of session count.
     if (validated.descriptor.capabilities.snapshot) {
-      Logger::Info("cache",
-                   "event=snapshot_cache_configured sessions=" +
-                       std::to_string(state_count) + " snapshot_entries=" +
-                       std::to_string(cache.entry_capacity()) +
-                       " capacity_bytes=" +
-                       std::to_string(cache.snapshot_capacity_bytes()));
+      // Report the same post-allocation limits that selected the capacity.
+      Logger::Info(
+          "cache",
+          "event=snapshot_cache_configured sessions=" +
+              std::to_string(state_count) + " snapshot_entries=" +
+              std::to_string(cache.entry_capacity()) + " capacity_bytes=" +
+              std::to_string(cache.snapshot_capacity_bytes()) +
+              " automatic_bytes=" +
+              std::to_string(validated.snapshot_automatic_bytes) +
+              " max_bytes=" + std::to_string(validated.snapshot_max_bytes));
     }
     if (disk_cache_options.has_value()) {
       if (!validated.descriptor.persistence.has_value()) {

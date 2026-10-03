@@ -46,7 +46,8 @@ struct TextRunnerRamCacheOptions {
   static constexpr std::size_t kAutomaticMaxBytes = std::size_t{32} << 30;
   static constexpr std::size_t kMaxEntries = 128;
   /// Zero selects min(model snapshot budget, 32 GiB), after session allocation.
-  /// Explicit limits are still clamped to the model's snapshot budget.
+  /// Explicit limits may exceed that budget up to the model's ceiling, which
+  /// keeps kHostSnapshotHeadroomBytes of host RAM free.
   std::size_t capacity_bytes{0};
 };
 
@@ -73,8 +74,15 @@ struct TextRunnerDiskCacheOptions {
   std::size_t min_checkpoint_step_tokens{2048};
 };
 
-/// Host snapshot budget after accounting for cgroup limits and headroom.
+/// Automatic snapshot budget: half the host RAM available after loading,
+/// after cgroup limits.
 [[nodiscard]] std::size_t HostSnapshotBudgetBytes();
+/// RAM always left to the OS and other processes by an explicit cache limit.
+inline constexpr std::uint64_t kHostSnapshotHeadroomBytes = std::uint64_t{4}
+                                                            << 30;
+/// Most an explicit --cache-ram-bytes may claim: available host RAM minus
+/// kHostSnapshotHeadroomBytes.
+[[nodiscard]] std::size_t HostSnapshotCeilingBytes();
 
 enum class TextExecutionPlanKind : std::uint8_t {
   kSerial,
@@ -136,6 +144,9 @@ struct TextRunnerResourceClaim {
   ///
   /// The pool queries this again after creating all mutable request states.
   std::optional<std::size_t> retained_snapshot_capacity_bytes;
+  /// Most an explicit RAM-cache limit may claim. Missing means the automatic
+  /// retained_snapshot_capacity_bytes is also the ceiling.
+  std::optional<std::size_t> retained_snapshot_ceiling_bytes;
   bool requires_device_runtime_lock{false};
 };
 

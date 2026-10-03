@@ -203,13 +203,15 @@ class FunctionalRunnerTest(unittest.TestCase):
         for available, requested, capacity in (
             (44 * gib, 0, 22 * gib), (128 * gib, 0, 32 * gib),
             (44 * gib, 20 * gib, 20 * gib), (44 * gib, 64 * gib, 22 * gib),
-            (128 * gib, 48 * gib, 48 * gib),
+            (44 * gib, 30 * gib, 30 * gib),  # Explicit limits may pass half.
+            (44 * gib, 64 * gib, 40 * gib), (128 * gib, 48 * gib, 48 * gib),
         ):
             result = check_snapshot_budget(log(capacity), available, requested, 1)
             self.assertEqual(result["capacity_bytes"], capacity)
         for output, available, requested in (
             (log(32 * gib), 44 * gib, 0),  # A fixed cap can exceed host headroom.
-            (log(64 * gib), 44 * gib, 64 * gib),  # Overrides cannot bypass it.
+            (log(64 * gib), 44 * gib, 64 * gib),  # Overrides keep 4 GiB free.
+            (log(41 * gib), 44 * gib, 64 * gib),
             (log(48 * gib), 128 * gib, 0), (log(21 * gib), 44 * gib, 20 * gib),
             (log(0), 44 * gib, 0), (log(20 * gib, sessions=4), 44 * gib, 0),
             (log(20 * gib, entries=8), 44 * gib, 0), ("", 44 * gib, 0),
