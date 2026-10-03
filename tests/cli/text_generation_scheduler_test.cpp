@@ -142,6 +142,8 @@ struct FakeControl {
   std::optional<TextRunnerToken> block_advance_label;
   std::optional<TextRunnerToken> block_prefill_label;
   std::optional<TextRunnerToken> throw_advance_label;
+  std::atomic<bool> device_usable{true};
+  std::atomic<std::size_t> device_probes{0};
   TextRunnerToken advance_gate_label{0};
   TextRunnerToken prefill_gate_label{0};
   bool advance_gate_entered{false};
@@ -507,6 +509,11 @@ public:
     return RequireFakeState(state).position;
   }
 
+  [[nodiscard]] bool DeviceUsable() const override {
+    control_->device_probes.fetch_add(1, std::memory_order_relaxed);
+    return control_->device_usable.load(std::memory_order_relaxed);
+  }
+
 private:
   std::shared_ptr<FakeControl> control_;
 };
@@ -675,6 +682,40 @@ void TestBatchFailureIsolation() {
     const auto result = healthy.Wait();
     Expect(result.tokens == ExpectedTokens(2, 12),
            "a failing batch member must not fail or corrupt a healthy peer");
+  }
+}
+
+void TestBatchDeviceLossFailsSuccessfulPeers() {
+  for (const bool speculative : {false, true}) {
+    auto control = std::make_shared<FakeControl>();
+    control->multi_token_decode = speculative;
+    control->batched_multi_token_decode = speculative;
+    control->supports_batched_advance = true;
+    control->block_prefill_label = 1;
+    // A later failed lane must be classified before the earlier successful
+    // lane commits and releases its state on the same unusable context.
+    control->throw_advance_label = 2;
+    control->device_usable = false;
+    auto scheduler = MakeScheduler(control, 2);
+    // AR gives the first decoder one advance before admitting the peer;
+    // multi-token batching assembles the initial cohort before decoding.
+    const std::size_t max_tokens = speculative ? 1 : 2;
+    auto first = scheduler->Submit({1}, max_tokens, 0.0F);
+    control->WaitForPrefill(1);
+    auto second = scheduler->Submit({2}, max_tokens, 0.0F);
+    control->ReleasePrefill();
+    for (auto* request : {&first, &second}) {
+      bool lost = false;
+      try {
+        (void)request->Wait();
+      } catch (const TextGenerationError& error) {
+        lost = error.code() == TextGenerationErrorCode::kDeviceLost;
+      }
+      Expect(lost,
+             "device loss fails the entire batch before committing peers");
+    }
+    Expect(control->device_probes == 1 && scheduler->device_lost(),
+           "batch loss probes once and remains sticky");
   }
 }
 
@@ -1017,6 +1058,7 @@ void TestSlowConsumerOutputIsBoundedAndReclaimed() {
 
 void TestGeneratedOutputLimitAppliesWithoutStreaming() {
   auto control = std::make_shared<FakeControl>();
+  control->device_usable = false;
   auto scheduler = MakeScheduler(control, 1, {},
                                  {
                                      .max_output_bytes_per_request = 4,
@@ -1031,6 +1073,8 @@ void TestGeneratedOutputLimitAppliesWithoutStreaming() {
   }
   Expect(output_limit_reported,
          "non-streaming generation obeys its output byte limit");
+  Expect(control->device_probes == 0 && !scheduler->device_lost(),
+         "a scheduler-classified failure never probes the device");
 }
 
 void TestMidGenerationAdmissionAndIsolatedTrajectories() {
@@ -1338,11 +1382,64 @@ void TestRunnerFailureInvalidatesAndDoesNotPoisonReplacement() {
              "injected scheduler runner failure";
   }
   Expect(failed, "runner failure reaches the submitting client");
+  // A probe still pending at its bound also reports a usable device.
+  Expect(control->device_probes == 1 && !scheduler->device_lost(),
+         "a failure on a usable device is probed once and stays recoverable");
 
   control->throw_advance_label.reset();
   auto replacement = scheduler->Submit({8, 80}, 2, 0.0F);
   Expect(replacement.Wait().tokens == ExpectedTokens(8, 2),
          "replacement request succeeds after runner failure");
+  Expect(control->device_probes == 1, "successful work never probes");
+}
+
+void TestDeviceLossIsStickyAndReported() {
+  auto control = std::make_shared<FakeControl>();
+  control->throw_advance_label = 9;
+  control->block_advance_label = 9;
+  control->device_usable = false;
+  auto scheduler = MakeScheduler(control, 2);
+
+  const auto expect_device_lost = [](const auto& action,
+                                     std::string_view message) {
+    bool lost = false;
+    try {
+      action();
+    } catch (const TextGenerationError& error) {
+      lost = error.code() == TextGenerationErrorCode::kDeviceLost &&
+             error.http_status() == 503 &&
+             std::string_view(error.stable_code()) == "device_lost" &&
+             std::string_view(error.what()) == gufo::server::kDeviceLostMessage;
+    }
+    Expect(lost, message);
+  };
+  auto failing = scheduler->Submit({9, 90}, 2, 0.0F);
+  control->WaitForAdvance(9);
+  const auto invalidations_before_loss = control->invalidations.load();
+  auto queued = scheduler->Submit({8, 80}, 2, 0.0F);
+  auto cancelled = scheduler->Submit({7, 70}, 2, 0.0F);
+  cancelled.Cancel();
+  control->ReleaseAdvance();
+  expect_device_lost([&] { (void)failing.Wait(); },
+                     "a failure on a lost device reports device_lost");
+  Expect(scheduler->device_lost() && control->device_probes == 1,
+         "the failing work unit probes the device once");
+  expect_device_lost([&] { (void)queued.Wait(); },
+                     "queued work fails without touching the lost device");
+  expect_device_lost([&] { (void)cancelled.Wait(); },
+                     "shutdown never resets a cancelled lost-device request");
+  Expect(control->invalidations == invalidations_before_loss,
+         "lost-device failure skips state invalidation and its HIP cleanup");
+  const auto events = control->Events();
+  Expect(std::none_of(events.begin(), events.end(),
+                      [](const auto& event) { return event.label != 9; }),
+         "no peer performs model work after loss");
+
+  control->throw_advance_label.reset();
+  control->device_usable = true;
+  expect_device_lost([&] { (void)scheduler->Submit({8, 80}, 2, 0.0F); },
+                     "submissions after device loss fail before admission");
+  Expect(control->device_probes == 1, "device loss is never probed again");
 }
 
 void TestStopSequenceChunkBoundaries() {
@@ -1952,6 +2049,7 @@ int main() {
   TestMultiTokenRunnerCanSwitchToBatchedExecution();
   TestModelOwnedBatchMetrics();
   TestBatchFailureIsolation();
+  TestBatchDeviceLossFailsSuccessfulPeers();
   TestMultiResidentPrefillUsesBoundedWorkUnits();
   for (const bool multi_token : {false, true}) {
     for (const bool batched : {false, true}) {
@@ -1976,6 +2074,7 @@ int main() {
   TestDecodeCancellationAndStateReclamation();
   TestFourResidentRequestsMakeProgress();
   TestRunnerFailureInvalidatesAndDoesNotPoisonReplacement();
+  TestDeviceLossIsStickyAndReported();
   Expect(
       gufo::server::detail::RequestsProcessing().load() == 0 &&
           gufo::server::detail::RequestsDeferred().load() == 0,
