@@ -898,18 +898,41 @@ executes, so their rates show live throughput; prompt tokens exclude cache
 hits. `llamacpp:requests_processing` counts admitted requests, including cache
 preparation and cleanup; `llamacpp:requests_deferred` counts requests waiting
 for a session. The speed gauges retain the latest nonzero request rates.
+When the scheduler finishes or cancels a request, whether or not the client
+reads the result, it adds the request's cached prompt tokens
+(`llamacpp:prompt_tokens_cached_total`), prefill and decode seconds
+(`llamacpp:prompt_seconds_total`, `llamacpp:tokens_predicted_seconds_total`),
+proposed and accepted draft tokens
+(`llamacpp:spec_decode_num_draft_tokens_total`,
+`llamacpp:spec_decode_num_accepted_tokens_total`), and raises
+`llamacpp:n_tokens_max` to its prompt plus generated tokens. A request counts
+even if the client disconnects before reading it; requests that fail in the
+scheduler, such as on a deadline or a runner error, add none of these.
+`llamacpp:kv_cache_usage_ratio` is the in-flight prompt and generated tokens
+over sessions times context; retained cache entries are not counted.
 `Server-Timing`, generation `timings`, and Chat Completions `usage.gufo`
-provide request-level measurements. The legacy KV-utilization
-metric and `/slots`/`/props` metadata are placeholders; do not use them for
-capacity or admission decisions.
+provide request-level measurements.
+
+`GET /slots` (alias `/v1/slots`) lists one llama-server slot per `--sessions`
+entry. A session is processing from admission, including cache preparation,
+until the request ends, so the processing slots match
+`llamacpp:requests_processing`; queued requests do not appear.
+`id_task` is the request id, or -1 when idle. `n_prompt_tokens` is the whole
+prompt, `n_prompt_tokens_cache` the tokens restored from cache, and
+`n_prompt_tokens_processed` the uncached tokens prefilled so far, as in
+`timings.prompt_n`. `next_token[0].n_decoded` counts generated tokens and
+`n_remain` the remaining token budget. Idle slots report zero counts and
+`n_remain` -1. `task_id` and `state` (0 idle, 1 processing) remain for older
+clients; `prompt` is always empty. `/props` metadata is a placeholder.
+Slots and metrics are separate snapshots; requests can advance between polls.
 
 Streaming terminal chunks always include llama.cpp-compatible `timings`, even
 without `stream_options.include_usage`. `prompt_n` counts newly processed
 tokens; `cache_n` counts reused tokens. llama-swap uses these fields on every
 turn. Gufo-specific details stay in `usage.gufo`.
 
-TODO: real slot/KV metrics, a validated administrative reload/drain interface,
-and in-process recovery after device reset or suspend/resume.
+TODO: retained-cache KV metrics, a validated administrative reload/drain
+interface, and in-process recovery after device reset or suspend/resume.
 
 ## Troubleshooting logs
 
