@@ -290,6 +290,9 @@ public:
   /// Retain a safe executed frontier when cancellation interrupts publication
   /// of a completed speculative block. Called with cancellation checks cleared.
   virtual void PrepareCancellation(TextRunnerState&) const {}
+  /// Check after a failed work unit whether the execution device accepts work.
+  /// A probe still pending at its polling deadline counts as usable.
+  [[nodiscard]] virtual bool DeviceUsable() const { return true; }
 
   /// Captures an immutable exact continuation at CheckpointPosition(state).
   ///

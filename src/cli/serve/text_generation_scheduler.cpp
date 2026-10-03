@@ -348,11 +348,34 @@ struct TextGenerationScheduler::Impl {
 
   void CompleteFailure(const std::shared_ptr<ScheduledRequest>& request,
                        std::exception_ptr failure) noexcept {
+    // Invalidation can wait for snapshots or touch the failed GPU. A fatal
+    // device handler must run before either operation.
+    CheckDeviceFailure(failure);
     if (request->runner_request) {
       request->runner_request.Invalidate();
     }
     request->result.completion_tokens = request->result.tokens.size();
     PublishTerminal(request, std::move(failure), true);
+  }
+
+  void CheckDeviceFailure(const std::exception_ptr& failure) noexcept {
+    if (!scheduler_policy.on_device_lost || failure == nullptr)
+      return;
+    try {
+      const char* reason = "unknown failure";
+      try {
+        std::rethrow_exception(failure);
+      } catch (const TextGenerationError&) {
+        return;
+      } catch (const std::exception& error) {
+        reason = error.what();
+      } catch (...) {
+      }
+      if (!runner_pool->runner().DeviceUsable())
+        scheduler_policy.on_device_lost(reason);
+    } catch (...) {
+      // A failed probe implementation must not replace the original error.
+    }
   }
 
   void CompleteDeadline(

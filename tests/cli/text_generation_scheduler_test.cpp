@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "src/cli/serve/device_failure.hpp"
 #include "src/cli/serve/generation_metrics.hpp"
 #include "src/cli/serve/http_server.hpp"
 #include "src/cli/serve/stop_sequences.hpp"
@@ -140,6 +141,11 @@ struct FakeControl {
   std::optional<TextRunnerToken> block_advance_label;
   std::optional<TextRunnerToken> block_prefill_label;
   std::optional<TextRunnerToken> throw_advance_label;
+  std::optional<TextRunnerToken> exit_on_invalidation_label;
+  std::atomic<bool> device_usable{true};
+  std::atomic<bool> probe_throws{false};
+  std::atomic<std::size_t> device_probes{0};
+  std::atomic<std::size_t> invalidations_at_failure{0};
   TextRunnerToken advance_gate_label{0};
   TextRunnerToken prefill_gate_label{0};
   bool advance_gate_entered{false};
@@ -173,6 +179,8 @@ public:
       : control_(std::move(control)) {}
 
   void Invalidate() noexcept override {
+    if (control_->exit_on_invalidation_label == label)
+      std::_Exit(76);
     control_->RecordInvalidation();
     label = 0;
     position = 0;
@@ -422,6 +430,7 @@ public:
         }
       }
       if (control_->throw_advance_label == fake.label) {
+        control_->invalidations_at_failure = control_->invalidations.load();
         throw std::runtime_error("injected scheduler runner failure");
       }
       control_->events.push_back({
@@ -499,6 +508,13 @@ public:
   [[nodiscard]] std::size_t CheckpointPosition(
       const TextRunnerState& state) const override {
     return RequireFakeState(state).position;
+  }
+
+  [[nodiscard]] bool DeviceUsable() const override {
+    ++control_->device_probes;
+    if (control_->probe_throws)
+      throw std::runtime_error("injected probe failure");
+    return control_->device_usable;
   }
 
 private:
@@ -1011,10 +1027,14 @@ void TestSlowConsumerOutputIsBoundedAndReclaimed() {
 
 void TestGeneratedOutputLimitAppliesWithoutStreaming() {
   auto control = std::make_shared<FakeControl>();
-  auto scheduler = MakeScheduler(control, 1, {},
-                                 {
-                                     .max_output_bytes_per_request = 4,
-                                 });
+  control->device_usable = false;
+  std::atomic<int> device_loss_calls{0};
+  auto scheduler = MakeScheduler(
+      control, 1, {},
+      {
+          .max_output_bytes_per_request = 4,
+          .on_device_lost = [&](std::string_view) { ++device_loss_calls; },
+      });
 
   bool output_limit_reported = false;
   try {
@@ -1025,6 +1045,8 @@ void TestGeneratedOutputLimitAppliesWithoutStreaming() {
   }
   Expect(output_limit_reported,
          "non-streaming generation obeys its output byte limit");
+  Expect(control->device_probes == 0 && device_loss_calls == 0,
+         "scheduler-classified failures never probe or exit");
 }
 
 void TestMidGenerationAdmissionAndIsolatedTrajectories() {
@@ -1319,24 +1341,70 @@ void TestFourResidentRequestsMakeProgress() {
 }
 
 void TestRunnerFailureInvalidatesAndDoesNotPoisonReplacement() {
+  for (const bool probe_throws : {false, true}) {
+    auto control = std::make_shared<FakeControl>();
+    control->throw_advance_label = 9;
+    control->probe_throws = probe_throws;
+    std::atomic<int> device_loss_calls{0};
+    auto scheduler = MakeScheduler(
+        control, 1, {},
+        {.on_device_lost = [&](std::string_view) { ++device_loss_calls; }});
+
+    bool failed = false;
+    try {
+      auto request = scheduler->Submit({9, 90}, 2, 0.0F);
+      (void)request.Wait();
+    } catch (const std::runtime_error& exception) {
+      failed = std::string_view(exception.what()) ==
+               "injected scheduler runner failure";
+    }
+    Expect(failed, "runner failure reaches the submitting client");
+    Expect(control->device_probes == 1 && device_loss_calls == 0,
+           "usable or throwing probes preserve the original failure");
+
+    control->throw_advance_label.reset();
+    auto replacement = scheduler->Submit({8, 80}, 2, 0.0F);
+    Expect(replacement.Wait().tokens == ExpectedTokens(8, 2),
+           "replacement request succeeds after runner failure");
+    Expect(control->device_probes == 1, "successful requests never probe");
+  }
+}
+
+void TestDeviceFailureProbePrecedesCleanup() {
   auto control = std::make_shared<FakeControl>();
   control->throw_advance_label = 9;
-  auto scheduler = MakeScheduler(control, 1);
+  control->device_usable = false;
+  std::atomic<int> device_loss_calls{0};
+  auto scheduler = MakeScheduler(
+      control, 1, {}, {.on_device_lost = [&](std::string_view reason) {
+        Expect(reason == "injected scheduler runner failure",
+               "fatal callback receives the original reason");
+        Expect(control->invalidations == control->invalidations_at_failure,
+               "device loss is reported before state cleanup");
+        ++device_loss_calls;
+      }});
+  try {
+    (void)scheduler->Submit({9, 90}, 2, 0.0F).Wait();
+  } catch (const std::runtime_error&) {
+  }
+  Expect(control->device_probes == 1 && device_loss_calls == 1,
+         "failed probe invokes the handler exactly once");
+}
 
+void TestDeviceFailureHandlerIsOptional() {
+  auto control = std::make_shared<FakeControl>();
+  control->throw_advance_label = 9;
+  control->device_usable = false;
+  auto scheduler = MakeScheduler(control, 1);
   bool failed = false;
   try {
-    auto request = scheduler->Submit({9, 90}, 2, 0.0F);
-    (void)request.Wait();
-  } catch (const std::runtime_error& exception) {
-    failed = std::string_view(exception.what()) ==
-             "injected scheduler runner failure";
+    (void)scheduler->Submit({9, 90}, 2, 0.0F).Wait();
+  } catch (const std::runtime_error& error) {
+    failed =
+        std::string_view(error.what()) == "injected scheduler runner failure";
   }
-  Expect(failed, "runner failure reaches the submitting client");
-
-  control->throw_advance_label.reset();
-  auto replacement = scheduler->Submit({8, 80}, 2, 0.0F);
-  Expect(replacement.Wait().tokens == ExpectedTokens(8, 2),
-         "replacement request succeeds after runner failure");
+  Expect(failed && control->device_probes == 0,
+         "reusable schedulers without a fatal handler retain request errors");
 }
 
 void TestStopSequenceChunkBoundaries() {
@@ -1647,7 +1715,21 @@ void TestShutdownCancelsRunnerAcquisition() {
   stopped.get();
 }
 
-int main() {
+int main(int argc, char** argv) {
+  if (argc == 2 &&
+      (std::string_view(argv[1]) == "--device-loss-child" ||
+       std::string_view(argv[1]) == "--device-loss-no-handler-child")) {
+    auto control = std::make_shared<FakeControl>();
+    control->throw_advance_label = 9;
+    control->exit_on_invalidation_label = 9;
+    control->device_usable = false;
+    TextSchedulerPolicy policy;
+    if (std::string_view(argv[1]) == "--device-loss-child")
+      policy.on_device_lost = gufo::cli::ExitAfterDeviceLoss;
+    auto scheduler = MakeScheduler(control, 1, {}, std::move(policy));
+    (void)scheduler->Submit({9, 90}, 2, 0.0F).Wait();
+    return 77;
+  }
   TestStopSequenceChunkBoundaries();
   TestStopSequencesPreserveExecutedState();
   TestStopPrefixFlushAndBatchIsolation();
@@ -1728,6 +1810,8 @@ int main() {
   TestDecodeCancellationAndStateReclamation();
   TestFourResidentRequestsMakeProgress();
   TestRunnerFailureInvalidatesAndDoesNotPoisonReplacement();
+  TestDeviceFailureProbePrecedesCleanup();
+  TestDeviceFailureHandlerIsOptional();
   Expect(
       gufo::server::detail::RequestsProcessing().load() == 0 &&
           gufo::server::detail::RequestsDeferred().load() == 0,

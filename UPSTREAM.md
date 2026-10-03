@@ -36,6 +36,29 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-02 — Exit immediately after confirmed text-device loss
+
+- Source: [gufo-org/gufo@7d893a020372502757933ec80231927fc9d25a96](https://github.com/gufo-org/gufo/commit/7d893a020372502757933ec80231927fc9d25a96)
+  (PR #390).
+- Local: commit introducing this entry.
+- Adaptation: retained the preallocated four-byte HIP probe and five-second
+  polling deadline for Qwen, Flash-Next and DeepSeek. Runs detection before
+  request invalidation; a serve-owned callback writes the original failure
+  reason and exits 75 without model teardown. Pending probes and classified
+  request errors keep their existing behavior. Omitted sticky loss state,
+  HTTP/health status changes, new wire errors, signal shutdown and watchdog:
+  immediate process exit closes clients and avoids dead-device cleanup.
+- Areas: text runners/scheduler, serve process policy, CPU/process fixtures,
+  Windows and Linux hosted CPU selections, and server documentation.
+- Validation: fresh Windows GPU build and four focused CPU tests pass; the
+  process control exits 76 at invalidation and the production handler exits 75
+  first. GUI tests pass (34). All 174 full-logit rows and perplexity match the
+  recorded baseline exactly; eight real-model HTTP cases match, including
+  streaming, history reuse and concurrency. Formatting and docs checks pass;
+  see the [validation record](docs/plans/device-loss-pr390.md). Actual
+  driver-reset and Linux execution remain unrun.
+- Status: retained.
+
 ### 2026-10-01 — Multiline edit boundaries and malformed-call diagnostics
 
 - Source: [gufo-org/gufo@594a623913b4109e4499885e9f73ed4d4ad3698e](https://github.com/gufo-org/gufo/commit/594a623913b4109e4499885e9f73ed4d4ad3698e)
