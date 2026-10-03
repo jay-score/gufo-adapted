@@ -25,6 +25,7 @@
 #include "src/cli/arg_parser.hpp"
 #include "src/cli/sampling_options.hpp"
 #include "src/cli/serve/asr_service.hpp"
+#include "src/cli/serve/device_failure.hpp"
 #include "src/cli/serve/http_server.hpp"
 #include "src/cli/serve/image_api.hpp"
 #include "src/cli/serve/inference_backend.hpp"
@@ -1181,6 +1182,7 @@ int RunServe(std::span<const char* const> args) {
                                std::chrono::milliseconds{
                                    static_cast<std::chrono::milliseconds::rep>(
                                        request_timeout_ms)},
+                           .on_device_lost = ExitAfterDeviceLoss,
                        },
                        speculative_config,
                        server::TextDiskCacheConfig{

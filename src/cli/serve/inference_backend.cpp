@@ -17,6 +17,7 @@
 #include <span>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -32,6 +33,7 @@
 #include "src/models/qwen/generator.hpp"
 
 #if defined(ENGINE_ENABLE_HIP)
+#include "src/core/hip/hip_utils.hpp"
 #include "src/core/platform/device_memory.hpp"
 #include "src/core/speculative/speculative_verifier.hpp"
 #include "src/models/deepseek_v4_flash/dspark_sampler.hpp"
@@ -786,7 +788,58 @@ const QwenTextRunnerState& RequireQwenState(const TextRunnerState& state) {
   return *qwen;
 }
 
-class QwenTextRunner final : public TextModelRunner {
+// Allocate the probe at load so a failed work unit needs no new device memory.
+// The private stream avoids synchronizing unrelated work on a healthy device.
+class HipTextModelRunner : public TextModelRunner {
+public:
+  HipTextModelRunner() {
+    HIP_CHECK(hipStreamCreateWithFlags(&probe_stream_, hipStreamNonBlocking));
+    if (const auto error = hipMalloc(&probe_buffer_, sizeof(std::uint32_t));
+        error != hipSuccess) {
+      hip::LogCleanupError(hipStreamDestroy(probe_stream_));
+      throw std::runtime_error(std::string("device probe allocation: ") +
+                               hipGetErrorString(error));
+    }
+  }
+  ~HipTextModelRunner() override {
+    hip::LogCleanupError(hipFree(probe_buffer_));
+    hip::LogCleanupError(hipStreamDestroy(probe_stream_));
+  }
+  HipTextModelRunner(const HipTextModelRunner&) = delete;
+  HipTextModelRunner& operator=(const HipTextModelRunner&) = delete;
+  HipTextModelRunner(HipTextModelRunner&&) = delete;
+  HipTextModelRunner& operator=(HipTextModelRunner&&) = delete;
+
+  [[nodiscard]] bool DeviceUsable() const override {
+    constexpr auto kTimeout = std::chrono::seconds(5);
+    (void)hipGetLastError();
+    if (hipMemsetAsync(probe_buffer_, 0, sizeof(std::uint32_t),
+                       probe_stream_) != hipSuccess ||
+        hipGetLastError() != hipSuccess)
+      return false;
+    const auto deadline = Clock::now() + kTimeout;
+    for (;;) {
+      const auto status = hipStreamQuery(probe_stream_);
+      if (status == hipSuccess)
+        return true;
+      if (status != hipErrorNotReady)
+        return false;
+      if (Clock::now() >= deadline) {
+        // A healthy device can queue this behind long kernels. Pending work
+        // alone is not evidence of context loss.
+        Logger::Warn("scheduler", "event=device_probe_timeout timeout_s=5");
+        return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
+
+private:
+  hipStream_t probe_stream_{};
+  void* probe_buffer_{};
+};
+
+class QwenTextRunner final : public HipTextModelRunner {
 public:
   QwenTextRunner(
       std::shared_ptr<const hip::QwenGpuModel> model, std::uint32_t max_context,
@@ -1522,7 +1575,7 @@ const DeepSeekTextRunnerState& RequireDeepSeekState(
   return *deepseek;
 }
 
-class DeepSeekTextRunner final : public TextModelRunner {
+class DeepSeekTextRunner final : public HipTextModelRunner {
 public:
   DeepSeekTextRunner(std::shared_ptr<models::deepseek_v4_flash::Model> model,
                      std::uint32_t max_context, bool use_dspark,
@@ -2268,7 +2321,7 @@ const QwenFlashNextTextRunnerState& RequireQwenFlashNextState(
   return *qfn;
 }
 
-class QwenFlashNextTextRunner final : public TextModelRunner {
+class QwenFlashNextTextRunner final : public HipTextModelRunner {
 public:
   QwenFlashNextTextRunner(std::shared_ptr<QwenFlashNextModel> model,
                           std::uint32_t max_context, bool use_mtp,

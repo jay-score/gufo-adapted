@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "src/cli/serve/text_generation_backend.hpp"
@@ -45,6 +46,10 @@ struct TextSchedulerPolicy {
   std::size_t max_buffered_output_bytes_total{
       kDefaultMaxBufferedOutputBytesTotal};
   std::chrono::milliseconds request_timeout{0};
+  /// Called on the scheduler thread before cleanup when a failed work unit's
+  /// device probe fails. Production handlers must exit without returning.
+  /// An empty handler preserves request-only failure handling.
+  std::function<void(std::string_view)> on_device_lost{};
 };
 
 /// Single-owner scheduler for opaque text-model runner states.

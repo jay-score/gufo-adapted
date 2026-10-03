@@ -764,6 +764,29 @@ service is ready, then reports `status` and the active model. It does not expose
 a GPU health matrix. HTTP model replacement and persistent Responses
 conversations are not implemented.
 
+After an unexpected text-generation failure, `gufo serve` checks whether the
+GPU context can still execute work before invalidating the failed request's
+state. Qwen, Flash-Next and DeepSeek use a four-byte memset on a private HIP
+stream and buffer allocated during model loading. Successful requests and
+scheduler-classified errors such as output limits never probe the device.
+The probe polls for up to five seconds; a pending operation logs
+`event=device_probe_timeout` and preserves the original error, since a healthy
+GPU may be busy with long kernels.
+
+If the probe returns a hard HIP error, the server logs
+`event=device_lost remedy=restart exit_status=75 reason=...` and exits immediately
+with status 75. It skips request cleanup and model destruction, which may hang
+or crash on a lost device. Active clients receive a closed connection rather
+than a structured `device_lost` response. The Windows GUI reports the engine as
+failed; use Start to reload it, or run the engine under a supervisor configured
+to restart failed processes.
+
+This detects loss after a failed generation, not while the server is idle.
+Requests already cancelled or past their deadline can complete without probing.
+The polling deadline does not bound a HIP API call that itself hangs. External
+monitoring remains necessary for that case. Audio, image and video services do
+not use this text-generation probe.
+
 ## Metrics
 
 `/metrics` exposes total prompt/generated tokens and the latest prompt/decode

@@ -487,6 +487,11 @@ if (BUILD_TESTING)
   target_link_libraries(text_generation_scheduler_test PRIVATE gufo_logging gufo_core)
   add_test(NAME text_generation_scheduler_test
     COMMAND text_generation_scheduler_test)
+  add_test(NAME text_generation_device_loss_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/device_failure_test.py
+      $<TARGET_FILE:text_generation_scheduler_test>)
+  set_tests_properties(text_generation_device_loss_test PROPERTIES
+    LABELS "cpu;server;scheduler" TIMEOUT 10)
   set_tests_properties(text_generation_scheduler_test PROPERTIES
     LABELS "cpu;server;scheduler;queue;state;lifecycle;cancellation")
 
