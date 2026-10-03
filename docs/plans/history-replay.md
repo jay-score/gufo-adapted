@@ -12,6 +12,14 @@ argument bytes are preserved. Persistent formatter identities change whenever
 the rendered prompt or its tokenization changes; existing disk entries remain
 in their previous compatibility partition.
 
+Literal ranges distinguish data from formatter-owned control tokens. The
+tokenizer skips special matches overlapping these ranges and keeps ordinary
+BPE intact across the ranges' boundaries. This covers the direct template path
+and `vision::Prepare`, which also handles plain HTTP requests. Only actual image
+attachments create structural image placeholders and expanded image tokens.
+Qwen3.8's final formatter identity is `qwen38-reasoning-compiled-v6`; DeepSeek's
+typed formatter identity is `deepseek-v4-flash-0731-compiled-v4`.
+
 ## Validation
 
 Windows uses TheRock 10.0.0/AMD clang 23, MSVC 14.51.36231 headers, Ninja and
@@ -26,6 +34,21 @@ engine reports `c2fd8121424b-dirty`, SHA-256
 its source matches the preceding parser commit. The Qwen27B target capture
 contains 27 full-logit rows, 248320 logits per row and 24 teacher-forced labels,
 with perplexity 3.6879261563836652. Candidate comparison is pending.
+
+The production candidate for typed/literal handling reports
+`3865833a12a7-dirty`, SHA-256
+`827289b3646cda75b3e082547d3aa1214a16e4e1571d40b91871fd553255f955`.
+The five-target CPU suite and GPU production build pass. Initial fixture
+failures were corrected: explicit reasoning options were missing from a token
+count assertion, and a copied PNG fixture had extra base64 bytes.
+
+Ordinary typed replay passes all 14 HTTP checks on baseline AR, baseline
+DFlash2 and candidate AR. The first Chat warm replay reuses 413 tokens on the
+candidate, including the generated typed call, versus baseline's 353 prompt
+tokens; replay prompt lengths are respectively 439 and 433. Retries reuse their
+entire prompts and cold Chat controls reuse zero tokens. Canonical template
+spacing permits this reuse; arbitrary generated whitespace is not guaranteed
+to replay with an identical token prefix. Further candidate checks are pending.
 
 The isolated HTTP harness uses Qwen3.8-27B UD-Q4_K_XL, matching BF16 projector,
 context 8192, one session, thinking off, greedy sampling and seed 47. It checks

@@ -190,8 +190,26 @@ void AppendJsonString(std::string& output, std::string_view value) {
   output.push_back('"');
 }
 
+void MarkLiteral(std::vector<LiteralTextSpan>* spans, std::size_t begin,
+                 std::size_t end) {
+  if (spans == nullptr || begin == end)
+    return;
+  if (!spans->empty() && spans->back().end == begin)
+    spans->back().end = end;
+  else
+    spans->push_back({begin, end});
+}
+
+void AppendLiteral(std::string& output, std::string_view value,
+                   std::vector<LiteralTextSpan>* spans) {
+  const auto begin = output.size();
+  output.append(value);
+  MarkLiteral(spans, begin, output.size());
+}
+
 void AppendToolsPrompt(std::string& output, std::span<const ChatTool> tools,
-                       bool require_tool_call) {
+                       bool require_tool_call,
+                       std::vector<LiteralTextSpan>* spans) {
   if (tools.empty()) {
     return;
   }
@@ -204,17 +222,23 @@ void AppendToolsPrompt(std::string& output, std::span<const ChatTool> tools,
   for (const auto& tool : tools) {
     if (!tool.definition_json.empty()) {
       output.push_back('\n');
-      output.append(PythonJsonSpacing(tool.definition_json));
+      AppendLiteral(output, PythonJsonSpacing(tool.definition_json), spans);
       continue;
     }
     output.append("\n{\"type\": \"function\", \"function\": {\"name\": ");
+    auto begin = output.size();
     AppendJsonString(output, tool.name);
+    MarkLiteral(spans, begin, output.size());
     output.append(", \"description\": ");
+    begin = output.size();
     AppendJsonString(output, tool.description);
+    MarkLiteral(spans, begin, output.size());
     output.append(", \"parameters\": ");
-    output.append(tool.parameters_json.empty()
+    AppendLiteral(output,
+                  tool.parameters_json.empty()
                       ? "{}"
-                      : PythonJsonSpacing(tool.parameters_json));
+                      : PythonJsonSpacing(tool.parameters_json),
+                  spans);
     output.append("}}");
   }
   output.append(
@@ -240,7 +264,8 @@ void AppendToolsPrompt(std::string& output, std::span<const ChatTool> tools,
 }
 
 void AppendToolCalls(std::string& output,
-                     std::span<const ChatMessage::ToolCall> calls) {
+                     std::span<const ChatMessage::ToolCall> calls,
+                     std::vector<LiteralTextSpan>* spans) {
   bool first_call = true;
   for (const auto& call : calls) {
     if (!first_call) {
@@ -248,14 +273,16 @@ void AppendToolCalls(std::string& output,
     }
     first_call = false;
     output.append("<tool_call>\n<function=");
-    output.append(call.name);
+    AppendLiteral(output, call.name, spans);
     output.append(">\n");
     for (const auto& argument : call.arguments) {
       output.append("<parameter=");
-      output.append(argument.name);
+      AppendLiteral(output, argument.name, spans);
       output.append(">\n");
-      output.append(argument.is_string ? argument.value
-                                       : json::parse(argument.value).tojson());
+      AppendLiteral(output,
+                    argument.is_string ? argument.value
+                                       : json::parse(argument.value).tojson(),
+                    spans);
       output.append("\n</parameter>\n");
     }
     output.append("</function>\n</tool_call>");
@@ -321,11 +348,11 @@ std::unique_ptr<QwenChatTemplate> QwenChatTemplate::CreateDefault(
 std::string_view QwenChatTemplate::GetTemplateId() const noexcept {
   switch (profile_) {
     case Profile::kLegacyChatMl:
-      return "qwen-chatml-compiled-v1";
+      return "qwen-chatml-compiled-v2";
     case Profile::kQwen38Reasoning:
-      return "qwen38-reasoning-compiled-v5";
+      return "qwen38-reasoning-compiled-v6";
   }
-  return "qwen-chatml-compiled-v1";
+  return "qwen-chatml-compiled-v2";
 }
 
 std::optional<std::string> QwenChatTemplate::Render(
@@ -337,9 +364,12 @@ std::optional<std::string> QwenChatTemplate::Render(
 std::optional<std::string> QwenChatTemplate::Render(
     std::span<const ChatMessage> messages, std::span<const ChatTool> tools,
     const ChatTemplateOptions& options, std::string* error_msg,
-    std::vector<std::size_t>* image_offsets, std::size_t* stable_prefix_bytes) {
+    std::vector<std::size_t>* image_offsets, std::size_t* stable_prefix_bytes,
+    std::vector<LiteralTextSpan>* literal_spans) {
   if (image_offsets != nullptr)
     image_offsets->clear();
+  if (literal_spans != nullptr)
+    literal_spans->clear();
   if (messages.empty()) {
     if (error_msg != nullptr) {
       *error_msg = "No messages provided";
@@ -410,14 +440,20 @@ std::optional<std::string> QwenChatTemplate::Render(
   }
 
   std::string system_prefix;
+  std::vector<LiteralTextSpan> system_spans;
   AppendReasoningInstruction(system_prefix, options);
-  AppendToolsPrompt(system_prefix, tools, options.require_tool_call);
+  AppendToolsPrompt(system_prefix, tools, options.require_tool_call,
+                    literal_spans == nullptr ? nullptr : &system_spans);
   if (!system_prefix.empty() && !system_content.empty()) {
     system_prefix.append("\n\n");
   }
-  system_prefix.append(system_content);
+  AppendLiteral(system_prefix, system_content,
+                literal_spans == nullptr ? nullptr : &system_spans);
   if (!system_prefix.empty()) {
     output.append("<|im_start|>system\n");
+    for (const auto& range : system_spans)
+      MarkLiteral(literal_spans, output.size() + range.begin,
+                  output.size() + range.end);
     output.append(system_prefix);
     output.append("<|im_end|>\n");
   }
@@ -466,12 +502,19 @@ std::optional<std::string> QwenChatTemplate::Render(
                                            : std::string_view(image_content);
     const std::string_view content =
         msg.role == ChatRole::kTool ? untrimmed : Trim(untrimmed);
-    if (image_offsets != nullptr && !local_image_offsets.empty()) {
-      const auto removed =
-          static_cast<std::size_t>(content.data() - untrimmed.data());
-      for (const auto offset : local_image_offsets)
-        image_offsets->push_back(output.size() + offset - removed);
+    const auto removed =
+        static_cast<std::size_t>(content.data() - untrimmed.data());
+    std::size_t literal_begin = output.size();
+    for (const auto offset : local_image_offsets) {
+      const auto pad = output.size() + offset - removed;
+      if (image_offsets != nullptr)
+        image_offsets->push_back(pad);
+      MarkLiteral(literal_spans, literal_begin,
+                  pad - std::string_view("<|vision_start|>").size());
+      literal_begin =
+          pad + std::string_view("<|image_pad|><|vision_end|>").size();
     }
+    MarkLiteral(literal_spans, literal_begin, output.size() + content.size());
     output.append(content);
     return !content.empty();
   };
@@ -517,7 +560,7 @@ std::optional<std::string> QwenChatTemplate::Render(
     if (msg.role == ChatRole::kAssistant &&
         (options.preserve_thinking || message_index > last_user_index)) {
       output.append("<think>\n");
-      output.append(thought);
+      AppendLiteral(output, thought, literal_spans);
       output.append("\n</think>\n\n");
     }
 
@@ -526,7 +569,7 @@ std::optional<std::string> QwenChatTemplate::Render(
       if (has_content) {
         output.append("\n\n");
       }
-      AppendToolCalls(output, msg.tool_calls);
+      AppendToolCalls(output, msg.tool_calls, literal_spans);
     }
     output.append("<|im_end|>\n");
 
@@ -578,7 +621,9 @@ std::optional<std::vector<TokenId>> QwenChatTemplate::RenderAndTokenize(
     }
     return std::nullopt;
   }
-  const auto rendered = Render(messages, tools, options, error_msg);
+  std::vector<LiteralTextSpan> literal_spans;
+  const auto rendered = Render(messages, tools, options, error_msg, nullptr,
+                               nullptr, &literal_spans);
   if (!rendered.has_value()) {
     return std::nullopt;
   }
@@ -588,7 +633,7 @@ std::optional<std::vector<TokenId>> QwenChatTemplate::RenderAndTokenize(
   tok_opts.add_eos = false;
   tok_opts.parse_special_tokens = true;
 
-  return tokenizer.Encode(*rendered, tok_opts);
+  return tokenizer.Encode(*rendered, tok_opts, literal_spans);
 }
 
 }  // namespace gufo::tokenization

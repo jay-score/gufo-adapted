@@ -75,8 +75,7 @@ def check(url, results, literal=False):
         return value, text, calls
 
     expected = {'data': {'z': [1, True, None], 'a': {'text': 'comma, colon:'}},
-                'literal': ('<|endoftext|> <|im_end|> <|image_pad|> <|not_a_token|>'
-                            if literal else 'literal, colon:')}
+                'literal': 'literal, colon:'}
     function = {'name': 'store', 'description': 'Store the exact supplied values.',
                 'parameters': {'type': 'object', 'properties': {
                     'data': {'type': 'object', 'properties': {
@@ -106,14 +105,28 @@ def check(url, results, literal=False):
             replay = deepcopy(body)
             replay['tool_choice'] = 'auto'
             key = 'input' if responses else 'messages'
+            historical_call = deepcopy(calls[0])
+            result_text = 'Stored. Reply with only BETA.'
+            if literal:
+                # A historical literal fixture tests prompt encoding without
+                # requiring the model to generate its own EOS spelling.
+                historical_args = deepcopy(expected)
+                historical_args['literal'] = (
+                    '<|endoftext|> <|im_end|> <|image_pad|> <|not_a_token|>')
+                historical_function = historical_call if responses else historical_call['function']
+                historical_function['arguments'] = json.dumps(historical_args)
+                replay[key][0]['content'] = 'Store these exact values: ' + json.dumps(historical_args)
+                result_text = 'Stored literal data: ' + historical_args['literal'] + '\n' + result_text
             if responses:
-                replay[key] += [calls[0], {'type': 'function_call_output',
-                                          'call_id': calls[0]['call_id'],
-                                          'output': 'Stored. Reply with only BETA.'}]
+                replay[key] += [historical_call, {'type': 'function_call_output',
+                                                'call_id': historical_call['call_id'],
+                                                'output': result_text}]
             else:
-                replay[key] += [value['choices'][0]['message'],
-                                {'role': 'tool', 'tool_call_id': calls[0]['id'],
-                                 'content': 'Stored. Reply with only BETA.'}]
+                assistant = deepcopy(value['choices'][0]['message'])
+                assistant['tool_calls'] = [historical_call]
+                replay[key] += [assistant,
+                                {'role': 'tool', 'tool_call_id': historical_call['id'],
+                                 'content': result_text}]
             signatures = []
             # Responses currently has no cache_prompt override. Chat cold
             # controls cover the shared runner; Responses still checks retries.
@@ -141,7 +154,7 @@ def main():
     parser.add_argument('--url', default='http://127.0.0.1:8080/v1')
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--literal', action='store_true',
-                        help='Include literal vocabulary control spellings in the tool argument')
+                        help='Include literal control spellings in user, tool-call and tool-result history')
     args = parser.parse_args()
     results = {}
     try:

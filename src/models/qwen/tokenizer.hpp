@@ -34,6 +34,12 @@ struct VocabularyLoadOptions {
   bool eager_decoded_tokens{true};
 };
 
+/// Ordered, disjoint byte ranges containing data rather than control tokens.
+struct LiteralTextSpan {
+  std::size_t begin;
+  std::size_t end;
+};
+
 /// Deterministic, zero-allocation-on-query Qwen BPE Tokenizer.
 class QwenTokenizer {
 public:
@@ -59,7 +65,9 @@ public:
 
   /// Encodes a UTF-8 text string into token IDs.
   [[nodiscard]] std::vector<TokenId> Encode(
-      std::string_view text, const TokenizerOptions& options = {}) const;
+      std::string_view text, const TokenizerOptions& options = {},
+      std::span<const LiteralTextSpan> literal_spans = {},
+      std::size_t byte_offset = 0) const;
 
   /// Decodes a sequence of token IDs into a UTF-8 string.
   [[nodiscard]] std::string Decode(std::span<const TokenId> tokens) const;

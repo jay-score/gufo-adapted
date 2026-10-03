@@ -36,6 +36,28 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-03 — Literal prompt control-token handling
+
+- Source: history replay problem investigated alongside
+  [gufo-org/gufo@0564df5ffcabb24b6b70df3a17f7fd8cce1718bb](https://github.com/gufo-org/gufo/commit/0564df5ffcabb24b6b70df3a17f7fd8cce1718bb)
+  (#400 reviewed head); implementation is local.
+- Local: commit introducing this entry.
+- Adaptation: renderer-owned literal byte ranges suppress special-token matches
+  in message/reasoning data, tool schemas, historical names and argument values.
+  Tokenization retains one BPE pass between structural controls, preserving
+  ordinary merges. Both direct rendering and actual HTTP `vision::Prepare`
+  honor these ranges, including plain requests and real image expansion.
+  Bump Qwen formatter identities. Omitted output sanitization and speculative
+  EOS-policy changes; data is retained verbatim.
+- Areas: Qwen renderer/tokenizer, HTTP vision preparation, compatibility identity,
+  deterministic prompt/image fixtures and explicit real-model replay checks.
+- Validation: fresh five-target Windows CPU suite and production GPU build pass.
+  Fourteen real Qwen27B autoregressive typed replay checks pass; first warm
+  replay reuses 413 tokens versus baseline 353. Additional numerical,
+  DFlash2 and literal-history checks are documented in the
+  [validation record](docs/plans/history-replay.md). Linux execution is unrun.
+- Status: retained.
+
 ### 2026-10-03 — Typed argument history replay
 
 - Source: [gufo-org/gufo@f51d33bd553b42f57cc2a291f2584933c956614f](https://github.com/gufo-org/gufo/commit/f51d33bd553b42f57cc2a291f2584933c956614f)

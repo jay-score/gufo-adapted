@@ -252,9 +252,11 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
                std::string_view encoder_identity, std::uint32_t max_context) {
   std::vector<std::size_t> offsets;
   std::size_t stable_prefix_bytes = 0;
+  std::vector<tokenization::LiteralTextSpan> literal_spans;
   std::string error;
   const auto rendered = tokenization::QwenChatTemplate::Render(
-      messages, tools, options, &error, &offsets, &stable_prefix_bytes);
+      messages, tools, options, &error, &offsets, &stable_prefix_bytes,
+      &literal_spans);
   if (!rendered)
     throw std::invalid_argument(error);
   Prompt prompt;
@@ -264,7 +266,8 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
   tok_options.parse_special_tokens = true;
   bool found_stable_prefix = false;
   const auto append = [&](std::string_view text, std::size_t byte_offset) {
-    auto tokens = tokenizer.Encode(text, tok_options);
+    auto tokens =
+        tokenizer.Encode(text, tok_options, literal_spans, byte_offset);
     if (tokens.size() > max_context - prompt.tokens.size()) {
       throw std::length_error(
           "prompt exceeds the " + std::to_string(max_context) +
@@ -274,8 +277,9 @@ Prompt Prepare(const tokenization::QwenTokenizer& tokenizer,
     // images may follow it; their expanded image tokens are not a text suffix.
     if (!found_stable_prefix && stable_prefix_bytes >= byte_offset &&
         stable_prefix_bytes - byte_offset <= text.size()) {
-      const auto suffix = tokenizer.Encode(
-          text.substr(stable_prefix_bytes - byte_offset), tok_options);
+      const auto suffix =
+          tokenizer.Encode(text.substr(stable_prefix_bytes - byte_offset),
+                           tok_options, literal_spans, stable_prefix_bytes);
       if (suffix.size() > tokens.size() ||
           !std::ranges::equal(suffix, std::span(tokens).last(suffix.size())))
         throw std::logic_error("Qwen stable prefix is not a token boundary");
