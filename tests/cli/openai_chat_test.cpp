@@ -2339,6 +2339,63 @@ void TestResponsesStreamingFileArguments() {
       "Disconnect during live file arguments cancels generation immediately");
 }
 
+void TestResponsesPreviewValidationBeforeCompletion() {
+  using gufo::json::parse;
+  const auto chat = ResponseChat(parse(R"({"input":"write a file","tools":[
+    {"type":"function","name":"write_file","parameters":{"type":"object",
+      "properties":{"content":{"type":"string"}}}}]})"));
+  const std::string prefix =
+      "<tool_call><function=write_file><parameter=content>";
+  const std::string call = prefix + "valid</parameter></function></tool_call>";
+  using Finish = gufo::server::TextGenerationBackend::FinishReason;
+  for (const auto& raw :
+       {prefix + "abandoned" + call, call + prefix + "unfinished",
+        call + prefix + "abandoned" + call}) {
+    for (const auto finish : {Finish::kStop, Finish::kStopSequence}) {
+      for (const bool byte_chunks : {false, true}) {
+        FakeBackend backend;
+        backend.finish_reason = finish;
+        if (byte_chunks) {
+          for (char byte : raw)
+            backend.pieces.emplace_back(1, byte);
+        } else {
+          backend.pieces = {raw};
+        }
+        const auto response = gufo::server::CreateOpenAiResponse(
+            Request("{}"), backend, chat, 0, {}, true);
+        const auto events = ResponseEvents(response);
+        Expect(events.back().member_str("type") == "response.failed",
+               "An abandoned live preview fails the response");
+        for (const auto& event : events) {
+          const auto* item = event.find("item");
+          Expect(event.member_str("type") !=
+                         "response.function_call_arguments.done" &&
+                     (!item || item->member_str("type") != "function_call" ||
+                      item->member_str("status") != "completed"),
+                 "Preview validation fails before any tool can complete");
+        }
+        for (const auto& item :
+             events.back().find("response")->find("output")->items())
+          Expect(item.member_str("status") == "incomplete",
+                 "Failed preview validation leaves no completed tool items");
+      }
+    }
+  }
+
+  FakeBackend limited;
+  limited.finish_reason = Finish::kLength;
+  limited.pieces = {call, prefix + "unfinished"};
+  const auto response = gufo::server::CreateOpenAiResponse(
+      Request("{}"), limited, chat, 0, {}, true);
+  const auto events = ResponseEvents(response);
+  const auto& output = events.back().find("response")->find("output")->items();
+  Expect(events.back().member_str("type") == "response.incomplete" &&
+             output.size() == 2 &&
+             output[0].member_str("status") == "completed" &&
+             output[1].member_str("status") == "incomplete",
+         "A token limit retains complete calls beside an incomplete preview");
+}
+
 void TestResponsesToolValidationAndFailure() {
   for (
       const auto* invalid :
@@ -3183,6 +3240,7 @@ int main() {
   TestResponsesReasoningRequests();
   TestResponsesFunctionTools();
   TestResponsesStreamingFileArguments();
+  TestResponsesPreviewValidationBeforeCompletion();
   TestResponsesToolValidationAndFailure();
   TestResponsesLiveAndCancellation();
   TestCachePromptOption();
