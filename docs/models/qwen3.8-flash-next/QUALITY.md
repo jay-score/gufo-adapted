@@ -76,6 +76,12 @@ teacher forcing without advancing the MTP head. The separate snapshot test
 checks real speculative snapshots, including deferred rejection replay. Neither
 test establishes quality against an independent model implementation.
 
+The explicit `qwen38_flash_next_eos_test` keeps EOS enabled and checks physical
+position, committed tokens, full frontier logits against target replay, sampled
+residual correction, snapshots, and serving stops/cancellation/continuation.
+The [October 3 Windows audit](../../plans/flash-next-eos.md) records the tested
+IQ4_XS/Q8_0 artifacts, cases, results and remaining coverage limits.
+
 ## Benchmark method
 
 September 22–23, 2026; one warmed sample per point, greedy, thinking off.

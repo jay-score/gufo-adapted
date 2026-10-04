@@ -111,8 +111,9 @@ python tests/tools/history_replay_test.py --url http://127.0.0.1:18193/v1 --imag
 
 These are focused regression checks, not performance measurements or full
 model qualification. DeepSeek has CPU template/parser coverage only because
-no model is available locally. Linux execution and Flash-Next MTP/EOS accounting
-remain separate. Native raw string delimiters still follow the existing
+no model is available locally. Linux execution remains unrun. Flash-Next
+MTP/EOS accounting is covered in the [separate EOS audit](flash-next-eos.md).
+Native raw string delimiters still follow the existing
 ambiguity policy; no blanket marker removal or output sanitization was added.
 
 An initial baseline request containing literal vocabulary control spellings
