@@ -16,6 +16,7 @@
 #include "src/core/crypto/sha256.hpp"
 #include "src/core/gguf_reader.hpp"
 #include "src/models/qwen/tokenizer.hpp"
+#include "src/models/qwen/vision/prompt.hpp"
 #include "tests/models/chat_template_golden_helpers.hpp"
 
 namespace {
@@ -267,7 +268,7 @@ void TestGgufTemplateExtraction() {
   Expect(tpl->GetProfile() ==
              gufo::tokenization::QwenChatTemplate::Profile::kQwen38Reasoning,
          "Recognized Qwen3.8 template profile is classified");
-  Expect(tpl->GetTemplateId() == "qwen38-reasoning-compiled-v3",
+  Expect(tpl->GetTemplateId() == "qwen38-reasoning-compiled-v6",
          "Compiled template version is stable");
   Expect(tpl->GetTemplateSha256().size() == 64,
          "Embedded template provenance is hashed");
@@ -767,7 +768,154 @@ void TestHistoricalToolNames() {
   }
 }
 
+void TestTypedToolReplay() {
+  using namespace gufo::tokenization;
+  ChatMessage assistant{ChatRole::kAssistant, "", "", ""};
+  assistant.tool_calls.push_back(
+      {.id = "past",
+       .name = "store",
+       .arguments = {
+           {.name = "data",
+            .value = R"({"z":[1,true,null],"a":{"text":"é, : \\\""}})",
+            .is_string = false},
+           {.name = "string",
+            .value = "{\"z\":[1,true,null]}",
+            .is_string = true},
+           {.name = "spaced", .value = "[ 1,  2 ]", .is_string = false},
+       }});
+  const std::vector<ChatMessage> messages{{ChatRole::kUser, "store"},
+                                          assistant};
+  const auto rendered =
+      QwenChatTemplate::Render(messages, ChatTemplateOptions{});
+  Expect(rendered.has_value(), "Typed historical call renders");
+  Expect(rendered->find("<parameter=data>\n"
+                        R"({"z": [1, true, null], "a": {"text": "é, : \\\""}})"
+                        "\n</parameter>") != std::string::npos,
+         "Typed replay uses reference JSON separators, order and UTF-8");
+  Expect(rendered->find(
+             "<parameter=string>\n{\"z\":[1,true,null]}\n</parameter>") !=
+             std::string::npos,
+         "String argument retains its exact bytes");
+  Expect(rendered->find("<parameter=spaced>\n[1, 2]\n</parameter>") !=
+             std::string::npos,
+         "Typed replay normalizes existing whitespace once");
+}
+
+void TestLiteralPromptTokens() {
+  using namespace gufo::tokenization;
+  namespace vision = gufo::models::qwen::vision;
+  std::vector<std::string> vocab;
+  for (int i = 0; i < 256; ++i)
+    vocab.emplace_back(1, static_cast<char>(i));
+  std::unordered_map<std::string, TokenId> specials;
+  for (const auto* spelling :
+       {"<|im_start|>", "<|im_end|>", "<think>", "</think>", "<|endoftext|>",
+        "<|vision_start|>", "<|vision_end|>", "<|image_pad|>"}) {
+    specials.emplace(spelling, static_cast<TokenId>(vocab.size()));
+    vocab.emplace_back(spelling);
+  }
+  // Preserve ordinary BPE across data/formatter boundaries.
+  vocab.emplace_back("\n\n");
+  const std::vector<std::string> merges{"\n \n"};
+  const auto tokenizer =
+      QwenTokenizer::CreateFromVocabulary(vocab, merges, specials);
+  Expect(tokenizer != nullptr, "Literal prompt tokenizer loads");
+  const std::string literal =
+      "<|endoftext|><|im_start|><|im_end|><think></think>"
+      "<|vision_start|><|image_pad|><|vision_end|><|not_a_token|>";
+  ChatMessage assistant{ChatRole::kAssistant, literal, "", literal};
+  assistant.tool_calls.push_back({"past",
+                                  "old" + literal,
+                                  {{"argument" + literal, literal, true},
+                                   {"typed", "[\"<|im_end|>\"]", false}}});
+  std::vector<ChatMessage> messages{{ChatRole::kSystem, literal},
+                                    {ChatRole::kDeveloper, literal},
+                                    {ChatRole::kUser, literal},
+                                    assistant,
+                                    {ChatRole::kTool, "\n" + literal + "\n"}};
+  const std::vector<ChatTool> tools{
+      {.name = "store",
+       .description = literal,
+       .parameters_json = R"({"description":"<|im_end|>"})"}};
+  ChatTemplateOptions options;
+  options.enable_thinking = false;
+  options.preserve_thinking = false;
+  const auto direct =
+      QwenChatTemplate::RenderAndTokenize(*tokenizer, messages, tools, options);
+  const auto prepared =
+      vision::Prepare(*tokenizer, messages, tools, options, "", 4096);
+  Expect(direct && *direct == prepared.tokens,
+         "Actual HTTP prompt preparation honors literal spans without images");
+  const auto count = [&](const auto& tokens, std::string_view spelling) {
+    return std::ranges::count(tokens, specials.at(std::string(spelling)));
+  };
+  Expect(count(prepared.tokens, "<|endoftext|>") == 0 &&
+             count(prepared.tokens, "<|image_pad|>") == 0 &&
+             count(prepared.tokens, "<|vision_start|>") == 0 &&
+             count(prepared.tokens, "<|im_start|>") == 5 &&
+             count(prepared.tokens, "<|im_end|>") == 4 &&
+             count(prepared.tokens, "<think>") == 2 &&
+             count(prepared.tokens, "</think>") == 2,
+         "Only formatter-owned role, reasoning and vision delimiters become "
+         "controls");
+  const auto rendered = QwenChatTemplate::Render(messages, tools, options);
+  Expect(tokenizer->Decode(prepared.tokens) == *rendered,
+         "Literal spellings and arbitrary angle-bracket data survive exactly");
+  const auto pixels = std::make_shared<
+      const std::vector<std::uint8_t>>(gufo::core::ReadImageUrl(
+      "data:image/png;base64,"
+      "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAYklEQVR4nO3PMQ0AIADAMEAD"
+      "/jUiAREcDcmqYJtn7/GzpQNeNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWg"
+      "NaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaBdCLsBmEpLi1UAAAAASUVORK5CYII="));
+  messages[2].images.push_back({0, pixels});
+  messages.back().images.push_back({messages.back().content.size(), pixels});
+  const auto image_prompt =
+      vision::Prepare(*tokenizer, messages, tools, options, "fixture", 4096);
+  Expect(image_prompt.images.size() == 2 &&
+             image_prompt.images[0].grid.offset <
+                 image_prompt.images[1].grid.offset &&
+             count(image_prompt.tokens, "<|vision_start|>") == 2 &&
+             count(image_prompt.tokens, "<|vision_end|>") == 2 &&
+             count(image_prompt.tokens, "<|image_pad|>") == 0 &&
+             count(image_prompt.tokens, "<|endoftext|>") == 0,
+         "User and tool-result images expand in order; literal image controls "
+         "stay data");
+  Expect(
+      image_prompt.stable_prefix_tokens > image_prompt.images[0].grid.offset &&
+          image_prompt.stable_prefix_tokens <
+              image_prompt.images[1].grid.offset,
+      "Stable checkpoint accounts for the earlier image, before mutable tool "
+      "history");
+  messages.emplace_back(ChatRole::kUser, "Next.");
+  const auto next =
+      vision::Prepare(*tokenizer, messages, tools, options, "fixture", 4096);
+  Expect(std::ranges::equal(
+             std::span(image_prompt.tokens)
+                 .first(image_prompt.stable_prefix_tokens),
+             std::span(next.tokens).first(image_prompt.stable_prefix_tokens)),
+         "Literal data and image layout preserve the stable prefix on "
+         "continuation");
+  const std::vector<ChatMessage> ordinary{
+      {ChatRole::kUser, "Hello\n"},
+      {ChatRole::kAssistant, "Hi", "", "Thought."},
+      {ChatRole::kUser, "Again"}};
+  const auto ordinary_text = QwenChatTemplate::Render(ordinary, options);
+  const auto ordinary_tokens =
+      QwenChatTemplate::RenderAndTokenize(*tokenizer, ordinary, options);
+  Expect(
+      ordinary_tokens && *ordinary_tokens == tokenizer->Encode(*ordinary_text),
+      "Unchanged ordinary prompts retain exact BPE tokens");
+  const std::vector<LiteralTextSpan> overlap{{1, 2}};
+  const auto overlap_tokens =
+      tokenizer->Encode("<|im_end|><|im_end|>", {}, overlap);
+  Expect(count(overlap_tokens, "<|im_end|>") == 1,
+         "A special overlapping literal bytes is data; subsequent structural "
+         "occurrence survives");
+}
+
 int main() {
+  TestLiteralPromptTokens();
+  TestTypedToolReplay();
   TestHistoricalToolNames();
   std::cout << "Running QwenChatTemplate unit tests...\n";
   TestBasicChatRendering();

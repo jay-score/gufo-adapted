@@ -38,6 +38,14 @@ if (ENGINE_ENABLE_HIP)
     ${PROJECT_SOURCE_DIR}/src/cli/serve/inference_backend.cpp)
   target_link_libraries(qwen38_flash_next_session_test PRIVATE gufo_logging
     gufo_qwen38_flash_next gufo_deepseek_v4_flash hip::host)
+  add_executable(qwen38_flash_next_eos_test EXCLUDE_FROM_ALL eos_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/cli/serve/continuation_cache.cpp
+    ${PROJECT_SOURCE_DIR}/src/cli/serve/continuation_disk_store.cpp
+    ${PROJECT_SOURCE_DIR}/src/cli/serve/text_model_runner.cpp
+    ${PROJECT_SOURCE_DIR}/src/cli/serve/text_generation_scheduler.cpp
+    ${PROJECT_SOURCE_DIR}/src/cli/serve/inference_backend.cpp)
+  target_link_libraries(qwen38_flash_next_eos_test PRIVATE gufo_logging
+    gufo_qwen38_flash_next gufo_deepseek_v4_flash hip::host)
   add_executable(qwen38_flash_next_snapshot_test EXCLUDE_FROM_ALL snapshot_test.cpp)
   target_link_libraries(qwen38_flash_next_snapshot_test PRIVATE
     gufo_qwen38_flash_next)
@@ -48,7 +56,8 @@ if (ENGINE_ENABLE_HIP)
     gufo_qwen38_flash_next)
   add_custom_target(qwen38_flash_next_model_tests
     DEPENDS qwen38_flash_next_session_test qwen38_flash_next_snapshot_test
-      qwen38_flash_next_rollback_test qwen38_flash_next_image_prefix_test)
+      qwen38_flash_next_rollback_test qwen38_flash_next_image_prefix_test
+      qwen38_flash_next_eos_test)
 
   add_executable(qwen38_flash_next_gpu_probe EXCLUDE_FROM_ALL gpu_probe.cpp
     mtp_audit.cpp)

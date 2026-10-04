@@ -214,7 +214,7 @@ std::vector<std::uint8_t> QwenFlashNextCompatibilityIdentity(
            << "artifact_id=" << core::kGgufIdentityScheme << ':'
            << artifact_fingerprint << '\n'
            << "tokenizer=embedded-in-artifact\n"
-           << "chat_template=qwen38-reasoning-compiled-v4\n"
+           << "chat_template=qwen38-reasoning-compiled-v6\n"
            << "chat_template_reference_sha256="
            << tokenization::QwenChatTemplate::OfficialTemplateSha256() << '\n'
            << "state_abi=qwen38-flash-next-rocm-session-v1\n"
@@ -257,7 +257,7 @@ std::vector<std::uint8_t> QwenCompatibilityIdentity(
            << "artifact_id=" << core::kGgufIdentityScheme << ':'
            << artifact_fingerprint << '\n'
            << "tokenizer=embedded-in-artifact\n"
-           << "chat_template=qwen38-reasoning-compiled-v4\n"
+           << "chat_template=qwen38-reasoning-compiled-v6\n"
            << "chat_template_reference_sha256="
            << tokenization::QwenChatTemplate::OfficialTemplateSha256() << '\n'
            << "state_abi=" << state_abi << '\n'
@@ -961,6 +961,10 @@ public:
       std::shared_ptr<const TextPromptContext> context) const override {
     RequireQwenState(state).executor().ConfigureVision(QwenPrompt(context),
                                                        model_->VisionEncoder());
+  }
+
+  [[nodiscard]] TextGenerationBackend::ToolFormat ToolFormat() const override {
+    return TextGenerationBackend::ToolFormat::kQwen;
   }
 
   [[nodiscard]] TextGenerationBackend::InitialOutputState InitialOutputState(
@@ -1729,6 +1733,10 @@ public:
     return tokens;
   }
 
+  [[nodiscard]] TextGenerationBackend::ToolFormat ToolFormat() const override {
+    return TextGenerationBackend::ToolFormat::kDeepSeek;
+  }
+
   [[nodiscard]] TextGenerationBackend::InitialOutputState InitialOutputState(
       const ChatRequest& request) const override {
     return request.reasoning.enabled.value_or(false)
@@ -2428,6 +2436,10 @@ public:
         QwenPrompt(context));
   }
 
+  [[nodiscard]] TextGenerationBackend::ToolFormat ToolFormat() const override {
+    return TextGenerationBackend::ToolFormat::kQwen;
+  }
+
   [[nodiscard]] TextGenerationBackend::InitialOutputState InitialOutputState(
       const ChatRequest& request) const override {
     return QwenChatOptions(request, max_context_).enable_thinking
@@ -2811,6 +2823,10 @@ struct InferenceBackend::Impl {
             static_cast<std::size_t>(end - result.tokens.begin());
       }
       return result;
+    }
+
+    [[nodiscard]] ToolFormat tool_format() const override {
+      return state_->scheduler->runner().ToolFormat();
     }
 
     void Cancel() noexcept override { request_.Cancel(); }

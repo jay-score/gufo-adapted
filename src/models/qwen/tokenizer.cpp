@@ -657,7 +657,9 @@ std::vector<TokenId> QwenTokenizer::BpeEncodeText(std::string_view text) const {
 }
 
 std::vector<TokenId> QwenTokenizer::Encode(
-    std::string_view text, const TokenizerOptions& options) const {
+    std::string_view text, const TokenizerOptions& options,
+    std::span<const LiteralTextSpan> literal_spans,
+    std::size_t byte_offset) const {
   std::vector<TokenId> tokens;
   if (text.empty()) {
     if (options.add_bos && bos_token_id_ != kInvalidTokenId) {
@@ -683,8 +685,24 @@ std::vector<TokenId> QwenTokenizer::Encode(
     // its next occurrence instead and only re-searches once the cursor has
     // passed it, which walks the text once overall.
     std::vector<std::size_t> occurrence(special_token_list_.size());
+    const auto find_special = [&](std::string_view special, std::size_t start) {
+      auto found = text.find(special, start);
+      while (found != std::string_view::npos) {
+        const auto begin = byte_offset + found;
+        const auto span = std::lower_bound(
+            literal_spans.begin(), literal_spans.end(), begin,
+            [](const LiteralTextSpan& range, std::size_t position) {
+              return range.end <= position;
+            });
+        if (span == literal_spans.end() ||
+            span->begin >= begin + special.size())
+          break;
+        found = text.find(special, found + 1);
+      }
+      return found;
+    };
     for (std::size_t i = 0; i < special_token_list_.size(); ++i) {
-      occurrence[i] = text.find(special_token_list_[i].first);
+      occurrence[i] = find_special(special_token_list_[i].first, 0);
     }
 
     std::size_t pos = 0;
@@ -696,7 +714,7 @@ std::vector<TokenId> QwenTokenizer::Encode(
       for (std::size_t i = 0; i < special_token_list_.size(); ++i) {
         const auto& [special_str, id] = special_token_list_[i];
         if (occurrence[i] != std::string_view::npos && occurrence[i] < pos) {
-          occurrence[i] = text.find(special_str, pos);
+          occurrence[i] = find_special(special_str, pos);
         }
         const auto found = occurrence[i];
         if (found == std::string_view::npos) {

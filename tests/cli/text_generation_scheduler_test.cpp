@@ -1484,6 +1484,53 @@ void TestStopSequencesPreserveExecutedState() {
   }
 }
 
+void TestEosPreservesExecutedState() {
+  using Finish = gufo::server::TextGenerationBackend::FinishReason;
+  for (const bool multi : {false, true}) {
+    for (const bool preview : {false, true}) {
+      for (std::size_t offset = 0; offset <= 7; ++offset) {
+        auto control = std::make_shared<FakeControl>();
+        control->incremental_text_is_exact = true;
+        control->multi_token_decode = multi;
+        control->batched_multi_token_decode = multi;
+        control->supports_batched_advance = true;
+        control->preview_first_token = preview;
+        control->snapshot_callback = [] {};
+        control->stop_after = offset;
+        control->block_prefill_label = 1;
+        auto scheduler = MakeScheduler(control, 2);
+        auto first = scheduler->Submit({1, 10}, 16, 0.0F, {}, true);
+        control->WaitForPrefill(1);
+        auto peer = scheduler->Submit({2, 20}, 16, 0.0F, {}, true);
+        control->ReleasePrefill();
+        std::string streamed;
+        const auto result = first.Wait([&](std::string_view piece) {
+          streamed += piece;
+          return true;
+        });
+        const auto other = peer.Wait();
+        Expect(
+            result.tokens == ExpectedTokens(1, offset) &&
+                other.tokens == ExpectedTokens(2, offset) &&
+                result.completion_tokens == offset &&
+                other.completion_tokens == offset && streamed == result.text &&
+                result.finish_reason == Finish::kStop &&
+                other.finish_reason == Finish::kStop,
+            "EOS publishes and counts only committed tokens in each request");
+        std::vector<TextRunnerToken> continuation{1, 10};
+        continuation.insert(continuation.end(), result.tokens.begin(),
+                            result.tokens.end());
+        const auto resumed = scheduler->Submit(continuation, 16, 0.0F).Wait();
+        Expect(resumed.tokens.empty() &&
+                   resumed.finish_reason == Finish::kStop &&
+                   resumed.cache_hit &&
+                   resumed.cached_prompt_tokens == continuation.size(),
+               "EOS checkpoint matches the complete executed continuation");
+      }
+    }
+  }
+}
+
 void TestStopPrefixFlushAndBatchIsolation() {
   using Finish = gufo::server::TextGenerationBackend::FinishReason;
   for (const bool multi : {false, true}) {
@@ -1732,6 +1779,7 @@ int main(int argc, char** argv) {
   }
   TestStopSequenceChunkBoundaries();
   TestStopSequencesPreserveExecutedState();
+  TestEosPreservesExecutedState();
   TestStopPrefixFlushAndBatchIsolation();
   TestCancellationWithBufferedStopPrefix();
   for (const bool speculative : {false, true}) {

@@ -182,7 +182,8 @@ public:
       std::span<const ChatMessage> messages, std::span<const ChatTool> tools,
       const ChatTemplateOptions& options = {}, std::string* error_msg = nullptr,
       std::vector<std::size_t>* image_offsets = nullptr,
-      std::size_t* stable_prefix_bytes = nullptr);
+      std::size_t* stable_prefix_bytes = nullptr,
+      std::vector<LiteralTextSpan>* literal_spans = nullptr);
 
   /// Formats messages and tokenizes the rendered prompt with the given
   /// tokenizer.

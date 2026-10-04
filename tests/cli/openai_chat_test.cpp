@@ -38,12 +38,18 @@ public:
   [[nodiscard]] gufo::ReasoningOptions reasoning_defaults() const override {
     return reasoning_defaults_value;
   }
+  [[nodiscard]] ToolFormat tool_format() const override { return format; }
   [[nodiscard]] InitialOutputState initial_output_state(
       const gufo::server::ChatRequest& request) const override {
+    if (output_state)
+      return *output_state;
     return request.reasoning.enabled.value_or(false)
                ? InitialOutputState::kReasoning
                : InitialOutputState::kContent;
   }
+
+  ToolFormat format{ToolFormat::kUnknown};
+  std::optional<InitialOutputState> output_state;
 
   Result complete(std::string_view, std::size_t,
                   const gufo::sampling::SamplingConfig&,
@@ -2355,6 +2361,9 @@ ToolFixtureOutput ReadToolFixture(const gufo::server::HttpResponse& response,
   if (!stream || response.status != 200) {
     read(gufo::json::parse(response.body));
   } else {
+    std::string delta_text;
+    std::string delta_reasoning;
+    bool terminal = false;
     response.streaming_body([&](std::string_view chunk) {
       const auto begin = chunk.find("data: ");
       if (begin == std::string_view::npos)
@@ -2365,6 +2374,13 @@ ToolFixtureOutput ReadToolFixture(const gufo::server::HttpResponse& response,
         return true;
       const auto event = gufo::json::parse(payload);
       if (responses) {
+        const auto type = event.member_str("type");
+        if (type == "response.output_text.delta")
+          delta_text += event.member_str("delta");
+        if (type == "response.reasoning_summary_text.delta")
+          delta_reasoning += event.member_str("delta");
+        terminal |=
+            type == "response.completed" || type == "response.incomplete";
         if (const auto* value = event.find("response"))
           read(*value);
       } else {
@@ -2372,6 +2388,9 @@ ToolFixtureOutput ReadToolFixture(const gufo::server::HttpResponse& response,
       }
       return true;
     });
+    if (responses && terminal)
+      Expect(output.text == delta_text && output.reasoning == delta_reasoning,
+             "Responses terminal text matches its actual streaming deltas");
   }
   return output;
 }
@@ -2821,7 +2840,190 @@ void TestMalformedToolDiagnostics() {
   }
 }
 
+void TestConsolidatedOutputParsing() {
+  using Backend = gufo::server::TextGenerationBackend;
+  using Format = Backend::ToolFormat;
+  const auto base = gufo::json::parse(R"({"model":"test-model",
+    "messages":[{"role":"user","content":"test"}],"tools":[
+    {"type":"function","function":{"name":"f","parameters":{"type":"object",
+      "properties":{"s":{"type":"string"},"data":{"type":"object"}}}}}]})");
+  const std::string qwen =
+      "<tool_call><function=f><parameter=s>yes</parameter></function></"
+      "tool_call>";
+  const std::string invoke =
+      "<｜DSML｜invoke name=\"f\"><｜DSML｜parameter name=\"s\" "
+      "string=\"true\">yes"
+      "</｜DSML｜parameter></｜DSML｜invoke>";
+  const std::string dsml =
+      "<｜DSML｜tool_calls>" + invoke + "</｜DSML｜tool_calls>";
+  const std::string legacy = "<tool_calls>" + invoke + "</tool_calls>";
+  struct Fixture {
+    std::string raw;
+    std::string text;
+    std::size_t calls;
+    Format format{Format::kUnknown};
+    Backend::FinishReason finish{Backend::FinishReason::kStop};
+    std::string error;
+  };
+  const std::vector<Fixture> fixtures{
+      {"before " + qwen + " between " + qwen + " after π",
+       "before  between  after π", 2},
+      {"before " + dsml + " after " + invoke, "before  after " + invoke, 1},
+      {"before\n\n" + dsml + " after", "before after", 1, Format::kDeepSeek},
+      {"\n\n" + dsml, "", 1, Format::kDeepSeek},
+      {"before\n\n\n" + dsml, "before\n", 1, Format::kDeepSeek},
+      {"before\n" + dsml, "before\n", 1, Format::kDeepSeek},
+      {"before\r\n\r\n" + dsml, "before\r\n\r\n", 1, Format::kDeepSeek},
+      {"before\n\n<｜DSML｜tool_calls> is a marker.",
+       "before\n\n<｜DSML｜tool_calls> is a marker.", 0, Format::kDeepSeek},
+      {"before\n\n<｜DSML｜tool_calls></｜DSML｜tool_calls>",
+       "before\n\n<｜DSML｜tool_calls></｜DSML｜tool_calls>", 0,
+       Format::kDeepSeek},
+      {"before\n\n", "before\n\n", 0, Format::kDeepSeek},
+      {"before\n\n<｜DSML｜tool_", "before\n\n<｜DSML｜tool_", 0,
+       Format::kDeepSeek},
+      {"`before\n\n" + dsml + "`", "`before\n\n" + dsml + "`", 0,
+       Format::kDeepSeek},
+      {"before\n\n" + qwen, "before\n\n", 1, Format::kQwen},
+      {"<｜DSML｜tool_calls></｜DSML｜tool_calls> example " + invoke,
+       "<｜DSML｜tool_calls></｜DSML｜tool_calls> example " + invoke, 0},
+      {"`" + qwen + "`\n```xml\n" + dsml + "\n```\n" + qwen,
+       "`" + qwen + "`\n```xml\n" + dsml + "\n```\n", 1},
+      {"literal <think>data</think> text", "literal <think>data</think> text",
+       0},
+      {dsml + qwen, dsml, 1, Format::kQwen},
+      {qwen + dsml, qwen, 1, Format::kDeepSeek},
+      {legacy + dsml, legacy, 1, Format::kDeepSeek},
+      {legacy, "", 1},
+      {"<tool_call> is a marker. " + qwen, "<tool_call> is a marker. ", 1},
+      {"<tool_call>{\"name\":\"f\",\"arguments\":{\"s\":\"" + qwen +
+           "\"},\"junk\":broken}</tool_call>",
+       "", 0, Format::kQwen, Backend::FinishReason::kLength},
+      {"<tool_call>{\"name\":\"f\",\"arguments\":{\"s\":\"broken " + qwen, "",
+       0, Format::kQwen, Backend::FinishReason::kLength},
+      {"<tool_call>{\"name\":\"f\",\"arguments\":{\"s\":\"escaped \\\" " + qwen,
+       "", 0, Format::kQwen, Backend::FinishReason::kStopSequence},
+      {"<｜DSML｜tool_calls>" + invoke + "<｜DSML｜invoke name=\"f\">", "", 1,
+       Format::kDeepSeek, Backend::FinishReason::kLength},
+      {"<｜DSML｜tool_calls>" + invoke + "<｜DSML｜invoke name=\"f\">" + dsml,
+       "", 2, Format::kDeepSeek},
+      {"<｜DSML｜tool_calls>" + invoke +
+           "<｜DSML｜invoke name=\"f\"></｜DSML｜tool_calls>",
+       "", 0, Format::kDeepSeek, Backend::FinishReason::kStop,
+       "malformed_tool_call"},
+      {"<｜DSML｜tool_calls>" + invoke + "garbage</｜DSML｜tool_calls>", "", 0,
+       Format::kDeepSeek, Backend::FinishReason::kStop, "malformed_tool_call"},
+  };
+  for (bool responses : {false, true}) {
+    for (bool stream : {false, true}) {
+      for (const auto& fixture : fixtures) {
+        // Whole output, every two-piece split and one byte per chunk,
+        // including UTF-8, quotes, tags and separators, must agree.
+        for (std::size_t split = 0; split <= fixture.raw.size() + 1; ++split) {
+          FakeBackend backend;
+          backend.format = fixture.format;
+          backend.finish_reason = fixture.finish;
+          if (split > fixture.raw.size()) {
+            for (char byte : fixture.raw)
+              backend.pieces.emplace_back(1, byte);
+          } else {
+            backend.pieces = {fixture.raw.substr(0, split),
+                              fixture.raw.substr(split)};
+          }
+          ToolFixtureOutput output;
+          try {
+            const auto response =
+                ToolFixtureResponse(base, backend, responses, stream);
+            output = ReadToolFixture(response, responses, stream);
+            if (stream && !fixture.error.empty())
+              Expect(response.stream_log &&
+                         response.stream_log->error_code == fixture.error,
+                     "Malformed framing retains its stable diagnostic code");
+          } catch (const gufo::server::TextGenerationError& error) {
+            Expect(responses && !stream,
+                   "Only the internal buffered Responses adapter throws");
+            output.error = error.stable_code();
+          }
+          const auto expected_error =
+              responses && stream && !fixture.error.empty() ? "server_error"
+                                                            : fixture.error;
+          const bool matches =
+              output.error == expected_error && output.text == fixture.text &&
+              output.reasoning.empty() && output.calls.size() == fixture.calls;
+          if (!matches)
+            std::cerr << "responses=" << responses << " stream=" << stream
+                      << " split=" << split << " raw=" << fixture.raw
+                      << "\nerror=" << output.error << " text=" << output.text
+                      << " calls=" << output.calls.size() << '\n';
+          Expect(matches,
+                 "Both APIs preserve envelope ownership and visible suffixes "
+                 "at every split");
+        }
+      }
+      for (Format format : {Format::kQwen, Format::kDeepSeek}) {
+        auto data = gufo::json::Value::object();
+        data["example"] = qwen + dsml + " </parameter> </tool_call> \\\"";
+        auto arguments = gufo::json::Value::object();
+        arguments["s"] = qwen;
+        arguments["data"] = data;
+        auto call = gufo::json::Value::object();
+        call["name"] = "f";
+        call["arguments"] = arguments;
+        const auto raw =
+            format == Format::kQwen
+                ? "<tool_call>" + call.dump() + "</tool_call> tail"
+                : "<｜DSML｜tool_calls><｜DSML｜invoke name=\"f\">"
+                  "<｜DSML｜parameter name=\"data\" string=\"false\">" +
+                      data.dump() +
+                      "</｜DSML｜parameter></｜DSML｜invoke></"
+                      "｜DSML｜tool_calls> tail";
+        FakeBackend backend;
+        backend.format = format;
+        for (char byte : raw)
+          backend.pieces.emplace_back(1, byte);
+        const auto output = ReadToolFixture(
+            ToolFixtureResponse(base, backend, responses, stream), responses,
+            stream);
+        Expect(output.error.empty() && output.text == " tail" &&
+                   output.calls.size() == 1,
+               "Quoted protocol strings belong to their original argument");
+        const auto decoded =
+            gufo::json::parse(output.calls[0].member_str("arguments"));
+        Expect(
+            decoded.find("data") && decoded.find("data")->dump() == data.dump(),
+            "Argument strings and escapes are preserved exactly");
+      }
+      for (auto state : {Backend::InitialOutputState::kAuto,
+                         Backend::InitialOutputState::kReasoning}) {
+        FakeBackend backend;
+        backend.output_state = state;
+        backend.pieces = {"<thi", "nk>check</thi", "nk>\r\n", qwen, "done"};
+        const auto output = ReadToolFixture(
+            ToolFixtureResponse(base, backend, responses, stream), responses,
+            stream);
+        Expect(output.error.empty() && output.reasoning == "check" &&
+                   output.text == "done" && output.calls.size() == 1,
+               "Auto and prompt-opened reasoning share the same delimiter "
+               "decisions");
+      }
+    }
+  }
+  // A reload after admission cannot change how an already admitted request is
+  // decoded. The default deferred request captures metadata before Wait().
+  for (bool responses : {false, true}) {
+    FakeBackend backend;
+    backend.format = Format::kQwen;
+    backend.pieces = {dsml, qwen};
+    auto response = ToolFixtureResponse(base, backend, responses, true);
+    backend.format = Format::kDeepSeek;
+    const auto output = ReadToolFixture(response, responses, true);
+    Expect(output.text == dsml && output.calls.size() == 1,
+           "Admitted request retains its original native tool format");
+  }
+}
+
 int main() {
+  TestConsolidatedOutputParsing();
   TestMalformedToolDiagnostics();
   TestMultilineToolEdits();
   TestQwenDeclaredTypes();

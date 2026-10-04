@@ -36,6 +36,94 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-03 — DeepSeek call-block separator replay
+
+- Source: [gufo-org/gufo@43e8351daa37f3115249372809b5a4bd0bc3d481](https://github.com/gufo-org/gufo/commit/43e8351daa37f3115249372809b5a4bd0bc3d481)
+  (#404).
+- Local: commit introducing this entry.
+- Adaptation: the consolidated parser retains at most two trailing newlines
+  until the next opener is known. The canonical DeepSeek call separator belongs
+  to framing once a call is attempted; literal mentions and empty examples keep
+  their original bytes. Qwen, prose, code, suffixes and other whitespace retain
+  their contracts. No separate buffered/streamed separator implementations.
+- Areas: shared API output parser and framing fixtures; completed real-model
+  replay harness and validation record.
+- Validation: fresh five-target Windows CPU suite and production GPU build pass.
+  Both APIs and response modes agree at every two-piece and byte-by-byte split.
+  Qwen27B candidate passes 70 HTTP checks, including AR/DFlash2, literal history,
+  user images and Responses image tool results. Forty-two matched HTTP
+  signatures and all 27 full-logit rows match their recorded baselines exactly;
+  perplexity is unchanged. Formatting/docs checks pass. Real DeepSeek and Linux
+  runtime validation remain unrun; see the
+  [validation record](docs/plans/history-replay.md).
+- Status: retained.
+
+### 2026-10-03 — Literal prompt control-token handling
+
+- Source: history replay problem investigated alongside
+  [gufo-org/gufo@0564df5ffcabb24b6b70df3a17f7fd8cce1718bb](https://github.com/gufo-org/gufo/commit/0564df5ffcabb24b6b70df3a17f7fd8cce1718bb)
+  (#400 reviewed head); implementation is local.
+- Local: commit introducing this entry.
+- Adaptation: renderer-owned literal byte ranges suppress special-token matches
+  in message/reasoning data, tool schemas, historical names and argument values.
+  Tokenization retains one BPE pass between structural controls, preserving
+  ordinary merges. Both direct rendering and actual HTTP `vision::Prepare`
+  honor these ranges, including plain requests and real image expansion.
+  Bump Qwen formatter identities. Omitted output sanitization and speculative
+  EOS-policy changes; data is retained verbatim.
+- Areas: Qwen renderer/tokenizer, HTTP vision preparation, compatibility identity,
+  deterministic prompt/image fixtures and explicit real-model replay checks.
+- Validation: fresh five-target Windows CPU suite and production GPU build pass.
+  Qwen27B AR/DFlash2 typed and literal replay checks pass; first canonical warm
+  replay reuses 413 tokens versus baseline 353. All 27 full-logit rows and
+  perplexity match exactly. Vision and matched HTTP checks are documented in the
+  [validation record](docs/plans/history-replay.md). Linux execution is unrun.
+- Status: retained.
+
+### 2026-10-03 — Typed argument history replay
+
+- Source: [gufo-org/gufo@f51d33bd553b42f57cc2a291f2584933c956614f](https://github.com/gufo-org/gufo/commit/f51d33bd553b42f57cc2a291f2584933c956614f)
+  (#404).
+- Local: commit introducing this entry.
+- Adaptation: serialize non-string historical arguments at the Qwen/DeepSeek
+  rendering boundary with ordered UTF-8 JSON and reference separator spacing.
+  Strings and compact API JSON retain their existing representation. This also
+  covers internal template callers. Bump persistent formatter identities;
+  payload formats and inference arithmetic are unchanged. Omitted upstream's
+  union-grammar work because this fork has no corresponding grammar fallback.
+- Areas: shared JSON serializer, both model formatters, compatibility identities,
+  CPU fixtures and the explicit `history_replay_test.py` real-model harness.
+- Validation: fresh Windows JSON, Qwen/DeepSeek template, API and HTTP tests pass
+  (five targets). Qwen27B GPU comparison and HTTP checks pass, with exact
+  full-logit equality and improved canonical call replay. Results are recorded in
+  [history replay validation](docs/plans/history-replay.md).
+- Status: retained.
+
+### 2026-10-03 — Consolidated tool output framing
+
+- Source: [gufo-org/gufo@c33e050eced6389852617994fe7349367df4c900](https://github.com/gufo-org/gufo/commit/c33e050eced6389852617994fe7349367df4c900)
+  (#393), [2c6a1064f39a4d3ea0b8d92efea0beedf18150f1](https://github.com/gufo-org/gufo/commit/2c6a1064f39a4d3ea0b8d92efea0beedf18150f1)
+  (#396), [d91674a4dd8479a6e6c7044e0b784099ff25b31f](https://github.com/gufo-org/gufo/commit/d91674a4dd8479a6e6c7044e0b784099ff25b31f)
+  (#397 draft), and [6718dba3293a0e89696029ccf036bfb4646dd251](https://github.com/gufo-org/gufo/commit/6718dba3293a0e89696029ccf036bfb4646dd251)
+  (#391 draft).
+- Local: commit introducing this entry.
+- Adaptation: one incremental framing parser for both APIs and response modes,
+  request-owned native format, JSON quote/escape ownership, bounded DSML
+  envelopes, preserved suffix prose/code examples and explicit content-mode
+  thinking tags. Retains the fork's argument/type decoding and error contracts.
+  Omitted upstream grammar infrastructure and automatic format switching;
+  history rendering, DeepSeek separators and speculative/history accounting
+  remain separate. No broad delimiter sanitization was imported.
+- Areas: API output parser, generation request/runner metadata, regression
+  fixtures and server contracts.
+- Validation: fresh Windows CPU API/HTTP tests and production GPU build pass;
+  all 174 full-logit rows and three binary dumps match the baseline exactly,
+  with identical perplexity. Eight matched HTTP cases and four required-tool
+  cases pass. Formatting and docs checks pass. Linux execution and real
+  DeepSeek/Qwen27B model checks remain unrun; see the
+  [validation record](docs/plans/tool-output-parser.md).
+- Status: retained.
+
 ### 2026-10-02 — Exit immediately after confirmed text-device loss
 
 - Source: [gufo-org/gufo@7d893a020372502757933ec80231927fc9d25a96](https://github.com/gufo-org/gufo/commit/7d893a020372502757933ec80231927fc9d25a96)

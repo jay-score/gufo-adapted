@@ -86,6 +86,9 @@ void TestStructures() {
   assert(ordered.members()[0].first == "z");
   assert(ordered.members()[1].first == "a");
   assert(ordered.dump() == R"({"z":1,"a":[true,null,{"n":2}]})");
+  assert(ordered.tojson() == R"({"z": 1, "a": [true, null, {"n": 2}]})");
+  assert(parse(unicode.tojson()).dump() == unicode.dump());
+  assert(Value(1.25).tojson() == "1.25");
 
   const auto bounded = std::string(128, '[') + "null" + std::string(128, ']');
   assert(parse(bounded).is_array());
