@@ -1751,7 +1751,8 @@ ParsedGeneration ParseGeneration(
       }
       parsed.text = std::string(content);
     }
-  } else {
+  } else if (initial_output_state ==
+             TextGenerationBackend::InitialOutputState::kAuto) {
     // Only the initial phase has reasoning markup semantics. A literal tag
     // inside an argument (or quoted ordinary text) must never be stripped.
     const auto leading = content.find_first_not_of(" \t\r\n");
@@ -1796,6 +1797,8 @@ ParsedGeneration ParseGeneration(
     } else {
       parsed.text = std::string(content);
     }
+  } else {
+    parsed.text = std::string(content);
   }
 
   quotes.Reset(parsed.text);

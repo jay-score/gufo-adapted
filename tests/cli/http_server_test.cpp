@@ -13,6 +13,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <semaphore>
 #include <sstream>
 #include <stdexcept>
@@ -118,6 +119,11 @@ public:
   gufo::ReasoningOptions reasoning_defaults() const override {
     return reasoning;
   }
+  InitialOutputState initial_output_state(
+      const gufo::server::ChatRequest& request) const override {
+    return initial_output_state_override.value_or(
+        TextGenerationBackend::initial_output_state(request));
+  }
   std::size_t count_tokens(std::string_view text) const override {
     return text.size();
   }
@@ -217,6 +223,7 @@ public:
   std::atomic<bool> lost{false};
   std::string forced_stop_sequence;
   gufo::ReasoningOptions reasoning;
+  std::optional<InitialOutputState> initial_output_state_override;
   bool wait_for_disconnect{false};
   std::atomic<bool> disconnected{false};
   std::binary_semaphore entered{0};
@@ -1013,6 +1020,25 @@ void TestCompatibilityRequests() {
   assert(replayed.messages.size() == 3 &&
          replayed.messages[1].thought == "plan" &&
          replayed.messages[1].content == "answer");
+
+  // An explicit content phase preserves requested literal reasoning tags.
+  // The default automatic phase above still recognizes reasoning blocks.
+  server.backend->initial_output_state_override =
+      FakeBackend::InitialOutputState::kContent;
+  const std::string literal_thinking = "<think>literal example</think>";
+  server.backend->SetOutput(literal_thinking);
+  const auto literal = response_body(
+      server.Post("/v1/messages", R"({"messages":[{"role":"user","content":
+        "Copy this XML exactly: <think>literal example</think>"}],
+        "thinking":{"type":"disabled"}})"));
+  assert(server.backend->LastCall().chat.reasoning.enabled == false);
+  const auto literal_blocks = literal.find("content")->items();
+  assert(literal_blocks.size() == 1 &&
+         literal_blocks[0].member_str("type") == "text" &&
+         literal_blocks[0].member_str("text") == literal_thinking &&
+         "disabled thinking preserves literal tags as one text block");
+  server.backend->initial_output_state_override.reset();
+
   server.backend->SetOutput("answer");
   const auto plain = response_body(server.Post(
       "/v1/messages", R"({"messages":[{"role":"user","content":"hi"}]})"));
