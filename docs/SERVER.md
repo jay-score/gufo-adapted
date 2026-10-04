@@ -523,14 +523,22 @@ For example, a result item is
 Streams emit `response.output_item.added`,
 `response.function_call_arguments.delta`,
 `response.function_call_arguments.done`, and `response.output_item.done` for
-each call. Arguments are sent together after the complete call is parsed, as
-with Chat Completions. Reasoning and ordinary text continue to stream live.
+each call. Native Qwen string parameters stream as escaped JSON argument
+prefixes while generation continues, including large file contents. Typed
+parameters, JSON-form Qwen calls and DeepSeek calls remain buffered. The final
+argument-done and completed item events are sent only after generation and
+tool-policy validation succeed. Chat Completions still sends complete calls.
+Reasoning and ordinary text continue to stream live.
 Tool-choice failures return HTTP 502, or `response.failed` after streaming
 headers have been sent. Function tools use the same parser and inference path
 as Chat Completions; clients execute the tools.
 
 Responses report `incomplete` with reason `max_output_tokens` when generation
-hits its limit. Otherwise they report `completed`. `stream: true` sends typed
+hits its limit. A streamed tool preview cut off by this limit remains an
+`incomplete` item with partial arguments and no argument-done event. Clients
+must not execute incomplete items. An interrupted preview at EOS or a requested
+stop fails the stream instead of completing an unvalidated call. Otherwise
+responses report `completed`. `stream: true` sends typed
 SSE events with consecutive `sequence_number` values: lifecycle, output items,
 text/reasoning deltas and terminal status. Local reasoning is exposed as
 `reasoning` items with `summary_text`; visible answers use `output_text`.

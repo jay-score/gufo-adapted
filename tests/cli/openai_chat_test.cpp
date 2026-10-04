@@ -2114,6 +2114,7 @@ void TestResponsesFunctionTools() {
              "Function arguments are JSON");
       if (stream) {
         std::vector<std::string> types;
+        std::string arguments;
         for (const auto& event : events) {
           if (!event.contains("output_index") ||
               event.member_size("output_index") != index)
@@ -2133,20 +2134,29 @@ void TestResponsesFunctionTools() {
           } else {
             Expect(event.member_str("item_id") == call.member_str("id"),
                    "Argument events identify their item");
-            Expect(event.member_str(event.member_str("type").ends_with("delta")
-                                        ? "delta"
-                                        : "arguments") ==
-                       call.member_str("arguments"),
-                   "Argument events reconstruct the completed call");
+            if (event.member_str("type").ends_with("delta")) {
+              arguments += event.member_str("delta");
+              Expect(call.member_str("arguments").starts_with(arguments),
+                     "Argument deltas extend a stable JSON prefix");
+            } else {
+              Expect(event.member_str("arguments") == arguments &&
+                         arguments == call.member_str("arguments"),
+                     "Argument events reconstruct the completed call");
+            }
           }
         }
-        Expect(types ==
-                   std::vector<std::string>{
-                       "response.output_item.added",
-                       "response.function_call_arguments.delta",
-                       "response.function_call_arguments.done",
-                       "response.output_item.done"},
-               "Tool stream event ordering");
+        Expect(
+            types.size() >= 4 &&
+                types.front() == "response.output_item.added" &&
+                types[types.size() - 2] ==
+                    "response.function_call_arguments.done" &&
+                types.back() == "response.output_item.done" &&
+                std::all_of(types.begin() + 1, types.end() - 2,
+                            [](const auto& type) {
+                              return type ==
+                                     "response.function_call_arguments.delta";
+                            }),
+            "Tool stream event ordering");
       }
     }
     Expect(output[2].member_str("call_id") != output[3].member_str("call_id"),
@@ -2193,6 +2203,140 @@ void TestResponsesFunctionTools() {
                    .member_str("text") == "Both cities are sunny.",
            "Tool results can be followed by a normal answer");
   }
+}
+
+void TestResponsesStreamingFileArguments() {
+  using gufo::json::parse;
+  const auto chat = ResponseChat(parse(R"({"input":"write a file","tools":[
+    {"type":"function","name":"write_file","parameters":{"type":"object",
+      "properties":{"count":{"type":"integer"},"metadata":{"type":"object"},
+        "path":{"type":"string"},"content":{"type":"string"},"note":{"type":"string"}}}}],
+    "tool_choice":"required"})"));
+  const std::string prefix =
+      "<tool_call><function=write_file><parameter=count>2</parameter>"
+      "<parameter=metadata>{\"ok\":True}</parameter>"
+      "<parameter=path>probe.txt</parameter><parameter=content>\r\n";
+  const std::string suffix =
+      "\r\n</parameter><parameter=note>done</parameter></function></tool_call>";
+  for (const auto& content :
+       {std::string{}, std::string("\n"), std::string("\r"),
+        std::string("\r\n"), std::string("\n\n"), std::string("\r\n\r\n"),
+        std::string("  quoted \"\\\t π 😀 </function>\n\n"),
+        std::string(32768, 'x') + "\n"}) {
+    auto expected =
+        parse(R"({"count":2,"metadata":{"ok":true},"path":"probe.txt"})");
+    expected["content"] = content;
+    expected["note"] = "done";
+    for (const std::size_t chunk_size : {1, 7, 1024}) {
+      FakeBackend backend;
+      const auto raw = prefix + content + suffix;
+      for (std::size_t start = 0; start < raw.size(); start += chunk_size)
+        backend.pieces.push_back(raw.substr(start, chunk_size));
+      const auto response = gufo::server::CreateOpenAiResponse(
+          Request("{}"), backend, chat, 0, {}, true);
+      std::string arguments;
+      std::string item_id;
+      std::string call_id;
+      std::size_t live_deltas = 0;
+      bool terminal = false;
+      response.streaming_body([&](std::string_view chunk) {
+        const auto start = chunk.find("data: ");
+        const auto event = parse(chunk.substr(start + 6));
+        const auto type = event.member_str("type");
+        if (type == "response.output_item.added") {
+          const auto& item = *event.find("item");
+          item_id = item.member_str("id");
+          call_id = item.member_str("call_id");
+        } else if (type == "response.function_call_arguments.delta") {
+          arguments += event.member_str("delta");
+          live_deltas += !backend.completed.load();
+          Expect(event.member_str("item_id") == item_id &&
+                     event.member_size("output_index") == 0 &&
+                     expected.dump().starts_with(arguments),
+                 "Live file arguments retain their identity and exact JSON "
+                 "prefix");
+        } else if (type == "response.function_call_arguments.done") {
+          Expect(
+              backend.completed.load() &&
+                  event.member_str("arguments") == expected.dump() &&
+                  arguments == expected.dump(),
+              "File arguments complete only after generation and validation");
+        } else if (type == "response.completed") {
+          terminal = true;
+          const auto& item = event.find("response")->find("output")->items()[0];
+          Expect(item.member_str("id") == item_id &&
+                     item.member_str("call_id") == call_id &&
+                     item.member_str("arguments") == expected.dump(),
+                 "Terminal file call agrees with streamed arguments");
+        }
+        return true;
+      });
+      Expect(terminal && live_deltas > 2,
+             "File argument deltas arrive before generation finishes");
+    }
+  }
+
+  using Finish = gufo::server::TextGenerationBackend::FinishReason;
+  for (const auto finish :
+       {Finish::kLength, Finish::kStopSequence, Finish::kStop}) {
+    FakeBackend backend;
+    backend.pieces = {prefix, std::string(4096, 'x')};
+    backend.finish_reason = finish;
+    const auto response = gufo::server::CreateOpenAiResponse(
+        Request("{}"), backend, chat, 0, {}, true);
+    const auto events = ResponseEvents(response);
+    Expect(events.back().member_str("type") == (finish == Finish::kLength
+                                                    ? "response.incomplete"
+                                                    : "response.failed"),
+           "Interrupted streamed calls cannot become completed responses");
+    for (const auto& event : events)
+      Expect(
+          event.member_str("type") != "response.function_call_arguments.done" &&
+              (!event.find("item") ||
+               event.find("item")->member_str("status") != "completed"),
+          "Interrupted file contents never receive tool completion proof");
+    const auto& item =
+        events.back().find("response")->find("output")->items()[0];
+    Expect(item.member_str("status") == "incomplete" &&
+               !item.member_str("arguments").ends_with("}"),
+           "Interrupted previews remain explicitly incomplete JSON");
+  }
+
+  for (const bool conflicting_duplicate : {false, true}) {
+    FakeBackend backend;
+    backend.pieces = {prefix + "one\n</parameter>"};
+    backend.pieces.push_back(
+        conflicting_duplicate
+            ? "<parameter=content>two</parameter></function></tool_call>"
+            : "<parameter=content>one</parameter><parameter=note>done</"
+              "parameter></function></tool_call>");
+    const auto response = gufo::server::CreateOpenAiResponse(
+        Request("{}"), backend, chat, 0, {}, true);
+    const auto events = ResponseEvents(response);
+    Expect(
+        events.back().member_str("type") ==
+            (conflicting_duplicate ? "response.failed" : "response.completed"),
+        "Streaming retains duplicate-parameter validation");
+    if (conflicting_duplicate)
+      for (const auto& event : events)
+        Expect(
+            event.member_str("type") != "response.function_call_arguments.done",
+            "A conflicting repeated file parameter cannot execute");
+  }
+
+  FakeBackend disconnected;
+  disconnected.pieces = {prefix, std::string(4096, 'x'), suffix};
+  const auto response = gufo::server::CreateOpenAiResponse(
+      Request("{}"), disconnected, chat, 0, {}, true);
+  bool terminal = false;
+  response.streaming_body([&](std::string_view chunk) {
+    terminal |= chunk.find("response.completed") != std::string::npos;
+    return chunk.find("response.function_call_arguments.delta") ==
+           std::string::npos;
+  });
+  Expect(
+      !terminal && !disconnected.completed.load(),
+      "Disconnect during live file arguments cancels generation immediately");
 }
 
 void TestResponsesToolValidationAndFailure() {
@@ -2332,7 +2476,8 @@ ToolFixtureOutput ReadToolFixture(const gufo::server::HttpResponse& response,
     if (responses) {
       if (const auto* items = value.find("output")) {
         for (const auto& item : items->items()) {
-          if (item.member_str("type") == "function_call")
+          if (item.member_str("type") == "function_call" &&
+              item.member_str("status") == "completed")
             output.calls.push_back(item);
           for (const auto* field : {"content", "summary"}) {
             if (const auto* parts = item.find(field)) {
@@ -3037,6 +3182,7 @@ int main() {
   TestResponsesImages();
   TestResponsesReasoningRequests();
   TestResponsesFunctionTools();
+  TestResponsesStreamingFileArguments();
   TestResponsesToolValidationAndFailure();
   TestResponsesLiveAndCancellation();
   TestCachePromptOption();
