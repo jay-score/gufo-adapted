@@ -1537,7 +1537,10 @@ std::optional<std::string> Attribute(std::string_view tag,
   return std::string(tag.substr(value_start, end - value_start));
 }
 
-void ParseDsmlCalls(std::string_view text, std::vector<ParsedToolCall>* calls) {
+void ParseDsmlCalls(
+    std::string_view text, ToolMarkerSet markers,
+    std::vector<ParsedToolCall>* calls,
+    std::vector<std::pair<std::size_t, std::size_t>>* spans = nullptr) {
   constexpr std::array<std::string_view, 4> kInvokeStarts{
       "<｜DSML｜invoke",
       "<DSML｜invoke",
@@ -1564,6 +1567,8 @@ void ParseDsmlCalls(std::string_view text, std::vector<ParsedToolCall>* calls) {
   };
 
   std::size_t cursor = 0;
+  std::size_t envelope_begin = std::string_view::npos;
+  std::string envelope_end;
   while (cursor < text.size()) {
     std::size_t invoke_start = std::string_view::npos;
     std::size_t syntax = 0;
@@ -1572,6 +1577,37 @@ void ParseDsmlCalls(std::string_view text, std::vector<ParsedToolCall>* calls) {
       if (position < invoke_start) {
         invoke_start = position;
         syntax = index;
+      }
+    }
+    if (spans) {
+      // Examine envelope boundaries only outside the parameter/invocation
+      // ranges consumed below: an outer closing tag can be argument data.
+      if (envelope_begin == std::string_view::npos) {
+        std::string_view opening;
+        std::size_t begin = std::string_view::npos;
+        for (const auto marker : markers) {
+          if (marker == "<tool_call>")
+            continue;
+          const auto position = text.find(marker, cursor);
+          if (position < begin) {
+            begin = position;
+            opening = marker;
+          }
+        }
+        // Bare invocation examples outside an outer envelope are prose.
+        if (begin == std::string_view::npos)
+          break;
+        envelope_begin = begin;
+        envelope_end =
+            "</" + std::string(opening.substr(opening.find('<') + 1));
+        cursor = begin + opening.size();
+        continue;
+      } else if (const auto end = text.find(envelope_end, cursor);
+                 end < invoke_start) {
+        cursor = end + envelope_end.size();
+        spans->emplace_back(envelope_begin, cursor);
+        envelope_begin = std::string_view::npos;
+        continue;
       }
     }
     if (invoke_start == std::string_view::npos) {
@@ -1765,8 +1801,8 @@ ParsedGeneration ParseGeneration(
   const std::size_t marker = EarliestMarker(parsed.text, markers, quotes);
   if (choice != ChatRequest::ToolChoice::kNone && !tools.empty() &&
       marker != std::string_view::npos) {
-    const std::string text_before_tools = parsed.text.substr(0, marker);
-    const std::string text_from_tools = parsed.text.substr(marker);
+    const auto text_from_tools = std::string_view(parsed.text).substr(marker);
+    std::vector<std::pair<std::size_t, std::size_t>> spans;
     // The outer envelope selects the format, as in llama.cpp's model parsers.
     // Scanning both dialects would turn a literal call inside an argument into
     // an additional API invocation.
@@ -1774,7 +1810,7 @@ ParsedGeneration ParseGeneration(
       ParseQwenCalls(parsed.text, tools, &parsed.tool_calls, nullptr,
                      unfinished_reasoning_quote);
     else
-      ParseDsmlCalls(text_from_tools, &parsed.tool_calls);
+      ParseDsmlCalls(text_from_tools, markers, &parsed.tool_calls, &spans);
     std::erase_if(parsed.tool_calls, [&](const auto& call) {
       return std::ranges::none_of(
           tools, [&](const auto& tool) { return tool.name == call.name; });
@@ -1803,9 +1839,27 @@ ParsedGeneration ParseGeneration(
     // An explicit stop can interrupt a call before its closing tags. Keep
     // complete calls, but do not expose an unfinished call as ordinary text.
     if (!parsed.tool_calls.empty() || !enforce_required) {
-      parsed.text = std::string(ContentBefore(text_before_tools, 0,
-                                              text_before_tools.size(), closers,
-                                              quotes, tools));
+      // Text outside complete envelopes is content. Framing echoed directly
+      // after a call is removed, as for Qwen calls (#383).
+      const std::string full = std::move(parsed.text);
+      std::string text(ContentBefore(full, 0, marker, closers, quotes, tools));
+      std::size_t cursor = marker;
+      for (const auto& [begin, end] : spans) {
+        text += ContentBefore(full, cursor, marker + begin, closers, quotes,
+                              tools, cursor > marker);
+        cursor = marker + end;
+      }
+      if (!spans.empty()) {
+        auto unfinished = EarliestMarker(full, markers, quotes, cursor);
+        if (unfinished == std::string_view::npos && !enforce_required &&
+            choice == ChatRequest::ToolChoice::kRequired)
+          if (const auto held =
+                  HeldMarkerPrefix(full, full.size(), markers, quotes))
+            unfinished = full.size() - held;
+        text += ContentBefore(full, cursor, unfinished, closers, quotes, tools,
+                              true);
+      }
+      parsed.text = std::move(text);
       parsed.hide_tool_markup = true;
     }
   } else if (recognize_tools) {
