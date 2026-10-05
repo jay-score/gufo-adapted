@@ -12,6 +12,7 @@
 #include <cctype>
 #include <cerrno>
 #include <charconv>
+#include <cmath>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
@@ -467,7 +468,7 @@ std::optional<HttpResponse> ReadCompatibilityOptions(
     const json::Value& body, TextGenerationBackend& backend,
     std::string_view token_field, std::size_t* max_tokens,
     sampling::SamplingConfig* sampling_config, std::string_view stop_field = {},
-    bool responses = false) {
+    bool responses = false, bool messages_reasoning = false) {
   if (!body.is_object())
     return InvalidCompatibilityRequest("request body must be an object");
   if (const auto* model = body.find("model"); model != nullptr) {
@@ -517,6 +518,9 @@ std::optional<HttpResponse> ReadCompatibilityOptions(
     if (responses && (field == "tools" || field == "tool_choice" ||
                       field == "parallel_tool_calls" || field == "reasoning" ||
                       field == "include"))
+      continue;
+    if (messages_reasoning &&
+        (field == "thinking" || field == "output_config"))
       continue;
     if (field != stop_field && body.contains(field)) {
       return InvalidCompatibilityRequest("request field '" + field +
@@ -726,6 +730,68 @@ HttpResponse OpenAiResponses(const HttpRequest& req,
              "invalid_prompt");
 }
 
+// Messages selects reasoning with thinking.type; adaptive leaves the choice to
+// the server's default. budget_tokens has no native equivalent and display
+// does not change rendering here, so both are validated only; thinking.type
+// and output_config.effort select the request reasoning.
+std::optional<HttpResponse> ReadThinking(const json::Value& body,
+                                         ReasoningOptions* reasoning) {
+  const auto* thinking = body.find("thinking");
+  if (thinking == nullptr || thinking->is_null())
+    return {};
+  if (!thinking->is_object())
+    return InvalidCompatibilityRequest("'thinking' must be an object");
+  const auto* type = thinking->find("type");
+  if (type == nullptr || !type->is_string() ||
+      (type->str() != "enabled" && type->str() != "adaptive" &&
+       type->str() != "disabled"))
+    return InvalidCompatibilityRequest(
+        "'thinking.type' must be enabled, adaptive, or disabled");
+  if (const auto* budget = thinking->find("budget_tokens");
+      budget != nullptr &&
+      (!budget->is_number() || budget->as_double() < 1 ||
+       std::floor(budget->as_double()) != budget->as_double()))
+    return InvalidCompatibilityRequest(
+        "'thinking.budget_tokens' must be a positive integer");
+  if (const auto* display = thinking->find("display");
+      display != nullptr &&
+      (!display->is_string() ||
+       (display->str() != "summarized" && display->str() != "omitted" &&
+        display->str() != "updates")))
+    return InvalidCompatibilityRequest(
+        "'thinking.display' must be summarized, omitted, or updates");
+  if (type->str() != "adaptive")
+    reasoning->enabled = type->str() == "enabled";
+  return {};
+}
+
+std::optional<HttpResponse> ReadMessagesOutputConfig(
+    const json::Value& body, ReasoningOptions* options) {
+  const auto* config = body.find("output_config");
+  if (config == nullptr || config->is_null())
+    return {};
+  if (!config->is_object())
+    return InvalidCompatibilityRequest("'output_config' must be an object");
+  for (const auto& [key, value] : config->members()) {
+    if (key != "effort")
+      return InvalidCompatibilityRequest("unsupported output_config member: " +
+                                         key);
+    if (value.is_null())
+      continue;
+    // Anthropic effort does not select thinking, so it never enables it;
+    // formatters apply it only while thinking is on. Anthropic has no minimal
+    // effort.
+    const auto effort = value.is_string() && value.str() != "minimal"
+                            ? ParseReasoningEffortName(value.str())
+                            : std::nullopt;
+    if (!effort.has_value())
+      return InvalidCompatibilityRequest(
+          "'output_config.effort' must be low, medium, high, xhigh, or max");
+    options->effort = effort;
+  }
+  return {};
+}
+
 HttpResponse AnthropicMessages(const HttpRequest& req,
                                TextGenerationBackend& b) try {
   json::Value body;
@@ -738,9 +804,9 @@ HttpResponse AnthropicMessages(const HttpRequest& req,
 
   std::size_t max_tokens = 0;
   sampling::SamplingConfig sampling_config;
-  if (auto error =
-          ReadCompatibilityOptions(body, b, "max_tokens", &max_tokens,
-                                   &sampling_config, "stop_sequences")) {
+  if (auto error = ReadCompatibilityOptions(
+          body, b, "max_tokens", &max_tokens, &sampling_config,
+          "stop_sequences", /*responses=*/false, /*messages_reasoning=*/true)) {
     return std::move(*error);
   }
 
@@ -762,6 +828,10 @@ HttpResponse AnthropicMessages(const HttpRequest& req,
   ChatRequest chat{std::move(messages)};
   chat.client_id = req.client_id;
   chat.reasoning = b.reasoning_defaults();
+  if (auto error = ReadThinking(body, &chat.reasoning))
+    return std::move(*error);
+  if (auto error = ReadMessagesOutputConfig(body, &chat.reasoning))
+    return std::move(*error);
   if (const auto error = ParseStopSequences(body.find("stop_sequences"),
                                             StopSequenceFormat::kAnthropic,
                                             &chat.stop_sequences))

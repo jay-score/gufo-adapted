@@ -31,6 +31,30 @@
 #include "src/core/utf8.hpp"
 
 namespace gufo::server {
+
+std::optional<ReasoningEffort> ParseReasoningEffortName(
+    std::string_view value) {
+  if (value == "minimal") {
+    return ReasoningEffort::kMinimal;
+  }
+  if (value == "low") {
+    return ReasoningEffort::kLow;
+  }
+  if (value == "medium") {
+    return ReasoningEffort::kMedium;
+  }
+  if (value == "high") {
+    return ReasoningEffort::kHigh;
+  }
+  if (value == "xhigh") {
+    return ReasoningEffort::kXHigh;
+  }
+  if (value == "max") {
+    return ReasoningEffort::kMax;
+  }
+  return std::nullopt;
+}
+
 namespace {
 
 struct ParsedChatRequest {
@@ -444,29 +468,6 @@ bool ParseToolChoice(const json::Value* value, ChatRequest* request,
   }
   *error = "'tool_choice' must be auto, none, or required";
   return false;
-}
-
-std::optional<ReasoningEffort> ParseReasoningEffortName(
-    std::string_view value) {
-  if (value == "minimal") {
-    return ReasoningEffort::kMinimal;
-  }
-  if (value == "low") {
-    return ReasoningEffort::kLow;
-  }
-  if (value == "medium") {
-    return ReasoningEffort::kMedium;
-  }
-  if (value == "high") {
-    return ReasoningEffort::kHigh;
-  }
-  if (value == "xhigh") {
-    return ReasoningEffort::kXHigh;
-  }
-  if (value == "max") {
-    return ReasoningEffort::kMax;
-  }
-  return std::nullopt;
 }
 
 bool AssignReasoningEnabled(ReasoningOptions* options, bool enabled,

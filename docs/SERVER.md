@@ -588,9 +588,18 @@ All four routes validate the loaded model, positive integer limits and shared
 sampling controls. The three routes above reject streaming; all reject multiple
 candidates. Messages honors the server's thinking defaults; Responses also
 allows per-request effort overrides.
-Native Messages rejects tools, `thinking`, and `output_config`; use Chat
-Completions for tool/reasoning controls. Completions routes accept `stop`;
-Messages accepts `stop_sequences`. Responses has no stop-sequence field.
+Native Messages accepts `thinking.type` (`enabled`, `adaptive`, or
+`disabled`); `adaptive` keeps the server's thinking default, and
+`budget_tokens` has no native equivalent, so the effort stays the server's
+unless `output_config.effort` (`low`, `medium`, `high`, `xhigh`, or `max`)
+sets it. Every accepted `thinking.display` (`summarized`, `omitted`, or
+`updates`) is validated; other `output_config` members are rejected, and
+effort never enables thinking. Messages rejects tools; use Chat Completions
+for tools. Keep `output_config.effort` consistent across turns while thinking
+is enabled: the effort renders into the prompt, so changing it changes the
+prompt prefix and can force a full conversation prefill. Completions routes
+accept `stop`; Messages accepts `stop_sequences`. Responses has no
+stop-sequence field.
 `/infill` and `/v1/messages/count_tokens` return 501: suffix-conditioned infill
 and template-aware message counting are not implemented.
 

@@ -913,6 +913,54 @@ void TestCompatibilityThinkingDefaults() {
     assert(server.backend->LastCall().chat.reasoning.enabled == false);
   }
   server.backend->reasoning = {};
+  // The reasoning fields Claude Code sends on every Messages request.
+  // Adaptive keeps the server's thinking default; effort never enables it.
+  // This endpoint returns text only, so the checks below cover acceptance
+  // and the applied reasoning, not thinking-block rendering.
+  for (const bool server_thinking : {false, true}) {
+    server.backend->reasoning = {
+        .enabled = server_thinking,
+        .effort = gufo::ReasoningEffort::kLow,
+        .preserve_thinking = true,
+    };
+    const auto adaptive = server.Post("/v1/messages",
+                                      R"({"max_tokens":32,
+        "thinking":{"type":"adaptive","display":"omitted"},
+        "output_config":{"effort":"xhigh"},
+        "messages":[{"role":"user","content":"hello"}]})");
+    ExpectStatus(adaptive, 200);
+    const auto reasoning = server.backend->LastCall().chat.reasoning;
+    assert(reasoning.enabled == server_thinking);
+    assert(reasoning.effort == gufo::ReasoningEffort::kXHigh);
+  }
+  server.backend->reasoning = {};
+  ExpectStatus(server.Post("/v1/messages",
+                           R"({"messages":[{"role":"user","content":"hello"}],
+      "thinking":{"type":"disabled"},"output_config":{"effort":"low"}})"),
+               200);
+  assert(server.backend->LastCall().chat.reasoning.enabled == false);
+  assert(server.backend->LastCall().chat.reasoning.effort ==
+         gufo::ReasoningEffort::kLow);
+  for (const auto* invalid :
+       {R"({"messages":[{"role":"user","content":"hi"}],"thinking":true})",
+        R"({"messages":[{"role":"user","content":"hi"}],
+            "thinking":{"type":"enabled","budget_tokens":0}})",
+        R"({"messages":[{"role":"user","content":"hi"}],
+            "thinking":{"type":"adaptive","display":"full"}})",
+        R"({"messages":[{"role":"user","content":"hi"}],
+            "output_config":{"effort":"adaptive"}})",
+        R"({"messages":[{"role":"user","content":"hi"}],
+            "output_config":{"effort":"minimal"}})",
+        R"({"messages":[{"role":"user","content":"hi"}],
+            "output_config":"high"})",
+        R"({"messages":[{"role":"user","content":"hi"}],
+            "output_config":{"format":{"type":"json_schema"}}})",
+        R"({"messages":[{"role":"user","content":"hi"}],
+            "reasoning_effort":"high"})",
+        R"({"messages":[{"role":"user","content":"hi"}],
+            "chat_template_kwargs":{"enable_thinking":true}})"}) {
+    ExpectStatus(server.Post("/v1/messages", invalid), 400);
+  }
   for (
       const auto* body :
       {R"({"input":"hello"})", R"({"input":"hello","reasoning":null})",
