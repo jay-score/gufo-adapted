@@ -677,6 +677,12 @@ With no declared tools or `tool_choice: "none"`, tool markers are ordinary
 text. They do not end reasoning or delay streaming; thinking delimiters and
 UTF-8 buffering still apply.
 
+Canonical Qwen calls use newline framing. A parameter ends at
+`\n</parameter>\n` (CRLF is also accepted); inline tags and lines such as
+`</parameter> is literal` remain argument data. The complete closing sequence
+cannot appear inside a raw string value. Compact legacy calls retain their
+compact delimiters. Partial delimiters do not publish unfinished calls.
+
 Native Qwen parameter types are recovered from named properties, matching
 `patternProperties`, schema-valued `additionalProperties`, and local object
 JSON-pointer references. All applicable hints are intersected; additional
@@ -685,6 +691,18 @@ that look like JSON remain strings. String/non-string unions, untyped fields,
 conflicting hints, cyclic/external references and unsupported rules retain
 best-effort text semantics. This is type recovery, not schema validation or
 generation-time enforcement.
+
+Without an explicit `type`, finite `const`/`enum` values supply value-kind
+hints. Object, array and string shapes can also supply hints through
+`properties`/nontrivial `additionalProperties`, `items`/`prefixItems`, and
+`pattern`/length keywords. Explicit types and finite values take precedence
+over implicit shapes; `anyOf`/`oneOf` branches precede implicit shape keywords.
+Enum members share the existing 128-node lookup budget;
+membership, patterns, lengths and nested requirements are not validated.
+
+Declared property names retain their exact spelling, including surrounding
+spaces, also through bounded local root references. An undeclared spelling
+keeps the legacy whitespace trimming before type lookup.
 
 Pattern lookup uses ICU over a conservative ECMAScript-compatible subset:
 Unicode literals, anchors, dot, ordinary groups/lookahead, character classes,

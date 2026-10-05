@@ -2855,6 +2855,44 @@ void TestQwenDeclaredTypes() {
     std::string json;
   };
   std::vector<Case> cases{
+      {R"({"properties":{"value":{"enum":[1,2]}}})", "value", "1", "1"},
+      {R"({"properties":{"value":{"const":true}}})", "value", "True", "true"},
+      {R"({"properties":{"value":{"const":null}}})", "value", "None", "null"},
+      {R"({"properties":{"value":{"enum":[1.5,2]}}})", "value", "2", "2"},
+      {R"({"properties":{"value":{"const":"42"}}})", "value", "42", R"("42")"},
+      {R"({"properties":{"value":{"enum":["true","false"]}}})", "value", "true",
+       R"("true")"},
+      {R"({"properties":{"value":{"enum":["1",1]}}})", "value", "1", R"("1")"},
+      {R"({"properties":{"value":{"properties":{"x":{"type":"integer"}}}}})",
+       "value", R"({"x":1})", R"({"x":1})"},
+      {R"({"properties":{"value":{"additionalProperties":false}}})", "value",
+       "{}", "{}"},
+      {R"({"properties":{"value":{"additionalProperties":{"type":"boolean"}}}})",
+       "value", R"({"x":true})", R"({"x":true})"},
+      {R"({"properties":{"value":{"items":{"type":"integer"}}}})", "value",
+       "[1,2]", "[1,2]"},
+      {R"({"properties":{"value":{"prefixItems":[{"type":"integer"}]}}})",
+       "value", "[1]", "[1]"},
+      {R"({"properties":{"value":{"const":{"text":"<tool_call> </parameter>"}}}})",
+       "value", R"({"text":"<tool_call> </parameter>"})",
+       R"({"text":"<tool_call> </parameter>"})"},
+      {R"({"properties":{"value":{"enum":[[1],[2]]}}})", "value", "[1]", "[1]"},
+      {R"({"properties":{"value":{"anyOf":[{"const":1},{"type":"null"}]}}})",
+       "value", "1", "1"},
+      {R"({"properties":{"value":{"allOf":[{"enum":[1,2]},{"type":"integer"}]}}})",
+       "value", "1", "1"},
+      {R"({"properties":{"value":{"type":"string","properties":{}}}})", "value",
+       "{}", R"("{}")"},
+      {R"({"properties":{"value":{"anyOf":[{"type":"string"},{"type":"object"}],"properties":{}}}})",
+       "value", "{}", R"("{}")"},
+      {R"({"properties":{"value":{"oneOf":[{"type":"string"},{"type":"array"}],"items":{}}}})",
+       "value", "[]", R"("[]")"},
+      {R"({"properties":{"value":{"pattern":".*"}}})", "value", "42",
+       R"("42")"},
+      {R"({"properties":{"value":{"minLength":1}}})", "value", "null",
+       R"("null")"},
+      {R"({"properties":{"value":{"type":"integer","const":"1"}}})", "value",
+       "1", R"("1")"},
       {R"({"properties":{"value":{"type":"string"}},"patternProperties":{"^x_":{"type":"integer"}}})",
        "x_count", "1", "1"},
       {R"({"properties":{"value":{"type":"string"}},"patternProperties":{"^x_":{"type":"integer"}}})",
@@ -2921,6 +2959,10 @@ void TestQwenDeclaredTypes() {
        "n", "1", R"("1")"},
       {R"({"patternProperties":{"^.$":{"type":"integer"}}})", "\xC2\x85", "1",
        "1"}};
+  auto large_enum = parse(R"({"properties":{"n":{"enum":[]}}})");
+  for (int i = 0; i < 129; ++i)
+    large_enum["properties"]["n"]["enum"].push_back(i);
+  cases.push_back({large_enum.dump(), "n", "1", R"("1")"});
   auto deep = parse(R"({"properties":{"n":{"$ref":"#/$defs/a0"}},"$defs":{}})");
   for (int i = 0; i < 40; ++i) {
     auto branch = gufo::json::Value::object();
@@ -2962,6 +3004,62 @@ void TestQwenDeclaredTypes() {
                 parse(output.calls[0].member_str("arguments")).dump() ==
                     expected.dump(),
             "Declared type recovered for " + item.key + " in " + item.schema);
+      }
+    }
+  }
+}
+
+void TestQwenParameterNames() {
+  using gufo::json::parse;
+  struct Case {
+    const char* schema;
+    const char* spelled;
+    const char* key;
+    const char* value;
+    const char* expected;
+  };
+  const Case cases[] = {
+      {R"({"properties":{" value ":{"type":"integer"}}})", " value ", " value ",
+       "1", "1"},
+      {R"({"properties":{"value":{"type":"string"}," value ":{"type":"integer"}}})",
+       " value ", " value ", "1", "1"},
+      {R"({"properties":{" ":{"type":"boolean"}}})", " ", " ", "True", "true"},
+      {R"({"$ref":"#/$defs/root","$defs":{"root":{"properties":{" value ":{"type":"object"}}}}})",
+       " value ", " value ", R"({"text":"</parameter>"})",
+       R"({"text":"</parameter>"})"},
+      // Unknown spellings keep legacy whitespace tolerance.
+      {R"({"properties":{"value":{"type":"integer"}}})", " value ", "value",
+       "1", "1"},
+      {R"({"$ref":"#"})", " value ", "value", "1", R"("1")"},
+  };
+  for (const auto& item : cases) {
+    auto body = parse(R"({"model":"test-model",
+      "messages":[{"role":"user","content":"call f"}],
+      "tools":[{"type":"function","function":{"name":"f"}}]})");
+    auto tool = body["tools"].items()[0];
+    tool["function"]["parameters"] = parse(item.schema);
+    body["tools"] = gufo::json::Value::array();
+    body["tools"].push_back(std::move(tool));
+    auto expected = gufo::json::Value::object();
+    expected[item.key] = parse(item.expected);
+    for (bool canonical : {false, true}) {
+      const std::string newline = canonical ? "\n" : "";
+      const auto raw = "<tool_call>" + newline + "<function=f>" + newline +
+                       "<parameter=" + item.spelled + ">" + newline +
+                       item.value + newline + "</parameter>" + newline +
+                       "</function>" + newline + "</tool_call>";
+      for (bool responses : {false, true}) {
+        for (bool stream : {false, true}) {
+          FakeBackend backend;
+          for (char byte : raw)
+            backend.pieces.emplace_back(1, byte);
+          const auto output = ReadToolFixture(
+              ToolFixtureResponse(body, backend, responses, stream), responses,
+              stream);
+          Expect(output.calls.size() == 1 && output.error.empty() &&
+                     output.calls[0].member_str("arguments") == expected.dump(),
+                 "Declared parameter names and type hints keep exact spelling");
+        }
       }
     }
   }
@@ -3024,6 +3122,52 @@ void TestMultilineToolEdits() {
                  parse(output.calls[0].member_str("arguments"))
                          .member_str("quote") == "He said \"hello",
              "Native DeepSeek text does not need balanced JSON quotes");
+    }
+  }
+}
+
+void TestQwenParameterDelimiters() {
+  using gufo::json::parse;
+  const auto body = parse(R"({"model":"test-model",
+    "messages":[{"role":"user","content":"record text"}],
+    "tools":[{"type":"function","function":{"name":"f","parameters":{
+      "properties":{"value":{"type":"string"}}}}}]})");
+  for (const std::string newline : {"\n", "\r\n"}) {
+    for (const std::string value :
+         {"", "inline </parameter> is literal",
+          "line\n</parameter> is literal\nend",
+          "line\n</parameter> <parameter=other>literal\nend",
+          "line\n</parameter> </function>literal\nend"}) {
+      const auto raw = "<tool_call>" + newline + "<function=f>" + newline +
+                       "<parameter=value>" + newline + value + newline +
+                       "</parameter>" + newline + "</function>" + newline +
+                       "</tool_call>";
+      auto expected = gufo::json::Value::object();
+      expected["value"] = value;
+      for (bool responses : {false, true}) {
+        for (bool stream : {false, true}) {
+          const auto check = [&](std::vector<std::string> pieces) {
+            FakeBackend backend;
+            backend.format =
+                gufo::server::TextGenerationBackend::ToolFormat::kQwen;
+            backend.pieces = std::move(pieces);
+            const auto output = ReadToolFixture(
+                ToolFixtureResponse(body, backend, responses, stream),
+                responses, stream);
+            Expect(
+                output.calls.size() == 1 && output.error.empty() &&
+                    output.text.empty() &&
+                    output.calls[0].member_str("arguments") == expected.dump(),
+                "Canonical parameter delimiter keeps literal tags intact");
+          };
+          for (std::size_t split = 0; split <= raw.size(); ++split)
+            check({raw.substr(0, split), raw.substr(split)});
+          std::vector<std::string> bytes;
+          for (char byte : raw)
+            bytes.emplace_back(1, byte);
+          check(std::move(bytes));
+        }
+      }
     }
   }
 }
@@ -3332,6 +3476,8 @@ void TestConsolidatedOutputParsing() {
 }
 
 int main() {
+  TestQwenParameterNames();
+  TestQwenParameterDelimiters();
   TestConsolidatedOutputParsing();
   TestMalformedToolDiagnostics();
   TestMultilineToolEdits();

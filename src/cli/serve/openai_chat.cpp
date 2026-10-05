@@ -880,6 +880,17 @@ unsigned JsonType(std::string_view type) {
   return 0;
 }
 
+unsigned JsonValueType(const json::Value& value) {
+  if (value.is_number())
+    return std::floor(value.as_double()) == value.as_double() ? kIntegerType
+                                                              : kFractionalType;
+  return JsonType(value.is_null()     ? "null"
+                  : value.is_bool()   ? "boolean"
+                  : value.is_array()  ? "array"
+                  : value.is_object() ? "object"
+                                      : "string");
+}
+
 struct TypeHint {
   enum class Resolution { kResolved, kUnsupported, kCyclic, kBounded };
   unsigned types{kAllTypes};
@@ -895,16 +906,7 @@ struct TypeHint {
            (types & kStringType) != 0;
   }
   bool Accepts(const json::Value& value) const {
-    const auto type = value.is_number()
-                          ? (std::floor(value.as_double()) == value.as_double()
-                                 ? kIntegerType
-                                 : kFractionalType)
-                          : JsonType(value.is_null()     ? "null"
-                                     : value.is_bool()   ? "boolean"
-                                     : value.is_array()  ? "array"
-                                     : value.is_object() ? "object"
-                                                         : "string");
-    return (types & type) != 0;
+    return (types & JsonValueType(value)) != 0;
   }
 };
 
@@ -994,6 +996,22 @@ const json::Value* LocalSchemaReference(const json::Value& root,
   }
 }
 
+std::string_view QwenParameterName(const std::optional<json::Value>& schema,
+                                   std::string_view spelled) {
+  const auto* object = schema ? &*schema : nullptr;
+  for (std::size_t depth = 0; object && depth < 32; ++depth) {
+    const auto* properties = object->find("properties");
+    if (properties && properties->is_object() &&
+        properties->contains(std::string(spelled)))
+      return spelled;
+    const auto* reference = object->find("$ref");
+    object = reference && reference->is_string()
+                 ? LocalSchemaReference(*schema, reference->str())
+                 : nullptr;
+  }
+  return Trim(spelled);
+}
+
 TypeHint ResolveDeclaredTypes(const json::Value& root,
                               const json::Value& schema,
                               std::optional<std::string_view> property,
@@ -1071,6 +1089,41 @@ TypeHint ResolveDeclaredTypes(const json::Value& root,
       return {.resolution = Resolution::kUnsupported};
     hint.types &= mask;
   }
+  // Recover value kinds, not enum membership or other schema constraints.
+  const auto value_kind = [](const json::Value& value) {
+    return value.is_number() ? kIntegerType | kFractionalType
+                             : JsonValueType(value);
+  };
+  if (const auto* constant = schema.find("const"))
+    hint.types &= value_kind(*constant);
+  if (const auto* values = schema.find("enum")) {
+    if (!values->is_array() || values->empty())
+      return {.resolution = Resolution::kUnsupported};
+    if (values->size() > *budget)
+      return {.resolution = Resolution::kBounded};
+    unsigned kinds = 0;
+    for (const auto& value : values->items()) {
+      --*budget;
+      kinds |= value_kind(value);
+    }
+    hint.types &= kinds;
+  }
+  // Explicit types and finite values take precedence over implicit shapes.
+  // Keep the existing string preference for unions and conflicting hints.
+  if (!schema.contains("type") && !schema.contains("const") &&
+      !schema.contains("enum") && !schema.contains("anyOf") &&
+      !schema.contains("oneOf")) {
+    if (schema.contains("properties") ||
+        (schema.contains("additionalProperties") &&
+         !(schema.find("additionalProperties")->is_bool() &&
+           schema.find("additionalProperties")->as_bool())))
+      hint.types &= kObjectType;
+    else if (schema.contains("items") || schema.contains("prefixItems"))
+      hint.types &= kArrayType;
+    else if (schema.contains("pattern") || schema.contains("minLength") ||
+             schema.contains("maxLength"))
+      hint.types &= kStringType;
+  }
   for (const auto* rule : {"anyOf", "oneOf", "allOf"}) {
     if (const auto* choices = schema.find(rule)) {
       if (!choices->is_array() || choices->empty())
@@ -1113,11 +1166,33 @@ struct ToolParsing {
   std::size_t malformed_frames{0};
 };
 
+enum class ParameterEndMatch { kData, kPrefix, kDelimiter };
+
+ParameterEndMatch MatchQwenParameterEnd(std::string_view text,
+                                        std::size_t position, bool canonical) {
+  constexpr std::string_view close = "</parameter>";
+  if (canonical && (position == 0 || text[position - 1] != '\n'))
+    return ParameterEndMatch::kData;
+  auto tail = text.substr(position);
+  if (!tail.starts_with(close))
+    return close.starts_with(tail) ? ParameterEndMatch::kPrefix
+                                   : ParameterEndMatch::kData;
+  if (!canonical)
+    return ParameterEndMatch::kDelimiter;
+  tail.remove_prefix(close.size());
+  if (tail.starts_with('\n') || tail.starts_with("\r\n"))
+    return ParameterEndMatch::kDelimiter;
+  return tail.empty() || tail == "\r" ? ParameterEndMatch::kPrefix
+                                      : ParameterEndMatch::kData;
+}
+
 ToolParsing ParseQwenCall(std::string_view frame,
                           std::span<const tokenization::ChatTool> tools,
                           std::vector<ParsedToolCall>* calls) {
   constexpr std::string_view start = "<tool_call>";
   constexpr std::string_view end = "</tool_call>";
+  bool canonical_parameters = frame.starts_with("<tool_call>\n<function=") ||
+                              frame.starts_with("<tool_call>\r\n<function=");
   // Framing/recovery belongs to the incremental scanner. A rejected payload
   // cannot promote an example inside its argument string to a second call.
   ToolParsing parsing{.malformed_frames = 1};
@@ -1155,16 +1230,29 @@ ToolParsing ParseQwenCall(std::string_view frame,
         valid = false;
         break;
       }
-      const std::string name(Trim(body.substr(0, name_end)));
+      const std::string name(
+          QwenParameterName(schema, body.substr(0, name_end)));
       body.remove_prefix(name_end + 1);
+      canonical_parameters &=
+          body.starts_with('\n') || body.starts_with("\r\n");
       std::size_t budget = 128;
       const auto hint =
           schema ? ResolveDeclaredTypes(*schema, *schema, name, {}, &budget)
                  : TypeHint{};
       const bool is_string = hint.PreferString();
       // Outer closing tags inside a parameter are data, not structure.
-      const auto close = is_string ? body.find("</parameter>")
-                                   : FindUnquoted(body, "</parameter>");
+      auto close = is_string ? body.find("</parameter>")
+                             : FindUnquoted(body, "</parameter>");
+      // Canonical Qwen framing owns both surrounding newlines. Apparent
+      // closing tags followed by text on the same line remain argument data.
+      while (close != std::string_view::npos &&
+             MatchQwenParameterEnd(body, close, canonical_parameters) !=
+                 ParameterEndMatch::kDelimiter) {
+        const auto next =
+            is_string ? body.substr(close + 1).find("</parameter>")
+                      : FindUnquoted(body.substr(close + 1), "</parameter>");
+        close = next == std::string_view::npos ? next : close + 1 + next;
+      }
       const auto nested =
           is_string ? body.find(start) : FindUnquoted(body, start);
       if (close == std::string_view::npos || nested < close || name.empty()) {
@@ -1748,6 +1836,7 @@ private:
     json_body_ = false;
     quoted_ = false;
     escaped_ = false;
+    canonical_parameters_ = false;
     parameter_end_.clear();
     schema_.reset();
   }
@@ -1824,14 +1913,21 @@ private:
       }
       const auto tail = std::string_view(pending_).substr(frame_cursor_);
       if (!parameter_end_.empty()) {
-        if (tail.starts_with(parameter_end_)) {
+        const auto match =
+            marker_ == "<tool_call>"
+                ? MatchQwenParameterEnd(pending_, frame_cursor_,
+                                        canonical_parameters_)
+            : tail.starts_with(parameter_end_) ? ParameterEndMatch::kDelimiter
+            : parameter_end_.starts_with(tail) ? ParameterEndMatch::kPrefix
+                                               : ParameterEndMatch::kData;
+        if (match == ParameterEndMatch::kDelimiter) {
           frame_cursor_ += parameter_end_.size();
           parameter_end_.clear();
           continue;
         }
         constexpr std::string_view qwen_start = "<tool_call>";
         const bool qwen = marker_ == qwen_start;
-        if (parameter_end_.starts_with(tail) ||
+        if (match == ParameterEndMatch::kPrefix ||
             (qwen && qwen_start.starts_with(tail)))
           return false;
         if (!qwen || !tail.starts_with(qwen_start)) {
@@ -1879,6 +1975,9 @@ private:
       }
       if (tag.starts_with("<function=")) {
         frame_attempted_ = true;
+        canonical_parameters_ =
+            pending_.starts_with("<tool_call>\n<function=") ||
+            pending_.starts_with("<tool_call>\r\n<function=");
         const auto name = Trim(tag.substr(10, tag.size() - 11));
         for (const auto& tool : tools_)
           if (tool.name == name) {
@@ -1886,7 +1985,14 @@ private:
             break;
           }
       } else if (tag.starts_with("<parameter=")) {
-        const auto name = Trim(tag.substr(11, tag.size() - 12));
+        // Wait for the value's opening newline before deciding its framing.
+        const auto value = std::string_view(pending_).substr(end + 1);
+        if (canonical_parameters_ && (value.empty() || value == "\r"))
+          return false;
+        canonical_parameters_ &=
+            value.starts_with('\n') || value.starts_with("\r\n");
+        const auto name =
+            QwenParameterName(schema_, tag.substr(11, tag.size() - 12));
         std::size_t budget = 128;
         const auto hint = schema_ ? ResolveDeclaredTypes(*schema_, *schema_,
                                                          name, {}, &budget)
@@ -1938,6 +2044,7 @@ private:
   bool parameter_json_{false};
   bool quoted_{false};
   bool escaped_{false};
+  bool canonical_parameters_{false};
   bool reasoning_start_{true};
   bool trim_separator_{false};
   bool malformed_{false};
