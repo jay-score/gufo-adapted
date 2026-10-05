@@ -36,6 +36,33 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-05 — Messages reasoning fields (Claude Code compat)
+
+- Sources: [gufo-org/gufo@56383be0718ea0ce203fc42a55581304f0bbc253](https://github.com/gufo-org/gufo/commit/56383be0718ea0ce203fc42a55581304f0bbc253)
+  (#405) and [gufo-org/gufo@c3f4a9c26031b04f34b84a96f4d8cfc8f4337ad2](https://github.com/gufo-org/gufo/commit/c3f4a9c26031b04f34b84a96f4d8cfc8f4337ad2)
+  (#428, parser refactor), landed as one change.
+- Local: 0ce114890049c90a728281dcfd3a2a648f9fa150 (manual port; both
+  cherry-picks conflicted throughout).
+- Adaptation: `/v1/messages` accepts `thinking.type` (`enabled`, `adaptive`,
+  `disabled`) with `budget_tokens`/`display` validation, plus
+  `output_config.effort` (`low`/`medium`/`high`/`xhigh`/`max`, never enabling
+  thinking, other members rejected) in the #428 end-state shape
+  (`ReadMessagesOutputConfig` returning endpoint errors;
+  `ParseReasoningEffortName` moved to server scope and declared in the hpp).
+  `adaptive` keeps the server default via the fork's optional reasoning
+  fields. Omitted thinking-block response rendering (this endpoint returns
+  text only, as before) and the `cache_growth.py` harness tweak (functional
+  suite removed in this fork); effort-consistency note kept for prefix reuse.
+- Areas: `src/cli/serve/http_server.cpp`, `src/cli/serve/openai_chat.cpp`,
+  `src/cli/serve/openai_chat.hpp`, `docs/SERVER.md`,
+  `tests/cli/http_server_test.cpp`.
+- Validation: Windows `cpu-test` builds clean; `http_server_test` (incl. new
+  adaptive/effort acceptance and nine invalid-field cases) and
+  `openai_chat_test` pass; `check-docs.py` passes (72 files, 420 links).
+  `check-format.py` unrun — no repo-compatible `clang-format` on PATH. Linux
+  `pr` suite and real-model smoke unrun.
+- Status: retained.
+
 ### 2026-10-05 — Streaming failures carry the real error message
 
 - Source: [gufo-org/gufo@bf605399477b694c19adb6313952ecbf0986d8be](https://github.com/gufo-org/gufo/commit/bf605399477b694c19adb6313952ecbf0986d8be)
