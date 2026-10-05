@@ -41,7 +41,7 @@ Use this entry format:
 - Sources: [gufo-org/gufo@29fb0b4eec70f49088bb5126074e6f10be17a0d1](https://github.com/gufo-org/gufo/commit/29fb0b4eec70f49088bb5126074e6f10be17a0d1)
   and [gufo-org/gufo@b45567a918b281bdce63e80dec3e6184ccdb9c25](https://github.com/gufo-org/gufo/commit/b45567a918b281bdce63e80dec3e6184ccdb9c25)
   (PR #441 final shape).
-- Local: commit introducing this entry.
+- Local: d7136e78b7d4417900bf1dab34df63bcc5ff2170.
 - Adaptation: finite values and implicit object/array/string shapes supply
   value-kind hints to the existing bounded resolver. Enum members consume its
   128-node budget. Explicit types and finite values precede implicit shapes;
@@ -56,8 +56,10 @@ Use this entry format:
   mixed/conflicting hints, applicators and enum budget exhaustion in both APIs
   and response modes. Changed C++ files pass clang-format 21.1.8 and docs checks
   pass; the delimiter entry records inherited whole-tree format failures.
-  Production GPU and Linux checks are unrun at this commit; final qualification
-  follows.
+  Final [qualification](docs/plans/tool-parser-pr441.md) records the production
+  Windows build, exact equality for 66 full-logit rows, unchanged perplexity,
+  and AR/MTP enum/object calls, continuations and cache retries. Linux CI is
+  unrun; real-model generation did not exercise the two other parser edges.
 - Status: retained.
 
 ### 2026-10-05 — Exact declared Qwen parameter names
@@ -65,7 +67,7 @@ Use this entry format:
 - Sources: [gufo-org/gufo@29fb0b4eec70f49088bb5126074e6f10be17a0d1](https://github.com/gufo-org/gufo/commit/29fb0b4eec70f49088bb5126074e6f10be17a0d1)
   and [gufo-org/gufo@b45567a918b281bdce63e80dec3e6184ccdb9c25](https://github.com/gufo-org/gufo/commit/b45567a918b281bdce63e80dec3e6184ccdb9c25)
   (PR #441 final shape).
-- Local: commit introducing this entry.
+- Local: e5dd53adea21de8af18766778d9f262b58b79985.
 - Adaptation: scanner and decoder use one spelling decision. Named root
   properties, including bounded local root references, retain surrounding
   whitespace and use the matching type hint. Unknown spellings retain legacy
@@ -78,8 +80,10 @@ Use this entry format:
   spellings, scalar/JSON type hints, root references and cycles in both APIs
   and response modes, with byte-wise chunks. Changed files pass clang-format
   21.1.8 and documentation checks pass; the delimiter entry records inherited
-  whole-tree format failures. Real-model and Linux checks are unrun at this
-  commit; final qualification follows.
+  whole-tree format failures. Final
+  [qualification](docs/plans/tool-parser-pr441.md) records the production build
+  and exact GPU numerical equality. The model emitted a trimmed name, leaving
+  this edge covered by deterministic fixtures. Linux CI is unrun.
 - Status: retained.
 
 ### 2026-10-05 — Canonical Qwen parameter delimiters
@@ -87,7 +91,7 @@ Use this entry format:
 - Source: [gufo-org/gufo@b45567a918b281bdce63e80dec3e6184ccdb9c25](https://github.com/gufo-org/gufo/commit/b45567a918b281bdce63e80dec3e6184ccdb9c25)
   (PR #441; final merge
   [21d6e64f137f6bcbc5a8bf63f900cab648188df7](https://github.com/gufo-org/gufo/commit/21d6e64f137f6bcbc5a8bf63f900cab648188df7)).
-- Local: commit introducing this entry.
+- Local: ba1349e502ee45a83d8f42de4c1e2bcd2b9bb7b8.
 - Adaptation: the consolidated incremental scanner and argument decoder share
   complete canonical delimiter recognition, including CRLF and split suffixes.
   Inline tags and closing-tag-like text remain data. Compact legacy delimiters,
@@ -104,8 +108,11 @@ Use this entry format:
   LF/CRLF and empty strings. Changed C++ files pass clang-format 21.1.8;
   the full formatting check reports two inherited violations in
   `http_server.cpp` and `openai_chat.hpp`, reproduced from the pinned base.
-  Documentation checks pass. Production GPU and Linux checks are unrun at this
-  commit; later qualification is recorded separately.
+  Documentation checks pass. Final
+  [qualification](docs/plans/tool-parser-pr441.md) records the production build,
+  exact GPU numerical equality and AR/MTP tool/replay checks. The model omitted
+  the literal closing-tag-like line, leaving this edge covered by deterministic
+  fixtures. Linux CI is unrun.
 - Status: retained.
 
 ### 2026-10-05 — Messages reasoning fields (Claude Code compat)
