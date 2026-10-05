@@ -36,6 +36,28 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-05 — Streaming failures carry the real error message
+
+- Source: [gufo-org/gufo@bf605399477b694c19adb6313952ecbf0986d8be](https://github.com/gufo-org/gufo/commit/bf605399477b694c19adb6313952ecbf0986d8be)
+  (#385).
+- Local: 614ed35a (manual port; cherry-pick aborted after three-way
+  conflicts).
+- Adaptation: chat `StreamingResponse` and Responses `CreateOpenAiResponse`
+  emit `error.what()` with a `"generation failed"` fallback for empty
+  messages, keeping the fork's `write` naming and the Responses
+  `server_error` code (the Responses wire enum stays closed; the runtime code
+  remains log-only). Omitted the `/v1/completions` streaming hunk: this fork
+  rejects streamed raw completions before admission (400) and removed that
+  streaming path, so there is no counterpart site. Test fake gains the
+  upstream empty-message failure mode; Responses and chat streaming failures
+  now assert wire messages for both modes.
+- Areas: `src/cli/serve/openai_chat.cpp`,
+  `tests/cli/http_server_test.cpp`.
+- Validation: Windows `cpu-test` builds clean; `http_server_test` and
+  `openai_chat_test` pass. `check-format.py` unrun — no repo-compatible
+  `clang-format` on PATH. Linux `pr` suite unrun.
+- Status: retained.
+
 ### 2026-10-05 — Sampling block-skip for unselectable vocabulary ranges
 
 - Source: [gufo-org/gufo@b945d0afdb26e4b790b8cb260762105e167ee1a3](https://github.com/gufo-org/gufo/commit/b945d0afdb26e4b790b8cb260762105e167ee1a3)
