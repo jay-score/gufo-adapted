@@ -64,6 +64,8 @@ public:
       throw std::length_error("context exceeded");
     if (failure == 2)
       throw std::invalid_argument("invalid prompt");
+    if (failure == 5)
+      throw std::runtime_error("");
     Result result;
     if (wait_for_disconnect) {
       entered.release();
@@ -632,22 +634,37 @@ void TestCompatibilityRequests() {
                                      : "event: response.completed") !=
            std::string::npos);
   }
-  server.backend->failure = 1;
-  const auto failed_stream =
-      server.Post("/v1/responses", R"({"input":"hi","stream":true})");
-  ExpectStatus(failed_stream, 200);  // Fake backend fails after headers.
-  assert(failed_stream.find("event: response.failed") != std::string::npos);
-  assert(failed_stream.find("event: response.completed") == std::string::npos);
-  const auto failed_data = failed_stream.find(
-      "data: ", failed_stream.find("event: response.failed"));
-  assert(failed_data != std::string::npos);
-  const auto failed_event = gufo::json::parse(
-      std::string_view(failed_stream)
-          .substr(failed_data + 6,
-                  failed_stream.find("\n\n", failed_data) - failed_data - 6));
-  assert(failed_event.find("response")->find("error")->member_str("code") ==
-         "server_error");
-  assert(failed_stream.ends_with("0\r\n\r\n"));
+  for (const int failure : {1, 5}) {
+    server.backend->failure = failure;
+    const std::string message =
+        failure == 1 ? "context exceeded" : "generation failed";
+    const auto failed_stream =
+        server.Post("/v1/responses", R"({"input":"hi","stream":true})");
+    ExpectStatus(failed_stream, 200);  // Fake backend fails after headers.
+    assert(failed_stream.find("event: response.failed") != std::string::npos);
+    assert(failed_stream.find("event: response.completed") ==
+           std::string::npos);
+    const auto failed_data = failed_stream.find(
+        "data: ", failed_stream.find("event: response.failed"));
+    assert(failed_data != std::string::npos);
+    const auto failed_event = gufo::json::parse(
+        std::string_view(failed_stream)
+            .substr(failed_data + 6,
+                    failed_stream.find("\n\n", failed_data) - failed_data - 6));
+    const auto failed_error = failed_event.find("response")->find("error");
+    assert(failed_error->member_str("code") == "server_error");
+    assert(failed_error->member_str("message") == message);
+    assert(failed_stream.ends_with("0\r\n\r\n"));
+    const auto failed_chat = server.Post(
+        "/v1/chat/completions",
+        R"({"model":"test","messages":[{"role":"user","content":"hello"}],"stream":true})");
+    ExpectStatus(failed_chat, 200);
+    assert(failed_chat.find("\"message\":\"" + message + "\"") !=
+           std::string::npos);
+    assert(failed_chat.find("\"code\":\"generation_failed\"") !=
+           std::string::npos);
+    assert(failed_chat.find("data: [DONE]\n\n") != std::string::npos);
+  }
   server.backend->failure = 0;
   const auto continued = response_body(
       server.Post("/v1/responses",
