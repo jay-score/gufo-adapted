@@ -27,6 +27,7 @@ from metrics import CaseComplete, Recorder
 from tool_reasoning import check_tool_reasoning, response_result
 from discovery import check_discovery
 from image_inputs import check_image_inputs
+from tool_native import check_finite_argument_types, check_native_tool_schemas
 from tool_agent import (check_tool_agent, check_tool_agent_loop, check_tool_history,
                         check_untyped_agent_tools, check_mixed_tool_schemas,
                         check_tool_schema_edges)
@@ -1421,21 +1422,42 @@ def check_native_tools(client, model, checks, vision=False):
         record("responses_tool_c4_isolation", list(pool.map(isolated, range(4))))
 
     # A framed delimiter cannot be represented as raw native parameter data.
-    # The exact JSON fallback must preserve it, including literal backslashes.
+    # As in llama.cpp the call stays native (#438): one call, a string value
+    # and no framing in the output, never a switch to a JSON envelope.
     delimiter = "\n</parameter>\n</｜DSML｜parameter>\\"
     fallback = json.loads(json.dumps(function))
+    # Non-strict: the value cannot be generated natively, which the harness's
+    # strict-schema validation would otherwise report (llama.cpp alike).
+    fallback["strict"] = False
     fallback["parameters"]["properties"]["value"]["const"] = delimiter
+
+    def native_signature(response):
+        calls = [item for item in response.output if item.type == "function_call"]
+        text = "".join(part.text for item in response.output if item.type == "message"
+                       for part in item.content if part.type == "output_text")
+        assert not any(tag in text for tag in ("<tool_call>", "<function=", "<parameter=",
+                                               "<｜DSML｜", '{"name"')), response
+        # As in llama.cpp nothing guides an unenforceable string value, so the
+        # model may not finish it within the limit; a call it completes is one
+        # native record call carrying a string.
+        if response.status == "incomplete":
+            assert response.incomplete_details.reason == "max_output_tokens", response
+            return
+        assert response.status == "completed" and len(calls) == 1, response
+        assert calls[0].name == "record", response
+        assert isinstance(json.loads(calls[0].arguments)["value"], str), response
+
     result = client.responses.create(**{
         **base, "tools": [{"type": "function", **fallback}]})
-    signature(result, value=delimiter)
-    record("responses_tool_delimiter_fallback", result.to_dict())
+    native_signature(result)
+    record("responses_tool_delimiter_native", result.to_dict())
 
     fallback["parameters"]["properties"]["value"] = {
         "type": "string", "pattern": "^\\n</parameter>$"}
     result = client.responses.create(**{
         **base, "tools": [{"type": "function", **fallback}]})
-    signature(result, value="\n</parameter>")
-    record("responses_tool_pattern_fallback", result.to_dict())
+    native_signature(result)
+    record("responses_tool_pattern_native", result.to_dict())
 
     nested = '<tool_call>{"name":"record","arguments":{"value":"literal"}}</tool_call>'
     fallback["parameters"]["properties"]["value"] = {
@@ -1677,9 +1699,9 @@ def check_state_edges(client, model, checks, speculative, vision=False):
     assert stopped["finish"] == "stop" and not stopped["tools"], stopped
     checks["tool_argument_stop"] = stopped
 
-    # A stop inside a JSON string leaves the call unfinished. A call quoted in
-    # that string is argument data and must not become a separate call. The
-    # pattern keeps the JSON envelope on native tool formats.
+    # A stop inside an argument leaves the call unfinished. A call quoted in
+    # that value is argument data and must not become a separate call. Native
+    # formats keep native framing here too, as llama.cpp (#438).
     literal = ("<tool_call><function=record><parameter=content>AAAA</parameter>"
                "</function></tool_call>")
     quoted = {"name": "record", "parameters": {"type": "object", "properties": {
@@ -2499,7 +2521,7 @@ def check_server_metrics(client, model, checks, width, context, speculative):
 
 SDK_SUITES = ("discovery", "responses", "stops", "conversation", "image-inputs", "structured", "structured-limits",
               "tool-reasoning",
-              "tools", "auto-tools", "tool-edges", "tool-agent", "tool-agent-loop", "tool-history", "tool-untyped", "tool-mixed", "tool-schema-edges", "sampling-defaults", "sampling-ranges", "batch",
+              "tools", "auto-tools", "tool-edges", "tool-agent", "tool-agent-loop", "tool-history", "tool-untyped", "tool-mixed", "tool-native-schemas", "tool-native-types", "tool-schema-edges", "sampling-defaults", "sampling-ranges", "batch",
               "long-context", "state-edges", "progress", "stream-start", "metrics", "cache-edits", "cache-growth", "cache-rotation", "cache-concurrency", "cache-shared-prefix")
 
 
@@ -2597,7 +2619,14 @@ def main():
             "tool-untyped": lambda: check_untyped_agent_tools(
                 client, args.model, checks, chat_result, args.vision, image_content),
             "tool-mixed": lambda: check_mixed_tool_schemas(
-                client, args.model, checks, chat_result, args.vision, image_content),
+                client, args.model, checks, chat_result, args.vision, image_content,
+                args.sampling_preset),
+            "tool-native-schemas": lambda: check_native_tool_schemas(
+                client, args.model, checks, chat_result, args.sampling_preset,
+                image_content("red") if args.vision else None),
+            "tool-native-types": lambda: check_finite_argument_types(
+                client, args.model, checks, chat_result,
+                image_content("red") if args.vision else None),
             "tool-schema-edges": lambda: check_tool_schema_edges(
                 client, args.model, checks, chat_result, args.vision, image_content),
             "state-edges": lambda: check_state_edges(
@@ -2625,7 +2654,8 @@ def main():
             "cache-shared-prefix": lambda: check_cache_shared_prefix(
                 client, args.model, checks, chat_result),
         }
-        selected = ([name for name in suites if name != "image-inputs" or args.vision]
+        selected = ([name for name in suites if name != "tool-native-types"
+                     and (name != "image-inputs" or args.vision)]
                     if args.suite == "all" else
                     ["native-tools", "auto-tools"] if args.suite == "tools" else [args.suite])
         for name in selected:

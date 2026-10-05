@@ -85,6 +85,8 @@ draft limit for this suite. Audio and image/video generation have separate tests
 | `tool-history` | Legacy names, result pairing, current-tool constraints, images, cached retry, stops/limits and sampled peers |
 | `tool-untyped` | Open/typed tools, refs and finite values: framing, arguments, streaming, turns, limits, stops/retry and sampled peers |
 | `tool-mixed` | JSON-only neighbors, annotated refs, extra keys, URI and nullable arguments across Chat/Responses; images, stops/retry and sampled peers; a union neighbor keeps native calls, so a replayed reasoning/call turn is reused in full |
+| `tool-native-schemas` | opencode's tool set beside each schema family that used to force a JSON envelope (pattern, oneOf, allOf, not, open objects), auto and required, strict: native calls, no prompt instruction, typed arguments and full reuse of the generated call; Chat/Responses |
+| `tool-native-types` | Focused subset: enum/const/inferred string types, literal delimiters and exact continuation reuse after new literal tool markers; Chat/Responses, text/images |
 | `tool-schema-edges` | Wildcard JSON types, conditional fields, impossible schemas, nested metadata and required-call timing; both APIs, cache, stops and sampled peers |
 | `state-edges` | Actual AR/draft execution, tiny thinking budgets, zero-argument tools, schema changes, stops (including inside quoted calls), image retry and failed-request recovery |
 | `structured`, `structured-limits` | Request JSON schemas, SDK parsing, limits and stops |
@@ -157,6 +159,28 @@ retains Pi sessions, HTTP/SSE and per-request timings. It executes generated
 commands in disposable fixtures using isolated Pi configuration. Use `--passes 1`
 for a focused check; the default five passes matches the reported debug workload.
 `--conversation --context-file FILE` additionally tests retained long history.
+
+For a conversation that **actually grows past 200K tokens through tool results**,
+run `agent_long.py --agent pi|opencode --executable PATH --base-url URL
+--model NAME --output DIR --min-context 201000 --complex-tools --stress-turns 20`
+against a server at its supported context limit (262144 for Flash-Next).
+For Pi Responses, add `--api openai-responses --server-log SERVER_LOG`.
+It disables compaction and uses one session. The complex tools exercise nested
+unions, references, arrays, nullable fields and literal XML/JSON in transactional
+updates, with independent state/digest checks. Both Pi and OpenCode execute the
+same tools. Every request checks framing, arguments and that cached tokens equal
+the previous prompt plus generated tokens; transcripts
+and phase timings are retained. No synthetic system-padding counts as growth.
+If Pi omits a reasoning-only reply, the report identifies that history change
+and verifies reuse through the measured pre-generation boundary instead.
+
+`opencode_agent.py` runs real opencode (`--opencode PATH`, default on `PATH`)
+against a local server with `--base-url`, `--model` and a fresh `--output`.
+Each task uses isolated opencode configuration and a small stdio MCP server
+whose tools carry every schema family `tool-native-schemas` covers, so every
+turn declares them beside opencode's own tools. It checks that framing never
+reaches content or replayed history, that MCP arguments keep their JSON types,
+that tasks complete, and that each next agent request reuses the previous one.
 
 Cache checks use real assistant replies and run cold controls after the warm
 history, so the controls cannot hide a missed checkpoint. `cache-edits` checks

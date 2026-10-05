@@ -387,6 +387,17 @@ def check_envelope_closer_framing(client, model, checks, chat_result, deepseek=F
                     "markup the model wrote instead of a call stays visible", result)
             elif name in commands:
                 assert_terminal_call(result, commands[name])
+            elif (not deepseek and result["tools"] and name in (
+                    "explain_tool_call_syntax", "envelope_documented_then_prose",
+                    "qwen_envelope_documented_then_prose")):
+                # A literal <tool_call> in Qwen prose triggers the call grammar,
+                # and calls end the output, exactly as in llama.cpp (#438). The
+                # forced call must still be native and leak no framing.
+                assert result["finish"] == "tool_calls", result
+                assert all(call["function"]["name"] == "terminal"
+                           for call in result["tools"]), result
+                assert not any(tag in text for tag in ENVELOPE_CLOSERS), result
+                continue
             else:
                 assert not result["tools"] and result["finish"] == "stop", result
             if name == "framing_between_calls" and not visible_markup:

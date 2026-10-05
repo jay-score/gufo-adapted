@@ -1781,9 +1781,10 @@ void TestServerInstructionsAreFraming() {
   using namespace gufo::tokenization;
   class ConstraintRunner final : public FakeRunner {
   public:
-    ConstraintRunner() : FakeRunner(std::make_shared<FakeStats>()) {}
+    explicit ConstraintRunner(gufo::sampling::JsonConstraint::ToolFormat format)
+        : FakeRunner(std::make_shared<FakeStats>()), format_(format) {}
     gufo::sampling::JsonConstraint::ToolFormat ToolFormat() const override {
-      return gufo::sampling::JsonConstraint::ToolFormat::kQwen;
+      return format_;
     }
     std::shared_ptr<const gufo::sampling::ConstraintVocabulary>
     BuildConstraintVocabulary() const override {
@@ -1793,7 +1794,16 @@ void TestServerInstructionsAreFraming() {
                 std::string(1, static_cast<char>(id)), false};
           });
     }
-  } runner;
+
+  private:
+    gufo::sampling::JsonConstraint::ToolFormat format_;
+  };
+  // Only runners without a native call syntax use the JSON envelope and its
+  // instruction; a native runner never switches syntax for a schema (#383).
+  const ConstraintRunner runner(
+      gufo::sampling::JsonConstraint::ToolFormat::kJson);
+  const ConstraintRunner native_runner(
+      gufo::sampling::JsonConstraint::ToolFormat::kQwen);
   std::vector<std::string> vocab;
   for (int i = 0; i < 256; ++i)
     vocab.emplace_back(1, static_cast<char>(i));
@@ -1928,9 +1938,63 @@ void TestServerInstructionsAreFraming() {
            R"({"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false})"}};
   gufo::sampling::SamplingConfig sampling;
   const auto constrained =
-      gufo::server::ConstrainChatRequest(native, runner, &sampling);
+      gufo::server::ConstrainChatRequest(native, native_runner, &sampling);
   Expect(constrained && constrained->messages.front().framing_suffix.empty(),
          "native constraints add no instruction or change to the prompt");
+  // Schemas native tags cannot enforce exactly, beside an ordinary neighbor,
+  // under every tool choice: the request stays native as in llama.cpp, so the
+  // prompt is the client's own and needs no extra prefill.
+  for (
+      const auto* schema :
+      {R"({"type":"object","properties":{"text":{"type":"string","const":"\n</parameter>\n"}},"required":["text"],"additionalProperties":false})",
+       R"({"type":"object","properties":{"text":{"type":"string"}},"patternProperties":{"^x_":{"type":"integer"}},"required":["text"]})",
+       R"({"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"text":{"type":"string"}},"required":["text"]})",
+       R"({"type":"object","properties":{"date":{"type":"string","pattern":"^[0-9]{4}$"}}})",
+       R"({"type":"object","properties":{"v":{"oneOf":[{"type":"string"},{"type":"integer"}]}}})",
+       R"({"type":"object","properties":{"v":{"allOf":[{"type":"string"},{"minLength":1}]}}})",
+       R"({"type":"object","properties":{"v":{"not":{"type":"null"}}}})",
+       R"({"type":"object","properties":{"v":{"type":"string"}},"additionalProperties":true})",
+       R"({"type":"object","properties":{"o":{"type":"object","properties":{"x":{"type":"integer"}}}}})"}) {
+    for (const auto choice :
+         {ChatRequest::ToolChoice::kAuto, ChatRequest::ToolChoice::kRequired}) {
+      for (const bool strict : {false, true}) {
+        ChatRequest request({{ChatRole::kSystem, "Be concise."},
+                             {ChatRole::kUser, "Call record."}});
+        request.reasoning.enabled = false;
+        request.tool_choice = choice;
+        const std::string definition =
+            std::string(
+                R"({"type":"function","function":{"name":"record","strict":)") +
+            (strict ? "true" : "false") + R"(,"parameters":)" + schema + "}}";
+        request.tools = {
+            {.name = "bash",
+             .parameters_json =
+                 R"({"type":"object","properties":{"command":{"type":"string"}},"required":["command"]})"},
+            {.name = "record",
+             .parameters_json = schema,
+             .definition_json = definition}};
+        gufo::sampling::SamplingConfig sampled;
+        std::optional<gufo::sampling::JsonConstraint::ToolFormat> format;
+        std::optional<ChatRequest> result;
+        try {
+          result = gufo::server::ConstrainChatRequest(request, native_runner,
+                                                      &sampled, &format);
+        } catch (const std::invalid_argument&) {
+          // An impossible strict schema is rejected before generation.
+          Expect(strict, "only strict schemas may be rejected");
+          continue;
+        }
+        Expect(
+            result &&
+                format == gufo::sampling::JsonConstraint::ToolFormat::kQwen &&
+                sampled.constraint,
+            "a native runner keeps native calls for every schema");
+        Expect(result->messages.front().framing_suffix.empty() &&
+                   result->messages.front().content == "Be concise.",
+               "a native runner adds no tool instruction to the prompt");
+      }
+    }
+  }
 }
 
 }  // namespace

@@ -701,20 +701,28 @@ keep optional arguments optional. Open nested objects retain native syntax and
 declared requirements/types, including nested fields; unsupported schema
 keywords remain guidance. Unsupported property-admitting rules, including
 conditional branches, leave those objects open without discarding declared
-requirements. Qwen wildcard fields use JSON to preserve types. Non-strict
-union and untyped arguments keep the native syntax, as in llama.cpp: when the
-union admits strings the value is raw text, and its typed alternatives (such as
-`null` or an object) are tried before the string, so Qwen cannot return the
-literal string `"null"` for a string/null union. Strict unions use JSON.
+requirements. Union and untyped arguments keep the native syntax, as in
+llama.cpp: when the union admits strings the value is raw text, and its typed
+alternatives (such as `null` or an object) are tried before the string, so Qwen
+cannot return the literal string `"null"` for a string/null union.
+A model with a native call syntax (Qwen, DeepSeek) never switches to a JSON
+envelope, whatever the schema, strict flag or tool choice: as in llama.cpp
+`common/parsers/qwen3-coder.cpp` and `deepseek.cpp`, every call uses the chat
+template's syntax and no instruction is added to the prompt. Native tags enforce
+what they can carry. A string parameter whose `pattern` cannot be enforced is
+raw text; other values follow the supported parts of their schema, or any JSON
+value of their types when nothing can be enforced. Qwen tags carry no type, so
+Qwen generates declared parameters only; DeepSeek's `string` flag also carries
+wildcard fields. A value that must contain the native closing tag cannot be
+written natively. Only runners without a native syntax use the JSON envelope.
 Historical calls render typed argument values with the chat template's
 `tojson` spelling (`", "` and `": "` separators, raw UTF-8), as llama.cpp's
-Jinja runtime does, so a replayed turn reuses the tokens the model generated.
+Jinja runtime does. Cache reuse requires identical tokens; normalizing an
+assistant's formatting can require replaying that suffix.
 Constrained JSON keys follow schema order, with additional
-keys last. Impossible non-strict schemas fall back to JSON-object arguments;
-impossible strict schemas are rejected before generation.
+keys last. Impossible strict schemas are rejected before generation.
 `tool_choice: "required"` and named choices constrain decoding to a declared
-call. Extended schemas retain compact JSON on this path, avoiding extra
-native framing tokens; ordinary native calls keep their existing format. Where
+call, with the same argument syntax as `auto`. Where
 the backend cannot constrain sampling, an unmet `required` choice still returns
 `tool_choice_unsatisfied` (HTTP 502, or an SSE error after streaming starts).
 Stops and token limits terminate normally without emitting incomplete calls.
@@ -751,12 +759,11 @@ Constraints apply before target sampling in AR, DFlash2, MTP and DSpark, includi
 streaming, images and concurrent requests. Reasoning stays separate from JSON
 and counts toward the output budget. Changing the schema changes the cache prefix.
 
-For constrained tool or JSON output, only `</think>` ends the initial reasoning
-phase. Literal tool markers such as `<tool_call>` quoted during reasoning remain
-reasoning data; they do not start a call or move reasoning into visible content.
-This boundary is identical for buffered responses and SSE deltas in Chat
-Completions and Responses. Tool parsing starts after the reasoning delimiter,
-and markers inside tool argument strings remain argument data.
+`</think>` ends reasoning before constrained JSON. Native tools also accept an
+unquoted function header as the boundary when the model omits `</think>`.
+Bare marker mentions and quoted examples remain reasoning; markers inside
+arguments remain data. Buffered and streamed Chat Completions and Responses
+use the same boundaries.
 
 Parse the returned content: leading whitespace is valid JSON, and stops or token
 limits can leave it incomplete. `finish_reason: "stop"` includes matched stop
