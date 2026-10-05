@@ -36,6 +36,28 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-05 — Exact declared Qwen parameter names
+
+- Sources: [gufo-org/gufo@29fb0b4eec70f49088bb5126074e6f10be17a0d1](https://github.com/gufo-org/gufo/commit/29fb0b4eec70f49088bb5126074e6f10be17a0d1)
+  and [gufo-org/gufo@b45567a918b281bdce63e80dec3e6184ccdb9c25](https://github.com/gufo-org/gufo/commit/b45567a918b281bdce63e80dec3e6184ccdb9c25)
+  (PR #441 final shape).
+- Local: commit introducing this entry.
+- Adaptation: scanner and decoder use one spelling decision. Named root
+  properties, including bounded local root references, retain surrounding
+  whitespace and use the matching type hint. Unknown spellings retain legacy
+  trimming. Existing pattern/additional-property hints, duplicate rules and
+  thinking boundaries are unchanged; no grammar infrastructure is imported.
+- Areas: `src/cli/serve/openai_chat.cpp`, `tests/cli/openai_chat_test.cpp`,
+  `docs/SERVER.md`.
+- Validation: the new spaced-name fixture fails before adaptation. Fresh Windows
+  CPU `openai_chat_test` and `http_server_test` pass, including exact/legacy
+  spellings, scalar/JSON type hints, root references and cycles in both APIs
+  and response modes, with byte-wise chunks. Changed files pass clang-format
+  21.1.8 and documentation checks pass; the delimiter entry records inherited
+  whole-tree format failures. Real-model and Linux checks are unrun at this
+  commit; final qualification follows.
+- Status: retained.
+
 ### 2026-10-05 — Canonical Qwen parameter delimiters
 
 - Source: [gufo-org/gufo@b45567a918b281bdce63e80dec3e6184ccdb9c25](https://github.com/gufo-org/gufo/commit/b45567a918b281bdce63e80dec3e6184ccdb9c25)

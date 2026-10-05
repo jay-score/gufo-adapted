@@ -2967,6 +2967,62 @@ void TestQwenDeclaredTypes() {
   }
 }
 
+void TestQwenParameterNames() {
+  using gufo::json::parse;
+  struct Case {
+    const char* schema;
+    const char* spelled;
+    const char* key;
+    const char* value;
+    const char* expected;
+  };
+  const Case cases[] = {
+      {R"({"properties":{" value ":{"type":"integer"}}})", " value ", " value ",
+       "1", "1"},
+      {R"({"properties":{"value":{"type":"string"}," value ":{"type":"integer"}}})",
+       " value ", " value ", "1", "1"},
+      {R"({"properties":{" ":{"type":"boolean"}}})", " ", " ", "True", "true"},
+      {R"({"$ref":"#/$defs/root","$defs":{"root":{"properties":{" value ":{"type":"object"}}}}})",
+       " value ", " value ", R"({"text":"</parameter>"})",
+       R"({"text":"</parameter>"})"},
+      // Unknown spellings keep legacy whitespace tolerance.
+      {R"({"properties":{"value":{"type":"integer"}}})", " value ", "value",
+       "1", "1"},
+      {R"({"$ref":"#"})", " value ", "value", "1", R"("1")"},
+  };
+  for (const auto& item : cases) {
+    auto body = parse(R"({"model":"test-model",
+      "messages":[{"role":"user","content":"call f"}],
+      "tools":[{"type":"function","function":{"name":"f"}}]})");
+    auto tool = body["tools"].items()[0];
+    tool["function"]["parameters"] = parse(item.schema);
+    body["tools"] = gufo::json::Value::array();
+    body["tools"].push_back(std::move(tool));
+    auto expected = gufo::json::Value::object();
+    expected[item.key] = parse(item.expected);
+    for (bool canonical : {false, true}) {
+      const std::string newline = canonical ? "\n" : "";
+      const auto raw = "<tool_call>" + newline + "<function=f>" + newline +
+                       "<parameter=" + item.spelled + ">" + newline +
+                       item.value + newline + "</parameter>" + newline +
+                       "</function>" + newline + "</tool_call>";
+      for (bool responses : {false, true}) {
+        for (bool stream : {false, true}) {
+          FakeBackend backend;
+          for (char byte : raw)
+            backend.pieces.emplace_back(1, byte);
+          const auto output = ReadToolFixture(
+              ToolFixtureResponse(body, backend, responses, stream), responses,
+              stream);
+          Expect(output.calls.size() == 1 && output.error.empty() &&
+                     output.calls[0].member_str("arguments") == expected.dump(),
+                 "Declared parameter names and type hints keep exact spelling");
+        }
+      }
+    }
+  }
+}
+
 void TestMultilineToolEdits() {
   using gufo::json::parse;
   const auto body = parse(R"({"model":"test-model",
@@ -3378,6 +3434,7 @@ void TestConsolidatedOutputParsing() {
 }
 
 int main() {
+  TestQwenParameterNames();
   TestQwenParameterDelimiters();
   TestConsolidatedOutputParsing();
   TestMalformedToolDiagnostics();

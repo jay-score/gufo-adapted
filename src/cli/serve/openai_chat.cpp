@@ -994,6 +994,22 @@ const json::Value* LocalSchemaReference(const json::Value& root,
   }
 }
 
+std::string_view QwenParameterName(const std::optional<json::Value>& schema,
+                                   std::string_view spelled) {
+  const auto* object = schema ? &*schema : nullptr;
+  for (std::size_t depth = 0; object && depth < 32; ++depth) {
+    const auto* properties = object->find("properties");
+    if (properties && properties->is_object() &&
+        properties->contains(std::string(spelled)))
+      return spelled;
+    const auto* reference = object->find("$ref");
+    object = reference && reference->is_string()
+                 ? LocalSchemaReference(*schema, reference->str())
+                 : nullptr;
+  }
+  return Trim(spelled);
+}
+
 TypeHint ResolveDeclaredTypes(const json::Value& root,
                               const json::Value& schema,
                               std::optional<std::string_view> property,
@@ -1177,7 +1193,8 @@ ToolParsing ParseQwenCall(std::string_view frame,
         valid = false;
         break;
       }
-      const std::string name(Trim(body.substr(0, name_end)));
+      const std::string name(
+          QwenParameterName(schema, body.substr(0, name_end)));
       body.remove_prefix(name_end + 1);
       canonical_parameters &=
           body.starts_with('\n') || body.starts_with("\r\n");
@@ -1937,7 +1954,8 @@ private:
           return false;
         canonical_parameters_ &=
             value.starts_with('\n') || value.starts_with("\r\n");
-        const auto name = Trim(tag.substr(11, tag.size() - 12));
+        const auto name =
+            QwenParameterName(schema_, tag.substr(11, tag.size() - 12));
         std::size_t budget = 128;
         const auto hint = schema_ ? ResolveDeclaredTypes(*schema_, *schema_,
                                                          name, {}, &budget)

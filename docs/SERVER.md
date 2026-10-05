@@ -692,6 +692,10 @@ conflicting hints, cyclic/external references and unsupported rules retain
 best-effort text semantics. This is type recovery, not schema validation or
 generation-time enforcement.
 
+Declared property names retain their exact spelling, including surrounding
+spaces, also through bounded local root references. An undeclared spelling
+keeps the legacy whitespace trimming before type lookup.
+
 Pattern lookup uses ICU over a conservative ECMAScript-compatible subset:
 Unicode literals, anchors, dot, ordinary groups/lookahead, character classes,
 alternation, quantifiers and escaped punctuation or `\n`, `\r`, `\t`, `\f`.
