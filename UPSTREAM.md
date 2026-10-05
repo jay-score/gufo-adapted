@@ -36,6 +36,31 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-05 — Reclaim output capacity from abandoned streams
+
+- Source: [gufo-org/gufo@d85fb0fcd3fb906ea845f6e1404222d686b74e07](https://github.com/gufo-org/gufo/commit/d85fb0fcd3fb906ea845f6e1404222d686b74e07)
+  (#394).
+- Local: 49852db5a6b020a25ff2fadc71b7a79b84ed80a0 (`git cherry-pick -x`, no
+  manual edits).
+- Adaptation: verbatim import. `ScheduledRequest` releases its remaining
+  `buffered_output_bytes` charge when the last owner drops a completed but
+  never-consumed stream, so a replacement request can reuse the capacity.
+  Nothing omitted; no fork-specific adjustment needed — the fork's device-loss
+  probe lives in `CompleteFailure`, far from the destructor site, and the
+  consume path already releases per piece, so the destructor only returns the
+  remainder.
+- Areas: `src/cli/serve/text_generation_scheduler.cpp`,
+  `tests/cli/text_generation_scheduler_test.cpp`.
+- Validation: Windows `cpu-test` build of `text_generation_scheduler_test`
+  passes, including the two new upstream cases
+  (`TestCompletedAbandonedStreamReleasesOutputBudget`,
+  `TestCompletedStreamOutlivesScheduler`); direct binary run reports all tests
+  passed. `check-format.py` unrun — no repo-compatible `clang-format` on PATH
+  and an unrelated version could rewrite files; the change is verbatim
+  upstream, format-clean by construction. Linux `pr` suite unrun. No logit or
+  perplexity check: capacity accounting only, no inference arithmetic change.
+- Status: retained.
+
 ### 2026-10-03 — DeepSeek call-block separator replay
 
 - Source: [gufo-org/gufo@43e8351daa37f3115249372809b5a4bd0bc3d481](https://github.com/gufo-org/gufo/commit/43e8351daa37f3115249372809b5a4bd0bc3d481)
