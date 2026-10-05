@@ -2144,13 +2144,29 @@ public:
     return Emit(std::move(delta));
   }
 
+  void ValidateFunctionCalls(std::span<const ParsedToolCall> calls,
+                             bool limited) const {
+    // Validate every preview before any call receives completion events. A
+    // discarded or changed preview cannot be retracted after streaming.
+    for (const auto& function : functions_) {
+      const auto call = std::ranges::find(
+          calls, function.item.member_str("call_id"), &ParsedToolCall::id);
+      if (call == calls.end()) {
+        if (!limited)
+          throw TextGenerationError(TextGenerationErrorCode::kMalformedToolCall,
+                                    "model interrupted a streamed tool call");
+      } else if (!ArgumentsJson(call->arguments)
+                      .starts_with(function.arguments)) {
+        throw TextGenerationError(TextGenerationErrorCode::kMalformedToolCall,
+                                  "tool arguments changed after streaming");
+      }
+    }
+  }
+
   bool FunctionCall(const ParsedToolCall& call) {
     const auto arguments = ArgumentsJson(call.arguments);
     const auto* preview = FindFunction(call.id);
     const auto sent = preview ? preview->arguments.size() : 0;
-    if (preview && !arguments.starts_with(preview->arguments))
-      throw TextGenerationError(TextGenerationErrorCode::kMalformedToolCall,
-                                "tool arguments changed after streaming");
     if (!FunctionArguments(call, std::string_view(arguments).substr(sent)))
       return false;
     auto& function = *FindFunction(call.id);
@@ -2173,13 +2189,6 @@ public:
   json::Value Complete(const TextGenerationBackend::Result& result) {
     const bool limited =
         result.finish_reason == TextGenerationBackend::FinishReason::kLength;
-    // A streamed preview cannot be retracted. Never complete a response that
-    // could make a client execute a call discarded by framing/recovery.
-    if (!limited && std::ranges::any_of(functions_, [](const auto& function) {
-          return function.item.member_str("status") != "completed";
-        }))
-      throw TextGenerationError(TextGenerationErrorCode::kMalformedToolCall,
-                                "model interrupted a streamed tool call");
     CloseItem(limited ? "incomplete" : "completed");
     MaterializeFunctions(true);
     response_["status"] = limited ? "incomplete" : "completed";
@@ -2750,6 +2759,9 @@ HttpResponse CreateOpenAiResponse(const HttpRequest& request,
         throw TextGenerationError(
             TextGenerationErrorCode::kToolChoiceUnsatisfied,
             "model produced multiple calls with 'parallel_tool_calls' false");
+      output.ValidateFunctionCalls(
+          generated.tool_calls,
+          result.finish_reason == TextGenerationBackend::FinishReason::kLength);
       for (const auto& call : generated.tool_calls) {
         if (!output.FunctionCall(call)) {
           generation->Cancel();
