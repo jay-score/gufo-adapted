@@ -1,0 +1,3 @@
+interface:
+  display_name: "Gufo Upstream Fixes"
+  short_description: "Triage upstream Gufo fixes for safe Windows backport"
