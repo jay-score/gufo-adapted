@@ -692,6 +692,14 @@ conflicting hints, cyclic/external references and unsupported rules retain
 best-effort text semantics. This is type recovery, not schema validation or
 generation-time enforcement.
 
+Without an explicit `type`, finite `const`/`enum` values supply value-kind
+hints. Object, array and string shapes can also supply hints through
+`properties`/nontrivial `additionalProperties`, `items`/`prefixItems`, and
+`pattern`/length keywords. Explicit types and finite values take precedence
+over implicit shapes; `anyOf`/`oneOf` branches precede implicit shape keywords.
+Enum members share the existing 128-node lookup budget;
+membership, patterns, lengths and nested requirements are not validated.
+
 Declared property names retain their exact spelling, including surrounding
 spaces, also through bounded local root references. An undeclared spelling
 keeps the legacy whitespace trimming before type lookup.

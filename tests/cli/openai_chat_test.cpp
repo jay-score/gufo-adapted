@@ -2855,6 +2855,44 @@ void TestQwenDeclaredTypes() {
     std::string json;
   };
   std::vector<Case> cases{
+      {R"({"properties":{"value":{"enum":[1,2]}}})", "value", "1", "1"},
+      {R"({"properties":{"value":{"const":true}}})", "value", "True", "true"},
+      {R"({"properties":{"value":{"const":null}}})", "value", "None", "null"},
+      {R"({"properties":{"value":{"enum":[1.5,2]}}})", "value", "2", "2"},
+      {R"({"properties":{"value":{"const":"42"}}})", "value", "42", R"("42")"},
+      {R"({"properties":{"value":{"enum":["true","false"]}}})", "value", "true",
+       R"("true")"},
+      {R"({"properties":{"value":{"enum":["1",1]}}})", "value", "1", R"("1")"},
+      {R"({"properties":{"value":{"properties":{"x":{"type":"integer"}}}}})",
+       "value", R"({"x":1})", R"({"x":1})"},
+      {R"({"properties":{"value":{"additionalProperties":false}}})", "value",
+       "{}", "{}"},
+      {R"({"properties":{"value":{"additionalProperties":{"type":"boolean"}}}})",
+       "value", R"({"x":true})", R"({"x":true})"},
+      {R"({"properties":{"value":{"items":{"type":"integer"}}}})", "value",
+       "[1,2]", "[1,2]"},
+      {R"({"properties":{"value":{"prefixItems":[{"type":"integer"}]}}})",
+       "value", "[1]", "[1]"},
+      {R"({"properties":{"value":{"const":{"text":"<tool_call> </parameter>"}}}})",
+       "value", R"({"text":"<tool_call> </parameter>"})",
+       R"({"text":"<tool_call> </parameter>"})"},
+      {R"({"properties":{"value":{"enum":[[1],[2]]}}})", "value", "[1]", "[1]"},
+      {R"({"properties":{"value":{"anyOf":[{"const":1},{"type":"null"}]}}})",
+       "value", "1", "1"},
+      {R"({"properties":{"value":{"allOf":[{"enum":[1,2]},{"type":"integer"}]}}})",
+       "value", "1", "1"},
+      {R"({"properties":{"value":{"type":"string","properties":{}}}})", "value",
+       "{}", R"("{}")"},
+      {R"({"properties":{"value":{"anyOf":[{"type":"string"},{"type":"object"}],"properties":{}}}})",
+       "value", "{}", R"("{}")"},
+      {R"({"properties":{"value":{"oneOf":[{"type":"string"},{"type":"array"}],"items":{}}}})",
+       "value", "[]", R"("[]")"},
+      {R"({"properties":{"value":{"pattern":".*"}}})", "value", "42",
+       R"("42")"},
+      {R"({"properties":{"value":{"minLength":1}}})", "value", "null",
+       R"("null")"},
+      {R"({"properties":{"value":{"type":"integer","const":"1"}}})", "value",
+       "1", R"("1")"},
       {R"({"properties":{"value":{"type":"string"}},"patternProperties":{"^x_":{"type":"integer"}}})",
        "x_count", "1", "1"},
       {R"({"properties":{"value":{"type":"string"}},"patternProperties":{"^x_":{"type":"integer"}}})",
@@ -2921,6 +2959,10 @@ void TestQwenDeclaredTypes() {
        "n", "1", R"("1")"},
       {R"({"patternProperties":{"^.$":{"type":"integer"}}})", "\xC2\x85", "1",
        "1"}};
+  auto large_enum = parse(R"({"properties":{"n":{"enum":[]}}})");
+  for (int i = 0; i < 129; ++i)
+    large_enum["properties"]["n"]["enum"].push_back(i);
+  cases.push_back({large_enum.dump(), "n", "1", R"("1")"});
   auto deep = parse(R"({"properties":{"n":{"$ref":"#/$defs/a0"}},"$defs":{}})");
   for (int i = 0; i < 40; ++i) {
     auto branch = gufo::json::Value::object();

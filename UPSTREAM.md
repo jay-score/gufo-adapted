@@ -36,6 +36,30 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-05 — Bounded inferred Qwen argument types
+
+- Sources: [gufo-org/gufo@29fb0b4eec70f49088bb5126074e6f10be17a0d1](https://github.com/gufo-org/gufo/commit/29fb0b4eec70f49088bb5126074e6f10be17a0d1)
+  and [gufo-org/gufo@b45567a918b281bdce63e80dec3e6184ccdb9c25](https://github.com/gufo-org/gufo/commit/b45567a918b281bdce63e80dec3e6184ccdb9c25)
+  (PR #441 final shape).
+- Local: commit introducing this entry.
+- Adaptation: finite values and implicit object/array/string shapes supply
+  value-kind hints to the existing bounded resolver. Enum members consume its
+  128-node budget. Explicit types and finite values precede implicit shapes;
+  applicable hints intersect. Preserves string preference for mixed unions,
+  pattern/additional-property hints, local reference bounds and unsupported
+  fallback. No schema validator, generation grammar or inference changes.
+- Areas: `src/cli/serve/openai_chat.cpp`, `tests/cli/openai_chat_test.cpp`,
+  `docs/SERVER.md`.
+- Validation: numeric enum fixture fails before adaptation. Fresh Windows CPU
+  `openai_chat_test` and `http_server_test` pass, covering finite JSON kinds,
+  inferred containers, JSON-owned protocol tags, numeric-looking strings,
+  mixed/conflicting hints, applicators and enum budget exhaustion in both APIs
+  and response modes. Changed C++ files pass clang-format 21.1.8 and docs checks
+  pass; the delimiter entry records inherited whole-tree format failures.
+  Production GPU and Linux checks are unrun at this commit; final qualification
+  follows.
+- Status: retained.
+
 ### 2026-10-05 — Exact declared Qwen parameter names
 
 - Sources: [gufo-org/gufo@29fb0b4eec70f49088bb5126074e6f10be17a0d1](https://github.com/gufo-org/gufo/commit/29fb0b4eec70f49088bb5126074e6f10be17a0d1)

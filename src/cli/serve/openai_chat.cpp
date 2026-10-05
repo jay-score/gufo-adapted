@@ -880,6 +880,17 @@ unsigned JsonType(std::string_view type) {
   return 0;
 }
 
+unsigned JsonValueType(const json::Value& value) {
+  if (value.is_number())
+    return std::floor(value.as_double()) == value.as_double() ? kIntegerType
+                                                              : kFractionalType;
+  return JsonType(value.is_null()     ? "null"
+                  : value.is_bool()   ? "boolean"
+                  : value.is_array()  ? "array"
+                  : value.is_object() ? "object"
+                                      : "string");
+}
+
 struct TypeHint {
   enum class Resolution { kResolved, kUnsupported, kCyclic, kBounded };
   unsigned types{kAllTypes};
@@ -895,16 +906,7 @@ struct TypeHint {
            (types & kStringType) != 0;
   }
   bool Accepts(const json::Value& value) const {
-    const auto type = value.is_number()
-                          ? (std::floor(value.as_double()) == value.as_double()
-                                 ? kIntegerType
-                                 : kFractionalType)
-                          : JsonType(value.is_null()     ? "null"
-                                     : value.is_bool()   ? "boolean"
-                                     : value.is_array()  ? "array"
-                                     : value.is_object() ? "object"
-                                                         : "string");
-    return (types & type) != 0;
+    return (types & JsonValueType(value)) != 0;
   }
 };
 
@@ -1086,6 +1088,41 @@ TypeHint ResolveDeclaredTypes(const json::Value& root,
     if (mask == 0)
       return {.resolution = Resolution::kUnsupported};
     hint.types &= mask;
+  }
+  // Recover value kinds, not enum membership or other schema constraints.
+  const auto value_kind = [](const json::Value& value) {
+    return value.is_number() ? kIntegerType | kFractionalType
+                             : JsonValueType(value);
+  };
+  if (const auto* constant = schema.find("const"))
+    hint.types &= value_kind(*constant);
+  if (const auto* values = schema.find("enum")) {
+    if (!values->is_array() || values->empty())
+      return {.resolution = Resolution::kUnsupported};
+    if (values->size() > *budget)
+      return {.resolution = Resolution::kBounded};
+    unsigned kinds = 0;
+    for (const auto& value : values->items()) {
+      --*budget;
+      kinds |= value_kind(value);
+    }
+    hint.types &= kinds;
+  }
+  // Explicit types and finite values take precedence over implicit shapes.
+  // Keep the existing string preference for unions and conflicting hints.
+  if (!schema.contains("type") && !schema.contains("const") &&
+      !schema.contains("enum") && !schema.contains("anyOf") &&
+      !schema.contains("oneOf")) {
+    if (schema.contains("properties") ||
+        (schema.contains("additionalProperties") &&
+         !(schema.find("additionalProperties")->is_bool() &&
+           schema.find("additionalProperties")->as_bool())))
+      hint.types &= kObjectType;
+    else if (schema.contains("items") || schema.contains("prefixItems"))
+      hint.types &= kArrayType;
+    else if (schema.contains("pattern") || schema.contains("minLength") ||
+             schema.contains("maxLength"))
+      hint.types &= kStringType;
   }
   for (const auto* rule : {"anyOf", "oneOf", "allOf"}) {
     if (const auto* choices = schema.find(rule)) {
