@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1512,6 +1513,17 @@ std::string Sse(const json::Value& value) {
   return "data: " + value.dump() + "\n\n";
 }
 
+using StreamClock = std::chrono::steady_clock;
+
+bool KeepAlive(const HttpResponse::BodyWriter& writer,
+               StreamClock::time_point last_write) {
+  // Send transport keepalives only while generation is producing pieces. SSE
+  // comments carry no model output and do not prove a tool call is valid.
+  if (StreamClock::now() - last_write >= std::chrono::seconds(10))
+    return writer(": keep-alive\n\n");
+  return true;
+}
+
 json::Value BaseChunk(std::string_view id, long long created,
                       std::string_view model) {
   json::Value chunk = json::Value::object();
@@ -1546,20 +1558,16 @@ class GeneratedTextParser {
 public:
   using EmitCallback =
       std::function<bool(std::string_view piece, bool is_reasoning)>;
-  using ToolCallback =
-      std::function<bool(const ParsedToolCall& call, std::string_view delta)>;
   using ToolFormat = TextGenerationBackend::ToolFormat;
   using OutputState = TextGenerationBackend::InitialOutputState;
 
   GeneratedTextParser(OutputState initial, ToolFormat format,
                       std::span<const tokenization::ChatTool> tools,
-                      ChatRequest::ToolChoice choice, EmitCallback emit = {},
-                      ToolCallback emit_tool = {})
+                      ChatRequest::ToolChoice choice, EmitCallback emit = {})
       : tools_(tools),
         choice_(choice),
         format_(format),
         emit_(std::move(emit)),
-        emit_tool_(std::move(emit_tool)),
         state_(initial == OutputState::kReasoning ? State::kReasoning
                : initial == OutputState::kContent ? State::kContent
                                                   : State::kInitial) {}
@@ -1666,10 +1674,8 @@ public:
           return connected_;
         }
       }
-      if (state_ == State::kTool && !ScanFrame()) {
-        StreamQwenParameter(frame_cursor_, false);
+      if (state_ == State::kTool && !ScanFrame())
         return connected_;
-      }
     }
     return connected_;
   }
@@ -1743,93 +1749,6 @@ private:
     escaped_ = false;
     parameter_end_.clear();
     schema_.reset();
-    preview_call_.reset();
-    preview_arguments_.clear();
-    stream_parameter_ = false;
-  }
-
-  void ToolDelta(std::string_view delta) {
-    if (delta.empty() || !connected_)
-      return;
-    preview_arguments_.append(delta);
-    connected_ = emit_tool_(*preview_call_, delta);
-  }
-
-  void BeginQwenParameter(std::string_view name, std::size_t start) {
-    stream_parameter_ = false;
-    if (!emit_tool_ || marker_ != "<tool_call>" || parameter_json_ ||
-        name.empty())
-      return;
-    // Reuse the authoritative parser for the completed parameters. Only the
-    // current raw string is escaped incrementally; typed values remain subject
-    // to the existing schema and Python-literal normalization rules.
-    std::vector<ParsedToolCall> prefix_calls;
-    const auto result = ParseQwenCall(
-        pending_.substr(0, frame_cursor_) + "</function></tool_call>", tools_,
-        &prefix_calls);
-    if (result.malformed_frames != 0 || prefix_calls.size() != 1)
-      return;
-    const auto& call = prefix_calls.front();
-    if (std::ranges::any_of(call.arguments,
-                            [&](const auto& arg) { return arg.name == name; }))
-      return;  // Repeated parameters are validated when the frame closes.
-    auto prefix = ArgumentsJson(call.arguments);
-    prefix.pop_back();
-    if (!call.arguments.empty())
-      prefix += ',';
-    prefix += json::Value(std::string(name)).dump() + ":\"";
-    if (preview_call_) {
-      if (preview_call_->name != call.name ||
-          !prefix.starts_with(preview_arguments_))
-        return;
-    } else {
-      preview_call_ = call;
-    }
-    ToolDelta(std::string_view(prefix).substr(preview_arguments_.size()));
-    parameter_cursor_ = start;
-    parameter_start_ = true;
-    stream_parameter_ = true;
-  }
-
-  void StreamQwenParameter(std::size_t end, bool complete) {
-    if (!stream_parameter_ || !connected_)
-      return;
-    if (parameter_start_) {
-      if (parameter_cursor_ == end ||
-          (!complete && end - parameter_cursor_ == 1 &&
-           pending_[parameter_cursor_] == '\r')) {
-        if (!complete)
-          return;
-      } else if (pending_[parameter_cursor_] == '\n') {
-        ++parameter_cursor_;
-      } else if (pending_.compare(parameter_cursor_, 2, "\r\n") == 0) {
-        parameter_cursor_ += 2;
-      }
-      parameter_start_ = false;
-    }
-    // Hold the possible framing newline and partial closing marker. This is
-    // exactly StripFramingNewlines, without revising any bytes already sent.
-    auto ready = end;
-    if (ready > parameter_cursor_ && pending_[ready - 1] == '\n') {
-      --ready;
-      if (ready > parameter_cursor_ && pending_[ready - 1] == '\r')
-        --ready;
-    } else if (!complete && ready > parameter_cursor_ &&
-               pending_[ready - 1] == '\r') {
-      --ready;
-    }
-    if (ready > parameter_cursor_) {
-      const auto escaped =
-          json::Value(
-              pending_.substr(parameter_cursor_, ready - parameter_cursor_))
-              .dump();
-      ToolDelta(std::string_view(escaped).substr(1, escaped.size() - 2));
-      parameter_cursor_ = ready;
-    }
-    if (complete) {
-      ToolDelta("\"");
-      stream_parameter_ = false;
-    }
   }
 
   void EmitFrame(std::string_view piece) {
@@ -1863,9 +1782,6 @@ private:
                          return undeclared;
                        }),
         parsed_.tool_calls.end());
-    if (preview_call_ && parsed_.tool_calls.size() == first + 1 &&
-        parsed_.tool_calls.back().name == preview_call_->name)
-      parsed_.tool_calls.back().id = preview_call_->id;
   }
 
   bool ScanFrame() {
@@ -1908,7 +1824,6 @@ private:
       const auto tail = std::string_view(pending_).substr(frame_cursor_);
       if (!parameter_end_.empty()) {
         if (tail.starts_with(parameter_end_)) {
-          StreamQwenParameter(frame_cursor_, true);
           frame_cursor_ += parameter_end_.size();
           parameter_end_.clear();
           continue;
@@ -1977,7 +1892,6 @@ private:
                                   : TypeHint{};
         parameter_json_ = !hint.PreferString();
         parameter_end_ = "</parameter>";
-        BeginQwenParameter(name, end + 1);
       } else if (tag.find("invoke") != std::string_view::npos ||
                  tag.find("parameter") != std::string_view::npos) {
         // DSML parameter quotes are raw text unless string="false".
@@ -2008,7 +1922,6 @@ private:
   ChatRequest::ToolChoice choice_;
   ToolFormat format_;
   EmitCallback emit_;
-  ToolCallback emit_tool_;
   State state_;
   core::Utf8Decoder decoder_;
   ParsedGeneration parsed_;
@@ -2016,17 +1929,12 @@ private:
   std::string_view marker_;
   std::string parameter_end_;
   std::optional<json::Value> schema_;
-  std::optional<ParsedToolCall> preview_call_;
-  std::string preview_arguments_;
   std::size_t frame_cursor_{0};
-  std::size_t parameter_cursor_{0};
   std::size_t code_ticks_{0};
   bool frame_attempted_{false};
   bool frame_separator_{false};
   bool json_body_{false};
   bool parameter_json_{false};
-  bool stream_parameter_{false};
-  bool parameter_start_{false};
   bool quoted_{false};
   bool escaped_{false};
   bool reasoning_start_{true};
@@ -2111,68 +2019,27 @@ public:
     return Emit(std::move(delta));
   }
 
-  bool FunctionArguments(const ParsedToolCall& call, std::string_view piece) {
-    auto* function = FindFunction(call.id);
-    if (!function) {
-      if (!CloseItem("completed"))
-        return false;
-      auto item = json::Value::object();
-      item["id"] = RandomId("fc_");
-      item["type"] = "function_call";
-      item["status"] = "in_progress";
-      item["call_id"] = call.id;
-      item["name"] = call.name;
-      item["arguments"] = "";
-      auto added = IndexedEvent("response.output_item.added");
-      added["item"] = item;
-      if (!Emit(std::move(added)))
-        return false;
-      functions_.push_back({std::move(item), {}, output_index_});
-      function = &functions_.back();
-      // Reserve the item's position; materialize its accumulated arguments
-      // once at the terminal event, rather than copying them on every token.
-      response_["output"].push_back();
-      ++output_index_;
-    }
-    if (piece.empty())
-      return connected_;
-    function->arguments.append(piece);
-    auto delta = IndexedEvent("response.function_call_arguments.delta");
-    delta["output_index"] = function->index;
-    delta["item_id"] = function->item.member_str("id");
-    delta["delta"] = std::string(piece);
-    return Emit(std::move(delta));
-  }
-
-  void ValidateFunctionCalls(std::span<const ParsedToolCall> calls,
-                             bool limited) const {
-    // Validate every preview before any call receives completion events. A
-    // discarded or changed preview cannot be retracted after streaming.
-    for (const auto& function : functions_) {
-      const auto call = std::ranges::find(
-          calls, function.item.member_str("call_id"), &ParsedToolCall::id);
-      if (call == calls.end()) {
-        if (!limited)
-          throw TextGenerationError(TextGenerationErrorCode::kMalformedToolCall,
-                                    "model interrupted a streamed tool call");
-      } else if (!ArgumentsJson(call->arguments)
-                      .starts_with(function.arguments)) {
-        throw TextGenerationError(TextGenerationErrorCode::kMalformedToolCall,
-                                  "tool arguments changed after streaming");
-      }
-    }
-  }
-
   bool FunctionCall(const ParsedToolCall& call) {
-    const auto arguments = ArgumentsJson(call.arguments);
-    const auto* preview = FindFunction(call.id);
-    const auto sent = preview ? preview->arguments.size() : 0;
-    if (!FunctionArguments(call, std::string_view(arguments).substr(sent)))
+    if (!CloseItem("completed"))
       return false;
-    auto& function = *FindFunction(call.id);
-    auto& item = function.item;
+    auto item = json::Value::object();
+    item["id"] = RandomId("fc_");
+    item["type"] = "function_call";
+    item["status"] = "in_progress";
+    item["call_id"] = call.id;
+    item["name"] = call.name;
+    item["arguments"] = "";
+    auto added = IndexedEvent("response.output_item.added");
+    added["item"] = item;
+    if (!Emit(std::move(added)))
+      return false;
+    const auto arguments = ArgumentsJson(call.arguments);
+    auto delta = IndexedEvent("response.function_call_arguments.delta");
+    delta["item_id"] = item.member_str("id");
+    delta["delta"] = arguments;
+    if (!Emit(std::move(delta)))
+      return false;
     auto done = IndexedEvent("response.function_call_arguments.done");
-    done["output_index"] = function.index;
     done["item_id"] = item.member_str("id");
     done["name"] = call.name;
     done["arguments"] = arguments;
@@ -2181,8 +2048,9 @@ public:
     item["arguments"] = arguments;
     item["status"] = "completed";
     auto completed = IndexedEvent("response.output_item.done");
-    completed["output_index"] = function.index;
     completed["item"] = item;
+    response_["output"].push_back(std::move(item));
+    ++output_index_;
     return Emit(std::move(completed));
   }
 
@@ -2190,7 +2058,6 @@ public:
     const bool limited =
         result.finish_reason == TextGenerationBackend::FinishReason::kLength;
     CloseItem(limited ? "incomplete" : "completed");
-    MaterializeFunctions(true);
     response_["status"] = limited ? "incomplete" : "completed";
     if (limited)
       response_["incomplete_details"]["reason"] = "max_output_tokens";
@@ -2210,7 +2077,6 @@ public:
   }
 
   bool Fail(std::string_view message) {
-    MaterializeFunctions(false);
     response_["status"] = "failed";
     // Responses defines a closed error-code enum. Keep the specific runtime
     // code in the request log, rather than emitting an invalid wire value.
@@ -2220,46 +2086,6 @@ public:
   }
 
 private:
-  struct FunctionItem {
-    json::Value item;
-    std::string arguments;
-    std::size_t index;
-  };
-
-  FunctionItem* FindFunction(std::string_view call_id) {
-    for (auto& function : functions_)
-      if (function.item.member_str("call_id") == call_id)
-        return &function;
-    return nullptr;
-  }
-
-  void MaterializeFunctions(bool finish_items) {
-    const auto& output = response_["output"];
-    // JSON arrays expose const elements. Replace the reserved positions while
-    // rebuilding once, preserving indices even when a call is interrupted.
-    auto resolved = json::Value::array();
-    for (std::size_t index = 0; index < output.size(); ++index) {
-      auto function =
-          std::ranges::find(functions_, index, &FunctionItem::index);
-      if (function == functions_.end()) {
-        resolved.push_back(output.items()[index]);
-        continue;
-      }
-      if (function->item.member_str("status") != "completed") {
-        function->item["status"] = "incomplete";
-        function->item["arguments"] = function->arguments;
-        if (finish_items) {
-          auto done = IndexedEvent("response.output_item.done");
-          done["output_index"] = index;
-          done["item"] = function->item;
-          Emit(std::move(done));
-        }
-      }
-      resolved.push_back(function->item);
-    }
-    response_["output"] = std::move(resolved);
-  }
-
   json::Value IndexedEvent(std::string_view type) const {
     auto event = json::Value::object();
     event["type"] = std::string(type);
@@ -2334,7 +2160,6 @@ private:
   HttpResponse::BodyWriter writer_;
   json::Value response_;
   json::Value item_;
-  std::vector<FunctionItem> functions_;
   std::string text_;
   std::size_t sequence_{0};
   std::size_t output_index_{0};
@@ -2421,9 +2246,14 @@ HttpResponse StreamingResponse(
           [request, generation = std::move(generation), id, created, model,
            initial_output_state,
            stream_log](const HttpResponse::BodyWriter& writer) {
+            auto last_write = StreamClock::now();
+            const HttpResponse::BodyWriter write = [&](std::string_view piece) {
+              last_write = StreamClock::now();
+              return writer(piece);
+            };
             json::Value role_delta = json::Value::object();
             role_delta["role"] = "assistant";
-            if (!writer(Sse(
+            if (!write(Sse(
                     ChoiceChunk(id, created, model, std::move(role_delta))))) {
               generation->Cancel();
               return;
@@ -2443,14 +2273,18 @@ HttpResponse StreamingResponse(
                   } else {
                     delta["content"] = std::string(text);
                   }
-                  connected = writer(
+                  connected = write(
                       Sse(ChoiceChunk(id, created, model, std::move(delta))));
                   return connected;
                 });
 
             try {
               const auto result = generation->Wait([&](std::string_view piece) {
-                return connected && filter.Push(piece);
+                connected = connected && filter.Push(piece) &&
+                            KeepAlive(write, last_write);
+                if (!connected)
+                  generation->Cancel();
+                return connected;
               });
               stream_log->details = GenerationLogDetails(result);
               RecordServerMetrics(result);
@@ -2481,7 +2315,7 @@ HttpResponse StreamingResponse(
                 item["function"] = std::move(function);
                 tool_calls.push_back(std::move(item));
                 delta["tool_calls"] = std::move(tool_calls);
-                if (!writer(Sse(
+                if (!write(Sse(
                         ChoiceChunk(id, created, model, std::move(delta))))) {
                   return;
                 }
@@ -2495,7 +2329,7 @@ HttpResponse StreamingResponse(
               // of the optional OpenAI usage chunk. Proxies need these even
               // when a client does not request stream_options.include_usage.
               terminal_chunk["timings"] = GenerationTimings(result);
-              if (!writer(Sse(terminal_chunk))) {
+              if (!write(Sse(terminal_chunk))) {
                 return;
               }
               if (request.include_usage) {
@@ -2503,11 +2337,11 @@ HttpResponse StreamingResponse(
                 usage_chunk["choices"] = json::Value::array();
                 usage_chunk["usage"] = Usage(result);
                 usage_chunk["timings"] = GenerationTimings(result);
-                if (!writer(Sse(usage_chunk))) {
+                if (!write(Sse(usage_chunk))) {
                   return;
                 }
               }
-              (void)writer("data: [DONE]\n\n");
+              (void)write("data: [DONE]\n\n");
             } catch (const TextGenerationError& exception) {
               stream_log->error_code = exception.stable_code();
               json::Value error = json::Value::object();
@@ -2516,8 +2350,8 @@ HttpResponse StreamingResponse(
               detail["type"] = "server_error";
               detail["code"] = exception.stable_code();
               error["error"] = std::move(detail);
-              stream_log->error_event_sent = writer(Sse(error));
-              (void)writer("data: [DONE]\n\n");
+              stream_log->error_event_sent = write(Sse(error));
+              (void)write("data: [DONE]\n\n");
             } catch (const std::exception&) {
               stream_log->error_code = "generation_failed";
               json::Value error = json::Value::object();
@@ -2526,8 +2360,8 @@ HttpResponse StreamingResponse(
               detail["type"] = "server_error";
               detail["code"] = "generation_failed";
               error["error"] = std::move(detail);
-              stream_log->error_event_sent = writer(Sse(error));
-              (void)writer("data: [DONE]\n\n");
+              stream_log->error_event_sent = write(Sse(error));
+              (void)write("data: [DONE]\n\n");
             }
           },
       .stream_log = std::move(stream_log),
@@ -2706,35 +2540,34 @@ HttpResponse CreateOpenAiResponse(const HttpRequest& request,
   const auto run = [generation, initial, model = backend.model_id(), stream_log,
                     timing, chat, parallel_tool_calls](
                        const HttpResponse::BodyWriter& writer) {
-    ResponsesOutput output(model, chat, parallel_tool_calls, writer);
+    auto last_write = StreamClock::now();
+    const HttpResponse::BodyWriter write = [&](std::string_view piece) {
+      last_write = StreamClock::now();
+      return writer(piece);
+    };
+    ResponsesOutput output(model, chat, parallel_tool_calls,
+                           writer ? write : HttpResponse::BodyWriter{});
     if (!output.Begin()) {
       generation->Cancel();
       return json::Value();
     }
-    GeneratedTextParser::ToolCallback emit_tool;
-    if (writer) {
-      emit_tool = [&](const ParsedToolCall& call, std::string_view delta) {
-        if (output.FunctionArguments(call, delta))
-          return true;
-        generation->Cancel();
-        return false;
-      };
-    }
-    GeneratedTextParser filter(
-        initial, generation->tool_format(), chat.tools, chat.tool_choice,
-        [&](std::string_view piece, bool reasoning) {
-          if (output.Append(piece, reasoning))
-            return true;
-          generation->Cancel();
-          return false;
-        },
-        std::move(emit_tool));
+    GeneratedTextParser filter(initial, generation->tool_format(), chat.tools,
+                               chat.tool_choice,
+                               [&](std::string_view piece, bool reasoning) {
+                                 if (output.Append(piece, reasoning))
+                                   return true;
+                                 generation->Cancel();
+                                 return false;
+                               });
     try {
-      const auto result = writer
-                              ? generation->Wait([&](std::string_view piece) {
-                                  return filter.Push(piece);
-                                })
-                              : generation->Wait();
+      const auto result =
+          writer ? generation->Wait([&](std::string_view piece) {
+            if (filter.Push(piece) && KeepAlive(write, last_write))
+              return true;
+            generation->Cancel();
+            return false;
+          })
+                 : generation->Wait();
       stream_log->details = GenerationLogDetails(result);
       RecordServerMetrics(result);
       if (!writer) {
@@ -2759,9 +2592,7 @@ HttpResponse CreateOpenAiResponse(const HttpRequest& request,
         throw TextGenerationError(
             TextGenerationErrorCode::kToolChoiceUnsatisfied,
             "model produced multiple calls with 'parallel_tool_calls' false");
-      output.ValidateFunctionCalls(
-          generated.tool_calls,
-          result.finish_reason == TextGenerationBackend::FinishReason::kLength);
+      // Publish tools only after all parsing and policy checks have succeeded.
       for (const auto& call : generated.tool_calls) {
         if (!output.FunctionCall(call)) {
           generation->Cancel();

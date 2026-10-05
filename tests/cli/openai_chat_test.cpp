@@ -1,5 +1,6 @@
 #include "src/cli/serve/openai_chat.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -1923,6 +1924,8 @@ std::vector<gufo::json::Value> ResponseEvents(
     const gufo::server::HttpResponse& response) {
   std::vector<gufo::json::Value> events;
   response.streaming_body([&](std::string_view chunk) {
+    if (chunk.starts_with(":"))
+      return true;
     const auto begin = chunk.find("\ndata: ");
     Expect(begin != std::string::npos, "Responses events contain data");
     auto event = gufo::json::parse(chunk.substr(begin + 7));
@@ -2205,7 +2208,7 @@ void TestResponsesFunctionTools() {
   }
 }
 
-void TestResponsesStreamingFileArguments() {
+void TestResponsesBufferedFileArguments() {
   using gufo::json::parse;
   const auto chat = ResponseChat(parse(R"({"input":"write a file","tools":[
     {"type":"function","name":"write_file","parameters":{"type":"object",
@@ -2237,7 +2240,7 @@ void TestResponsesStreamingFileArguments() {
       std::string arguments;
       std::string item_id;
       std::string call_id;
-      std::size_t live_deltas = 0;
+      std::size_t deltas = 0;
       bool terminal = false;
       response.streaming_body([&](std::string_view chunk) {
         const auto start = chunk.find("data: ");
@@ -2245,15 +2248,19 @@ void TestResponsesStreamingFileArguments() {
         const auto type = event.member_str("type");
         if (type == "response.output_item.added") {
           const auto& item = *event.find("item");
+          Expect(backend.completed.load(),
+                 "Tool items are not published before generation completes");
           item_id = item.member_str("id");
           call_id = item.member_str("call_id");
         } else if (type == "response.function_call_arguments.delta") {
           arguments += event.member_str("delta");
-          live_deltas += !backend.completed.load();
+          ++deltas;
+          Expect(backend.completed.load(),
+                 "Tool arguments are buffered until generation completes");
           Expect(event.member_str("item_id") == item_id &&
                      event.member_size("output_index") == 0 &&
                      expected.dump().starts_with(arguments),
-                 "Live file arguments retain their identity and exact JSON "
+                 "Buffered file arguments retain their identity and exact JSON "
                  "prefix");
         } else if (type == "response.function_call_arguments.done") {
           Expect(
@@ -2271,8 +2278,8 @@ void TestResponsesStreamingFileArguments() {
         }
         return true;
       });
-      Expect(terminal && live_deltas > 2,
-             "File argument deltas arrive before generation finishes");
+      Expect(terminal && deltas == 1,
+             "File arguments are published once after validation finishes");
     }
   }
 
@@ -2282,24 +2289,20 @@ void TestResponsesStreamingFileArguments() {
     FakeBackend backend;
     backend.pieces = {prefix, std::string(4096, 'x')};
     backend.finish_reason = finish;
+    auto optional = chat;
+    optional.tool_choice = gufo::server::ChatRequest::ToolChoice::kAuto;
     const auto response = gufo::server::CreateOpenAiResponse(
-        Request("{}"), backend, chat, 0, {}, true);
+        Request("{}"), backend, optional, 0, {}, true);
     const auto events = ResponseEvents(response);
     Expect(events.back().member_str("type") == (finish == Finish::kLength
                                                     ? "response.incomplete"
-                                                    : "response.failed"),
-           "Interrupted streamed calls cannot become completed responses");
+                                                    : "response.completed") &&
+               events.back().find("response")->find("output")->items().empty(),
+           "Unfinished calls are discarded without publishing a tool preview");
     for (const auto& event : events)
-      Expect(
-          event.member_str("type") != "response.function_call_arguments.done" &&
-              (!event.find("item") ||
-               event.find("item")->member_str("status") != "completed"),
-          "Interrupted file contents never receive tool completion proof");
-    const auto& item =
-        events.back().find("response")->find("output")->items()[0];
-    Expect(item.member_str("status") == "incomplete" &&
-               !item.member_str("arguments").ends_with("}"),
-           "Interrupted previews remain explicitly incomplete JSON");
+      Expect(!event.member_str("type").starts_with(
+                 "response.function_call_arguments."),
+             "Partial file contents never enter the tool stream");
   }
 
   for (const bool conflicting_duplicate : {false, true}) {
@@ -2335,65 +2338,169 @@ void TestResponsesStreamingFileArguments() {
            std::string::npos;
   });
   Expect(
-      !terminal && !disconnected.completed.load(),
-      "Disconnect during live file arguments cancels generation immediately");
+      !terminal && disconnected.completed.load(),
+      "Disconnect while publishing a validated call stops completion events");
 }
 
-void TestResponsesPreviewValidationBeforeCompletion() {
+void TestResponsesToolRecoveryBeforePublication() {
   using gufo::json::parse;
-  const auto chat = ResponseChat(parse(R"({"input":"write a file","tools":[
+  const auto body = parse(R"({"input":"write a file","tools":[
     {"type":"function","name":"write_file","parameters":{"type":"object",
-      "properties":{"content":{"type":"string"}}}}]})"));
+      "properties":{"content":{"type":"string"}}}}],"tool_choice":"required"})");
+  const auto chat = ResponseChat(body);
   const std::string prefix =
       "<tool_call><function=write_file><parameter=content>";
   const std::string call = prefix + "valid</parameter></function></tool_call>";
   using Finish = gufo::server::TextGenerationBackend::FinishReason;
-  for (const auto& raw :
-       {prefix + "abandoned" + call, call + prefix + "unfinished",
-        call + prefix + "abandoned" + call}) {
-    for (const auto finish : {Finish::kStop, Finish::kStopSequence}) {
+  const std::vector<std::pair<std::string, std::size_t>> cases{
+      {prefix + "abandoned" + call, 1},
+      {call + prefix + "unfinished", 1},
+      {call + prefix + "abandoned" + call, 2}};
+  for (const auto& [raw, count] : cases) {
+    for (const auto finish :
+         {Finish::kStop, Finish::kStopSequence, Finish::kLength}) {
       for (const bool byte_chunks : {false, true}) {
-        FakeBackend backend;
-        backend.finish_reason = finish;
-        if (byte_chunks) {
-          for (char byte : raw)
-            backend.pieces.emplace_back(1, byte);
-        } else {
-          backend.pieces = {raw};
+        for (const bool stream : {false, true}) {
+          FakeBackend backend;
+          backend.format = FakeBackend::ToolFormat::kQwen;
+          backend.finish_reason = finish;
+          if (byte_chunks) {
+            for (char byte : raw)
+              backend.pieces.emplace_back(1, byte);
+          } else {
+            backend.pieces = {raw};
+          }
+          const auto response = gufo::server::CreateOpenAiResponse(
+              Request("{}"), backend, chat, 0, {}, stream);
+          const auto events = stream ? ResponseEvents(response)
+                                     : std::vector<gufo::json::Value>{};
+          const auto result =
+              stream ? *events.back().find("response") : parse(response.body);
+          const auto& output = result.find("output")->items();
+          Expect(result.member_str("status") == (finish == Finish::kLength
+                                                     ? "incomplete"
+                                                     : "completed") &&
+                     output.size() == count,
+                 "Recovery publishes only validated calls in both Responses "
+                 "modes");
+          std::vector<std::string> ids;
+          for (const auto& item : output) {
+            const auto id = item.member_str("call_id");
+            Expect(
+                item.member_str("type") == "function_call" &&
+                    item.member_str("status") == "completed" &&
+                    parse(item.member_str("arguments")).member_str("content") ==
+                        "valid" &&
+                    std::find(ids.begin(), ids.end(), id) == ids.end(),
+                "Recovered calls have exact arguments and distinct identities");
+            ids.emplace_back(id);
+          }
+          auto followup = body;
+          followup["input"] = *result.find("output");
+          for (const auto& id : ids) {
+            auto tool_result =
+                parse(R"({"type":"function_call_output","output":"saved"})");
+            tool_result["call_id"] = id;
+            followup["input"].push_back(std::move(tool_result));
+          }
+          const auto continued = ResponseChat(followup);
+          Expect(continued.messages[0].tool_calls.size() == count &&
+                     continued.messages.size() == count + 1,
+                 "Recovered calls replay with matching tool results");
+          std::size_t done = 0;
+          for (const auto& event : events)
+            done += event.member_str("type") ==
+                    "response.function_call_arguments.done";
+          Expect(!stream || done == count,
+                 "Each recovered call is completed exactly once");
         }
-        const auto response = gufo::server::CreateOpenAiResponse(
-            Request("{}"), backend, chat, 0, {}, true);
-        const auto events = ResponseEvents(response);
-        Expect(events.back().member_str("type") == "response.failed",
-               "An abandoned live preview fails the response");
-        for (const auto& event : events) {
-          const auto* item = event.find("item");
-          Expect(event.member_str("type") !=
-                         "response.function_call_arguments.done" &&
-                     (!item || item->member_str("type") != "function_call" ||
-                      item->member_str("status") != "completed"),
-                 "Preview validation fails before any tool can complete");
-        }
-        for (const auto& item :
-             events.back().find("response")->find("output")->items())
-          Expect(item.member_str("status") == "incomplete",
-                 "Failed preview validation leaves no completed tool items");
       }
     }
   }
 
-  FakeBackend limited;
-  limited.finish_reason = Finish::kLength;
-  limited.pieces = {call, prefix + "unfinished"};
+  // A later malformed *complete* frame must fail before the earlier valid call
+  // is published. Recovering an unfinished frame is not permission to repair
+  // it.
+  FakeBackend malformed;
+  malformed.pieces = {call, prefix +
+                                "one</parameter><parameter=content>two"
+                                "</parameter></function></tool_call>"};
   const auto response = gufo::server::CreateOpenAiResponse(
-      Request("{}"), limited, chat, 0, {}, true);
+      Request("{}"), malformed, chat, 0, {}, true);
   const auto events = ResponseEvents(response);
-  const auto& output = events.back().find("response")->find("output")->items();
-  Expect(events.back().member_str("type") == "response.incomplete" &&
-             output.size() == 2 &&
-             output[0].member_str("status") == "completed" &&
-             output[1].member_str("status") == "incomplete",
-         "A token limit retains complete calls beside an incomplete preview");
+  Expect(events.back().member_str("type") == "response.failed" &&
+             events.back().find("response")->find("output")->items().empty(),
+         "A malformed complete call fails before any tools are published");
+}
+
+void TestBufferedToolKeepAlive() {
+  const auto body = gufo::json::parse(R"({"input":"write a file","tools":[
+    {"type":"function","name":"write_file","parameters":{"type":"object",
+      "properties":{"content":{"type":"string"}}}}],"tool_choice":"required"})");
+  const auto chat = ResponseChat(body);
+  // Run both APIs and the disconnect controls concurrently: one bounded wait
+  // exercises the actual interval without exposing a test-only API setting.
+  std::vector<std::jthread> workers;
+  for (const bool responses : {false, true}) {
+    for (const bool disconnect : {false, true}) {
+      workers.emplace_back([&, responses, disconnect] {
+        FakeBackend backend;
+        backend.pieces = {"<tool_call><function=write_file><parameter=content>",
+                          "file contents",
+                          "</parameter></function></tool_call>"};
+        std::size_t pieces = 0;
+        backend.after_piece = [&] {
+          if (++pieces == 1)
+            std::this_thread::sleep_for(10100ms);
+        };
+        auto request = body;
+        request["model"] = "test-model";
+        request["messages"] =
+            gufo::json::parse(R"([{"role":"user","content":"write a file"}])");
+        request["stream"] = true;
+        const auto response =
+            responses ? gufo::server::CreateOpenAiResponse(
+                            Request("{}"), backend, chat, 0, {}, true)
+                      : gufo::server::HandleOpenAiChat(Request(request.dump()),
+                                                       backend);
+        Expect(response.status == 200 &&
+                   static_cast<bool>(response.streaming_body),
+               response.body);
+        std::size_t keepalives = 0;
+        std::string output;
+        response.streaming_body([&](std::string_view chunk) {
+          output.append(chunk);
+          if (chunk.starts_with(":")) {
+            Expect(chunk == ": keep-alive\n\n" && !backend.completed.load(),
+                   "Buffered generation sends only a live SSE comment");
+            ++keepalives;
+            return !disconnect;
+          }
+          if (chunk.find("function_call") != std::string_view::npos ||
+              chunk.find("\"tool_calls\":[") != std::string_view::npos)
+            Expect(backend.completed.load(),
+                   "Keepalives do not publish unvalidated tool data");
+          return true;
+        });
+        Expect(keepalives == 1,
+               "Each actively buffered stream receives a transport keepalive");
+        if (disconnect) {
+          Expect(
+              !backend.completed.load() && pieces == 1 &&
+                  output.find("function_call_arguments") == std::string::npos &&
+                  output.find("[DONE]") == std::string::npos &&
+                  output.find("response.completed") == std::string::npos,
+              "A failed keepalive write cancels generation before later "
+              "pieces");
+        } else {
+          Expect(backend.completed.load() && pieces == 3 &&
+                     output.find(responses ? "response.completed" : "[DONE]") !=
+                         std::string::npos,
+                 "Buffered generation finishes normally after its keepalive");
+        }
+      });
+    }
+  }
 }
 
 void TestResponsesToolValidationAndFailure() {
@@ -3239,8 +3346,9 @@ int main() {
   TestResponsesImages();
   TestResponsesReasoningRequests();
   TestResponsesFunctionTools();
-  TestResponsesStreamingFileArguments();
-  TestResponsesPreviewValidationBeforeCompletion();
+  TestResponsesBufferedFileArguments();
+  TestResponsesToolRecoveryBeforePublication();
+  TestBufferedToolKeepAlive();
   TestResponsesToolValidationAndFailure();
   TestResponsesLiveAndCancellation();
   TestCachePromptOption();
