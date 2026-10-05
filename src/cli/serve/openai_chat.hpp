@@ -8,8 +8,7 @@
 namespace gufo::server {
 
 /// Shared effort names; each API applies its own thinking and alias rules.
-std::optional<ReasoningEffort> ParseReasoningEffortName(
-    std::string_view value);
+std::optional<ReasoningEffort> ParseReasoningEffortName(std::string_view value);
 
 /// Handles the supported OpenAI Chat Completions subset. Streaming responses
 /// consume scheduler-published token pieces from HttpResponse::streaming_body;
