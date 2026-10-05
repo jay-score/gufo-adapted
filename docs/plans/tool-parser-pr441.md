@@ -60,9 +60,11 @@ python tools/ci/check-format.py
 ```
 
 Changed C++ files pass clang-format 21.1.8; documentation and `git diff --check`
-pass. The required whole-tree format check fails on two inherited violations,
+pass. The initial whole-tree format check failed on two inherited violations,
 `src/cli/serve/http_server.cpp:522` and `src/cli/serve/openai_chat.hpp:11`.
-Both failures were reproduced from the pinned base and left outside this change.
+Both failures were reproduced from the pinned base. A separate formatting-only
+cleanup subsequently joined the two wrapped lines; the full clang-format 21.1.8
+check then passed for all 485 C++ files.
 Linux CPU/repository CI has not been run.
 
 ## Production GPU qualification
@@ -72,7 +74,7 @@ The production executable was built with `tools/windows/build.ps1 -Target gufo
 `8f497e0992fb7513f7f78a6f6b6f1056c375e961`, MSVC headers/SDK, CMake 4.4.0,
 Ninja 1.12.0 and the existing manifest dependencies. Runtime DLLs and kernel
 directories were staged beside it. The tested candidate reports
-`gufo version d7136e78b7d4`; this validation record changes documentation only.
+`gufo version d7136e78b7d4`; GPU checks preceded the separate whitespace cleanup.
 
 The baseline reports `gufo version 80076e5b909c`. Its source and build inputs
 are identical to the reviewed fork base; the intervening commits change docs:

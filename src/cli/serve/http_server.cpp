@@ -519,8 +519,7 @@ std::optional<HttpResponse> ReadCompatibilityOptions(
                       field == "parallel_tool_calls" || field == "reasoning" ||
                       field == "include"))
       continue;
-    if (messages_reasoning &&
-        (field == "thinking" || field == "output_config"))
+    if (messages_reasoning && (field == "thinking" || field == "output_config"))
       continue;
     if (field != stop_field && body.contains(field)) {
       return InvalidCompatibilityRequest("request field '" + field +

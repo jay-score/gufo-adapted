@@ -106,8 +106,9 @@ Use this entry format:
   `openai_chat_test` and `http_server_test` pass after adaptation, covering both
   APIs, buffered/streamed output, every two-piece split and byte-wise chunks,
   LF/CRLF and empty strings. Changed C++ files pass clang-format 21.1.8;
-  the full formatting check reports two inherited violations in
+  the initial full formatting check found two inherited violations in
   `http_server.cpp` and `openai_chat.hpp`, reproduced from the pinned base.
+  A separate whitespace cleanup resolved both; all 485 C++ files now pass.
   Documentation checks pass. Final
   [qualification](docs/plans/tool-parser-pr441.md) records the production build,
   exact GPU numerical equality and AR/MTP tool/replay checks. The model omitted
