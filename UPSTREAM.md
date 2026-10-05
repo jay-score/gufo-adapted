@@ -36,6 +36,31 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-05 — Sampling block-skip for unselectable vocabulary ranges
+
+- Source: [gufo-org/gufo@b945d0afdb26e4b790b8cb260762105e167ee1a3](https://github.com/gufo-org/gufo/commit/b945d0afdb26e4b790b8cb260762105e167ee1a3)
+  (#415).
+- Local: e8074c37 (`git cherry-pick -x` with manual conflict resolution).
+- Adaptation: `BlockMaximum`/`kSkipBlock` and the `PrepareSelected` refactor
+  (block-skipped top-k heap, shared penalty walk, full-sort/top-p
+  consolidation) imported verbatim. `SampleGreedy` keeps the fork's
+  `AdjustedLogit` per-index path instead of upstream's inline penalty walk;
+  the block-skip gate still uses the sorted penalty iterator, which is exact
+  because unpenalized blocks satisfy `adjusted == (double)logit` and ties
+  never replace the earlier token. Test includes keep the fork's `<numeric>`
+  and `<random>` alongside upstream's `<span>`. Fork's constraint removal and
+  `DistributionFromTop`/`FinishSelected` split are untouched.
+- Areas: `src/core/sampling.cpp`, `tests/cli/logit_sampler_test.cpp`.
+- Validation: Windows `cpu-test` builds clean; `logit_sampler_test` passes
+  including the new `TestBlockSkippedTopKAgainstFullSort` (70k-row reference
+  comparison across five configs with penalties and non-finite entries);
+  `text_generation_scheduler_test` (relinked against the changed core lib)
+  and `qwen38_flash_next.mtp_sampling` pass. `check-format.py` unrun — no
+  repo-compatible `clang-format` on PATH. Linux `pr` suite and real-model
+  full-logit/perplexity comparison unrun; the change is selection-identical
+  by construction plus CPU equivalence coverage.
+- Status: retained.
+
 ### 2026-10-05 — Reclaim output capacity from abandoned streams
 
 - Source: [gufo-org/gufo@d85fb0fcd3fb906ea845f6e1404222d686b74e07](https://github.com/gufo-org/gufo/commit/d85fb0fcd3fb906ea845f6e1404222d686b74e07)
