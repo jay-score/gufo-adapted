@@ -259,8 +259,7 @@ struct Uploader {
     if (t.type == core::GgmlType::kF32) {
       return Copy(t);
     }
-    if ((t.type != core::GgmlType::kF16 &&
-         t.type != core::GgmlType::kBF16) ||
+    if ((t.type != core::GgmlType::kF16 && t.type != core::GgmlType::kBF16) ||
         t.experts != 1) {
       Fail("tensor " + std::string(t.name) + " has an unsupported format");
       return d;
@@ -286,7 +285,8 @@ struct Uploader {
         std::memcpy(&host[i], &bits, sizeof(bits));
       }
     }
-    if (hipMemcpy(ptr, host.data(), size, hipMemcpyHostToDevice) != hipSuccess ||
+    if (hipMemcpy(ptr, host.data(), size, hipMemcpyHostToDevice) !=
+            hipSuccess ||
         hipMemset(static_cast<std::uint8_t*>(ptr) + size, 0, kTailMargin) !=
             hipSuccess) {
       Fail("upload failed for " + std::string(t.name));

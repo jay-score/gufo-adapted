@@ -124,18 +124,17 @@ struct Binder {
     m.norm = Get(prefix + "_norm.weight", hc_dim, 1, 1, {GgmlType::kF32});
     // Dense projections: Q8_0/BF16/F16/F32 run natively; K-quants and I-quants
     // (Swift IQ4_XS dense) are re-encoded to Q8_0 at upload.
-    const auto mixer_dense = {GgmlType::kQ8_0,   GgmlType::kBF16,
-                              GgmlType::kF16,    GgmlType::kF32,
-                              GgmlType::kQ4_K,   GgmlType::kQ5_K,
-                              GgmlType::kQ6_K,   GgmlType::kQ5_1,
-                              GgmlType::kIQ3_S,  GgmlType::kIQ4_XS,
-                              GgmlType::kIQ4_NL};
-    m.down = Get(prefix + "_down.weight", hc_dim, c.hc_low_rank, 1, mixer_dense);
+    const auto mixer_dense = {
+        GgmlType::kQ8_0,  GgmlType::kBF16,   GgmlType::kF16,   GgmlType::kF32,
+        GgmlType::kQ4_K,  GgmlType::kQ5_K,   GgmlType::kQ6_K,  GgmlType::kQ5_1,
+        GgmlType::kIQ3_S, GgmlType::kIQ4_XS, GgmlType::kIQ4_NL};
+    m.down =
+        Get(prefix + "_down.weight", hc_dim, c.hc_low_rank, 1, mixer_dense);
     m.up = Get(prefix + "_up.weight", c.hc_low_rank, hc_dim, 1, mixer_dense);
     if (with_inject) {
-      m.inject = Get(prefix + "_inject.weight", hc_dim, c.hc_count, 1,
-                     {GgmlType::kF32, GgmlType::kQ8_0, GgmlType::kBF16,
-                      GgmlType::kF16});
+      m.inject = Get(
+          prefix + "_inject.weight", hc_dim, c.hc_count, 1,
+          {GgmlType::kF32, GgmlType::kQ8_0, GgmlType::kBF16, GgmlType::kF16});
     }
     return m;
   }
@@ -165,9 +164,9 @@ struct Binder {
           Get(p + "attn_qkv.weight", hidden, c.SsmConvChannels(), 1, dense);
       l.ssm_gate =
           Get(p + "attn_gate.weight", hidden, c.SsmValueDim(), 1, dense);
-      l.ssm_conv1d = Get(p + "ssm_conv1d.weight", c.ssm_conv_kernel,
-                         c.SsmConvChannels(), 1,
-                         {GgmlType::kF32, GgmlType::kF16, GgmlType::kBF16});
+      l.ssm_conv1d =
+          Get(p + "ssm_conv1d.weight", c.ssm_conv_kernel, c.SsmConvChannels(),
+              1, {GgmlType::kF32, GgmlType::kF16, GgmlType::kBF16});
       l.ssm_alpha = Get(p + "ssm_alpha.weight", hidden, c.ssm_num_v_heads, 1,
                         {GgmlType::kF32, GgmlType::kBF16, GgmlType::kQ8_0});
       l.ssm_beta = Get(p + "ssm_beta.weight", hidden, c.ssm_num_v_heads, 1,
