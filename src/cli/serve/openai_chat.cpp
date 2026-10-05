@@ -1113,11 +1113,33 @@ struct ToolParsing {
   std::size_t malformed_frames{0};
 };
 
+enum class ParameterEndMatch { kData, kPrefix, kDelimiter };
+
+ParameterEndMatch MatchQwenParameterEnd(std::string_view text,
+                                        std::size_t position, bool canonical) {
+  constexpr std::string_view close = "</parameter>";
+  if (canonical && (position == 0 || text[position - 1] != '\n'))
+    return ParameterEndMatch::kData;
+  auto tail = text.substr(position);
+  if (!tail.starts_with(close))
+    return close.starts_with(tail) ? ParameterEndMatch::kPrefix
+                                   : ParameterEndMatch::kData;
+  if (!canonical)
+    return ParameterEndMatch::kDelimiter;
+  tail.remove_prefix(close.size());
+  if (tail.starts_with('\n') || tail.starts_with("\r\n"))
+    return ParameterEndMatch::kDelimiter;
+  return tail.empty() || tail == "\r" ? ParameterEndMatch::kPrefix
+                                      : ParameterEndMatch::kData;
+}
+
 ToolParsing ParseQwenCall(std::string_view frame,
                           std::span<const tokenization::ChatTool> tools,
                           std::vector<ParsedToolCall>* calls) {
   constexpr std::string_view start = "<tool_call>";
   constexpr std::string_view end = "</tool_call>";
+  bool canonical_parameters = frame.starts_with("<tool_call>\n<function=") ||
+                              frame.starts_with("<tool_call>\r\n<function=");
   // Framing/recovery belongs to the incremental scanner. A rejected payload
   // cannot promote an example inside its argument string to a second call.
   ToolParsing parsing{.malformed_frames = 1};
@@ -1157,14 +1179,26 @@ ToolParsing ParseQwenCall(std::string_view frame,
       }
       const std::string name(Trim(body.substr(0, name_end)));
       body.remove_prefix(name_end + 1);
+      canonical_parameters &=
+          body.starts_with('\n') || body.starts_with("\r\n");
       std::size_t budget = 128;
       const auto hint =
           schema ? ResolveDeclaredTypes(*schema, *schema, name, {}, &budget)
                  : TypeHint{};
       const bool is_string = hint.PreferString();
       // Outer closing tags inside a parameter are data, not structure.
-      const auto close = is_string ? body.find("</parameter>")
-                                   : FindUnquoted(body, "</parameter>");
+      auto close = is_string ? body.find("</parameter>")
+                             : FindUnquoted(body, "</parameter>");
+      // Canonical Qwen framing owns both surrounding newlines. Apparent
+      // closing tags followed by text on the same line remain argument data.
+      while (close != std::string_view::npos &&
+             MatchQwenParameterEnd(body, close, canonical_parameters) !=
+                 ParameterEndMatch::kDelimiter) {
+        const auto next =
+            is_string ? body.substr(close + 1).find("</parameter>")
+                      : FindUnquoted(body.substr(close + 1), "</parameter>");
+        close = next == std::string_view::npos ? next : close + 1 + next;
+      }
       const auto nested =
           is_string ? body.find(start) : FindUnquoted(body, start);
       if (close == std::string_view::npos || nested < close || name.empty()) {
@@ -1748,6 +1782,7 @@ private:
     json_body_ = false;
     quoted_ = false;
     escaped_ = false;
+    canonical_parameters_ = false;
     parameter_end_.clear();
     schema_.reset();
   }
@@ -1824,14 +1859,21 @@ private:
       }
       const auto tail = std::string_view(pending_).substr(frame_cursor_);
       if (!parameter_end_.empty()) {
-        if (tail.starts_with(parameter_end_)) {
+        const auto match =
+            marker_ == "<tool_call>"
+                ? MatchQwenParameterEnd(pending_, frame_cursor_,
+                                        canonical_parameters_)
+            : tail.starts_with(parameter_end_) ? ParameterEndMatch::kDelimiter
+            : parameter_end_.starts_with(tail) ? ParameterEndMatch::kPrefix
+                                               : ParameterEndMatch::kData;
+        if (match == ParameterEndMatch::kDelimiter) {
           frame_cursor_ += parameter_end_.size();
           parameter_end_.clear();
           continue;
         }
         constexpr std::string_view qwen_start = "<tool_call>";
         const bool qwen = marker_ == qwen_start;
-        if (parameter_end_.starts_with(tail) ||
+        if (match == ParameterEndMatch::kPrefix ||
             (qwen && qwen_start.starts_with(tail)))
           return false;
         if (!qwen || !tail.starts_with(qwen_start)) {
@@ -1879,6 +1921,9 @@ private:
       }
       if (tag.starts_with("<function=")) {
         frame_attempted_ = true;
+        canonical_parameters_ =
+            pending_.starts_with("<tool_call>\n<function=") ||
+            pending_.starts_with("<tool_call>\r\n<function=");
         const auto name = Trim(tag.substr(10, tag.size() - 11));
         for (const auto& tool : tools_)
           if (tool.name == name) {
@@ -1886,6 +1931,12 @@ private:
             break;
           }
       } else if (tag.starts_with("<parameter=")) {
+        // Wait for the value's opening newline before deciding its framing.
+        const auto value = std::string_view(pending_).substr(end + 1);
+        if (canonical_parameters_ && (value.empty() || value == "\r"))
+          return false;
+        canonical_parameters_ &=
+            value.starts_with('\n') || value.starts_with("\r\n");
         const auto name = Trim(tag.substr(11, tag.size() - 12));
         std::size_t budget = 128;
         const auto hint = schema_ ? ResolveDeclaredTypes(*schema_, *schema_,
@@ -1938,6 +1989,7 @@ private:
   bool parameter_json_{false};
   bool quoted_{false};
   bool escaped_{false};
+  bool canonical_parameters_{false};
   bool reasoning_start_{true};
   bool trim_separator_{false};
   bool malformed_{false};

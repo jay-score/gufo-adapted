@@ -36,6 +36,32 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-05 — Canonical Qwen parameter delimiters
+
+- Source: [gufo-org/gufo@b45567a918b281bdce63e80dec3e6184ccdb9c25](https://github.com/gufo-org/gufo/commit/b45567a918b281bdce63e80dec3e6184ccdb9c25)
+  (PR #441; final merge
+  [21d6e64f137f6bcbc5a8bf63f900cab648188df7](https://github.com/gufo-org/gufo/commit/21d6e64f137f6bcbc5a8bf63f900cab648188df7)).
+- Local: commit introducing this entry.
+- Adaptation: the consolidated incremental scanner and argument decoder share
+  complete canonical delimiter recognition, including CRLF and split suffixes.
+  Inline tags and closing-tag-like text remain data. Compact legacy delimiters,
+  JSON string ownership, interrupted-call recovery and the explicit thinking
+  boundary are retained. Omitted upstream grammar, implicit reasoning recovery,
+  mask-cache and tokenization changes; this fork has no grammar fallback and
+  already preserves literal-token cache prefixes.
+- Areas: `src/cli/serve/openai_chat.cpp`, `tests/cli/openai_chat_test.cpp`,
+  `docs/SERVER.md`.
+- Validation: the new literal-delimiter fixture fails on the pinned fork
+  `0a2b9fd65d5927888b6146fb07dbf9619984c505`. Fresh Windows CPU
+  `openai_chat_test` and `http_server_test` pass after adaptation, covering both
+  APIs, buffered/streamed output, every two-piece split and byte-wise chunks,
+  LF/CRLF and empty strings. Changed C++ files pass clang-format 21.1.8;
+  the full formatting check reports two inherited violations in
+  `http_server.cpp` and `openai_chat.hpp`, reproduced from the pinned base.
+  Documentation checks pass. Production GPU and Linux checks are unrun at this
+  commit; later qualification is recorded separately.
+- Status: retained.
+
 ### 2026-10-05 — Messages reasoning fields (Claude Code compat)
 
 - Sources: [gufo-org/gufo@56383be0718ea0ce203fc42a55581304f0bbc253](https://github.com/gufo-org/gufo/commit/56383be0718ea0ce203fc42a55581304f0bbc253)

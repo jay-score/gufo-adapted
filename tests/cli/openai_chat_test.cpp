@@ -3028,6 +3028,52 @@ void TestMultilineToolEdits() {
   }
 }
 
+void TestQwenParameterDelimiters() {
+  using gufo::json::parse;
+  const auto body = parse(R"({"model":"test-model",
+    "messages":[{"role":"user","content":"record text"}],
+    "tools":[{"type":"function","function":{"name":"f","parameters":{
+      "properties":{"value":{"type":"string"}}}}}]})");
+  for (const std::string newline : {"\n", "\r\n"}) {
+    for (const std::string value :
+         {"", "inline </parameter> is literal",
+          "line\n</parameter> is literal\nend",
+          "line\n</parameter> <parameter=other>literal\nend",
+          "line\n</parameter> </function>literal\nend"}) {
+      const auto raw = "<tool_call>" + newline + "<function=f>" + newline +
+                       "<parameter=value>" + newline + value + newline +
+                       "</parameter>" + newline + "</function>" + newline +
+                       "</tool_call>";
+      auto expected = gufo::json::Value::object();
+      expected["value"] = value;
+      for (bool responses : {false, true}) {
+        for (bool stream : {false, true}) {
+          const auto check = [&](std::vector<std::string> pieces) {
+            FakeBackend backend;
+            backend.format =
+                gufo::server::TextGenerationBackend::ToolFormat::kQwen;
+            backend.pieces = std::move(pieces);
+            const auto output = ReadToolFixture(
+                ToolFixtureResponse(body, backend, responses, stream),
+                responses, stream);
+            Expect(
+                output.calls.size() == 1 && output.error.empty() &&
+                    output.text.empty() &&
+                    output.calls[0].member_str("arguments") == expected.dump(),
+                "Canonical parameter delimiter keeps literal tags intact");
+          };
+          for (std::size_t split = 0; split <= raw.size(); ++split)
+            check({raw.substr(0, split), raw.substr(split)});
+          std::vector<std::string> bytes;
+          for (char byte : raw)
+            bytes.emplace_back(1, byte);
+          check(std::move(bytes));
+        }
+      }
+    }
+  }
+}
+
 void TestMalformedToolDiagnostics() {
   using Backend = gufo::server::TextGenerationBackend;
   const auto body = gufo::json::parse(R"({"model":"test-model",
@@ -3332,6 +3378,7 @@ void TestConsolidatedOutputParsing() {
 }
 
 int main() {
+  TestQwenParameterDelimiters();
   TestConsolidatedOutputParsing();
   TestMalformedToolDiagnostics();
   TestMultilineToolEdits();

@@ -677,6 +677,12 @@ With no declared tools or `tool_choice: "none"`, tool markers are ordinary
 text. They do not end reasoning or delay streaming; thinking delimiters and
 UTF-8 buffering still apply.
 
+Canonical Qwen calls use newline framing. A parameter ends at
+`\n</parameter>\n` (CRLF is also accepted); inline tags and lines such as
+`</parameter> is literal` remain argument data. The complete closing sequence
+cannot appear inside a raw string value. Compact legacy calls retain their
+compact delimiters. Partial delimiters do not publish unfinished calls.
+
 Native Qwen parameter types are recovered from named properties, matching
 `patternProperties`, schema-valued `additionalProperties`, and local object
 JSON-pointer references. All applicable hints are intersected; additional
