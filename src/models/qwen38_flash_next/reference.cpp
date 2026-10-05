@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <numeric>
 
 #include "src/models/qwen38_flash_next/cpu_ops.hpp"
@@ -42,6 +43,51 @@ std::vector<float> QuantizedInput(std::span<const float> input) {
           peak == 0 ? 0 : stored * std::round(input[base + j] / scale);
   }
   return result;
+}
+
+/// Small convolution weights are F32, or F16/BF16 in Swift-style quants.
+/// Decodes to F32; the caller keeps the returned storage alive.
+std::vector<float> ConvWeightsF32(const TensorRef& t) {
+  const std::size_t count =
+      static_cast<std::size_t>(t.cols * t.rows * t.experts);
+  std::vector<float> out(count);
+  if (t.type == core::GgmlType::kF32) {
+    std::memcpy(out.data(), t.data, count * sizeof(float));
+    return out;
+  }
+  const auto* src = static_cast<const std::uint16_t*>(t.data);
+  if (t.type == core::GgmlType::kF16) {
+    for (std::size_t i = 0; i < count; ++i) {
+      const std::uint16_t h = src[i];
+      // Portable IEEE binary16 decode (reference runs on CPU only).
+      const std::uint32_t sign = (h & 0x8000U) << 16;
+      const std::uint32_t exp = (h >> 10) & 0x1FU;
+      const std::uint32_t mant = h & 0x3FFU;
+      std::uint32_t bits;
+      if (exp == 0) {
+        bits = sign;  // Subnormals flush to zero (conv weights are small).
+        if (mant != 0) {
+          float m = static_cast<float>(mant) / 1024.0F;
+          float v = std::ldexp(m, -14);
+          if (sign != 0)
+            v = -v;
+          out[i] = v;
+          continue;
+        }
+      } else if (exp == 0x1F) {
+        bits = sign | 0x7F800000U | (mant << 13);
+      } else {
+        bits = sign | ((exp + 112U) << 23) | (mant << 13);
+      }
+      std::memcpy(&out[i], &bits, sizeof(bits));
+    }
+    return out;
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    const std::uint32_t bits = static_cast<std::uint32_t>(src[i]) << 16;
+    std::memcpy(&out[i], &bits, sizeof(bits));
+  }
+  return out;
 }
 }  // namespace
 
@@ -197,7 +243,8 @@ bool ReferenceModel::Ple(const LayerWeights& l, std::int32_t token,
   const std::uint32_t hist = c_.PleConvHistory();
   const std::uint32_t kern = c_.ple_conv_kernel;
   const std::uint32_t dil = c_.ple_ngram_size;
-  const auto* conv_w = static_cast<const float*>(l.ple_conv1d.data);
+  const std::vector<float> conv_f32 = ConvWeightsF32(l.ple_conv1d);
+  const auto* conv_w = conv_f32.data();
   std::vector<float> conv_out(hc_dim, 0.0F);
   for (std::uint32_t k = 0; k < kern; ++k) {
     const std::uint32_t back = (kern - 1 - k) * dil;
@@ -241,7 +288,8 @@ void ReferenceModel::LinearAttention(const LayerWeights& l, LinearState& s,
   MatVec(l.ssm_beta, 0, x, beta);
 
   // Causal depthwise conv over the last `kern` projections, then SiLU.
-  const auto* conv_w = static_cast<const float*>(l.ssm_conv1d.data);
+  const std::vector<float> conv_f32 = ConvWeightsF32(l.ssm_conv1d);
+  const auto* conv_w = conv_f32.data();
   std::vector<float> conv(channels);
   for (std::uint32_t ch = 0; ch < channels; ++ch) {
     float acc =

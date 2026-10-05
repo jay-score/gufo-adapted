@@ -12,6 +12,12 @@ Q6_K's, so the added rounding is small, but it is not bit-identical).
 `qwen38_flash_next_iq_experts_ops_test` checks those expert paths against a
 double-precision reference.
 
+**Swift-1.5 IQ4_XS** (`ukisai/Swift-1.5-Qwen3.8-Flash-Next-GGUF`, three shards)
+also loads (unqualified): its IQ4_XS/IQ4_NL dense projections (mixers,
+SSM/attention, shared experts, PLE) and Q5_K/Q6_K attention are re-encoded to
+Q8_0 at upload, its IQ4_XS embedding likewise, and its F16 PLE convolution to
+F32. The reference oracle reads the source formats directly.
+
 [Benchmarks](BENCHMARKS.md) · [Quality](QUALITY.md) · [Experiments](EXPERIMENTS.md)
 
 ## Load and run
