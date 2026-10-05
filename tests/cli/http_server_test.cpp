@@ -351,12 +351,32 @@ void TestFramingAndMetrics() {
   ExpectStatus(
       server.Send("POST /echo HTTP/1.1\r\nContent-Length: 4\r\n\r\nx", true),
       400);
-  ExpectStatus(
-      server.Send("POST /echo HTTP/1.1\r\nContent-Length: 8193\r\n\r\n"), 413);
-  const std::string payload(5000, 'x');
+  for (const auto* path :
+       {"/echo", "/v1/chat/completions", "/v1/responses", "/v1/messages"}) {
+    // Headers alone must suffice: an oversized request never reaches inference.
+    const auto response =
+        server.Send("POST " + std::string(path) +
+                    " HTTP/1.1\r\nContent-Length: 8193\r\n\r\n");
+    ExpectStatus(response, 413);
+    const auto body =
+        gufo::json::parse(response.substr(response.find("\r\n\r\n") + 4));
+    const auto* error = body.find("error");
+    assert(error != nullptr);
+    assert(error->member_str("type") == "invalid_request_error");
+    assert(error->member_str("code") == "payload_too_large");
+    // OpenCode matches the first phrase; Pi matches the second, even when its
+    // provider adapter exposes only the message rather than the full JSON body.
+    const auto message = error->member_str("message");
+    assert(message.find("Request entity too large") != std::string::npos);
+    assert(message.find("reduce the length of the messages") !=
+           std::string::npos);
+    assert(response.find("Retry-After") == std::string::npos);
+  }
+  assert(server.backend->calls == 0);
+  const std::string payload(8192, 'x');
   const auto echo = server.Send(
-      "POST /echo HTTP/1.1\r\nContent-Length: 5000\r\nContent-Length: "
-      "5000\r\n\r\n" +
+      "POST /echo HTTP/1.1\r\nContent-Length: 8192\r\nContent-Length: "
+      "8192\r\n\r\n" +
       payload);
   ExpectStatus(echo, 200);
   assert(echo.substr(echo.find("\r\n\r\n") + 4) == payload);

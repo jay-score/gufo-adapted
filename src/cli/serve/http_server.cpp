@@ -1480,7 +1480,10 @@ void HttpServer::handle_connection(int client_fd) {
 
     HttpResponse resp;
     if (payload_too_large) {
-      resp = Err(413, "Payload Too Large", "request body is too large",
+      // OpenCode and Pi recognize these phrases for compact-and-retry recovery.
+      resp = Err(413, "Payload Too Large",
+                 "Request entity too large: reduce the length of the messages "
+                 "or other request content.",
                  "invalid_request_error", "payload_too_large");
     } else if (!ok) {
       resp = Err(400, "Bad Request", "malformed request",

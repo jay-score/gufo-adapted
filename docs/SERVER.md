@@ -748,6 +748,15 @@ Use appropriate HTTP status codes:
 - `500` internal failure
 - `503` model or backend unavailable
 
+HTTP body-limit failures return `413` with `type: invalid_request_error` and
+`code: payload_too_large` before inference. The message reads "Request entity
+too large: reduce the length of the messages or other request content." This
+wording lets compatible clients, including OpenCode and Pi, recognize the
+failure for their own compact-and-retry recovery. Recovery depends on the
+client's settings and whether compaction makes the next request small enough;
+retrying the same body still fails. This byte limit is separate from model
+context and image limits; adjust `--max-request-bytes` when appropriate.
+
 Generation stops at the request budget or context capacity and reports a
 length finish reason when either limit is reached.
 
