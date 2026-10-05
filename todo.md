@@ -28,40 +28,7 @@ before integrating more changes.
   Imports four bounded intermediate RAM checkpoints on a 2048-token grid and
   six retained entry slots from `0c350ed`/`840d373`, plus grid-aligned
   deduplication from #358 (`d847586`); preserves the fork's prefix-scoped
-  image identity. Rechecked 2026-10-01.
-
-### Follow up
-
-- [ ] [Issue #267 — shared-prefix checkpoints in RAM](https://github.com/gufo-org/gufo/issues/267)
-  and [issue #331 — intermediate conversation checkpoints](https://github.com/gufo-org/gufo/issues/331).
-  Implementing work now exists on the `cache-conversation-retention` (#358)
-  and `cache-history-edits` (#362) branches, adapted locally in `031d289` /
-  `733aee8` (see Integrated locally). Remaining: track their merge to upstream
-  `main` and reassess chat-switching misses and reprocessing after older
-  messages/tool results are edited or compressed. Rechecked 2026-10-01.
-- [ ] [PR #330 — seeded MTP replay across cache reuse](https://github.com/gufo-org/gufo/pull/330).
-  **Merged** upstream in `a917b79` (rechecked 2026-10-01; was open at review
-  time); fixes [issue #300](https://github.com/gufo-org/gufo/issues/300).
-  Still not integrated here: it changes model arithmetic and advances the
-  snapshot payload to version 16; this fork currently uses 15.
-  Require Windows correctness and performance validation before adoption.
-- [ ] [PR #321 — preserve the first exact snapshot](https://github.com/gufo-org/gufo/pull/321).
-  Open at review time; the maintainer expected it to be superseded by #330.
-  Now that #330 is merged, verify #321 was closed/superseded rather than
-  integrating it. Rechecked 2026-10-01.
-- [ ] [Issue #318 — checkpoint-copy latency](https://github.com/gufo-org/gufo/issues/318).
-  Track first-token and streaming stalls from copying large snapshots. Our
-  #281/#301 checks found increased copy cost on a long warm continuation, so
-  successful cache hits do not guarantee lower latency.
-- [ ] [Issue #275 — disk-cache eviction between conversations](https://github.com/gufo-org/gufo/issues/275).
-  Track whether one long conversation can crowd other conversations out of the
-  disk cache; reassess with multiple chats and realistic disk/staging limits.
-- [ ] [Issue #313 — persistent system-prompt checkpoints](https://github.com/gufo-org/gufo/issues/313).
-  Watch for reusable shared-prefix support across new sessions.
-- [ ] Revisit the omitted portions of #301 if disk image-history reuse or
-  Qwen27B cancellation becomes a priority; preserve the fork's existing vision
-  and cache-identity behavior.
-- [ ] https://github.com/gufo-org/gufo/pull/384 - consider bringing in if it lands
+  image identity. Rechecked 2026-10-01
 
 Background: [issue #259](https://github.com/gufo-org/gufo/issues/259) discusses
 Pi agent loops, side requests displacing the only live session, disk staging,
