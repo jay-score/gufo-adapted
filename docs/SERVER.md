@@ -523,21 +523,20 @@ For example, a result item is
 Streams emit `response.output_item.added`,
 `response.function_call_arguments.delta`,
 `response.function_call_arguments.done`, and `response.output_item.done` for
-each call. Native Qwen string parameters stream as escaped JSON argument
-prefixes while generation continues, including large file contents. Typed
-parameters, JSON-form Qwen calls and DeepSeek calls remain buffered. The final
-argument-done and completed item events are sent only after generation and
-tool-policy validation succeed. Chat Completions still sends complete calls.
-Reasoning and ordinary text continue to stream live.
+each call. Tool items and their complete JSON arguments are published only after
+generation, parsing and tool-policy validation succeed, as in Chat Completions.
+An unfinished native Qwen attempt can be discarded in favor of a valid
+replacement without exposing the abandoned call to clients. A malformed complete
+call still fails validation before any tool call is published. Reasoning and
+ordinary text continue to stream live.
 Tool-choice failures return HTTP 502, or `response.failed` after streaming
 headers have been sent. Function tools use the same parser and inference path
 as Chat Completions; clients execute the tools.
 
 Responses report `incomplete` with reason `max_output_tokens` when generation
-hits its limit. A streamed tool preview cut off by this limit remains an
-`incomplete` item with partial arguments and no argument-done event. Clients
-must not execute incomplete items. An interrupted preview at EOS or a requested
-stop fails the stream instead of completing an unvalidated call. Otherwise
+hits its limit. Partial tool calls are omitted from output; any validated complete
+calls are retained. Unfinished calls at EOS or a requested stop are likewise
+discarded; ordinary EOS still enforces `tool_choice: "required"`. Otherwise
 responses report `completed`. `stream: true` sends typed
 SSE events with consecutive `sequence_number` values: lifecycle, output items,
 text/reasoning deltas and terminal status. Local reasoning is exposed as
@@ -549,6 +548,16 @@ this optional-data hint and returns `encrypted_content: null`; replay uses
 the plaintext summary. Non-null encrypted reasoning input, other include
 values and unrecognized reasoning controls are rejected.
 Disconnects cancel generation through the same scheduler as Chat Completions.
+
+Both streaming APIs send `: keep-alive` SSE comments when generated pieces are
+being buffered and no output has been written for ten seconds. Comments carry
+no model content, tool arguments or event sequence numbers. They keep the HTTP
+transport active and detect disconnects during long file writes; they are not
+sent while generation itself makes no progress. Clients must also allow enough
+idle time for a complete buffered call: Oh My Pi's semantic-event watchdog
+ignores SSE comments. For example, a Gufo model override with
+`compat.streamIdleTimeoutMs: 1800000` allows thirty minutes between semantic
+events. Transport keepalives do not override a client's absolute request timeout.
 
 The official [OpenAI Python SDK](https://github.com/openai/openai-python) is
 included in `nix develop`. Use the model name from `/v1/models`
