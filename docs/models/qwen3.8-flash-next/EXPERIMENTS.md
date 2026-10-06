@@ -2,6 +2,12 @@
 
 | Experiment | Decision / evidence |
 | --- | --- |
+| Final-layer AR prefill pruning | Retained: pp2048 reaches 1501.84 tok/s at 128K (+1.8%) and 1713.11 at d0 (+1.2%) in matched single-run controls. Only unused output rows are skipped; target logits and cache replay remain exact. MTP needs the full hidden sequence. [Evidence](artifacts/prefill-final-rows.json). |
+| Further 128K selector/attention tuning | Rejected: FP32 key staging, lane/register scheduling, histogram aggregation and attention LDS/row tiling retained exact outputs but did not improve complete operations. [Profile](artifacts/prefill-final-rows.json). |
+| Bounded selector score scratch | Retained: exact deep-context logits; pp2048 gains about 1.4% AR / 1.2% MTP at 128K in single-run controls, with no measured shallow-context regression. Shared scratch falls from 128 to 20 MiB. [Evidence](artifacts/prefill-deep-context.json). |
+| Deep attention packing and skipped work | Rejected: shared selection lists and skipping masked matrix rows were slower; rescaling and fragment prefetch gave no compelling model-level gain. [Experiments](artifacts/prefill-deep-context.json). |
+| Skip unused final HC normalization | Retained: residuals and 64 full-vocabulary logit rows are exact. PP is within 0.3% of main at d0/d32K, AR and MTP; no significant speedup demonstrated. [Controls](artifacts/prefill-normalization.json). |
+| Prefill expert tiles, load scheduling and GDN stores | Rejected: mixed expert tiles slowed PP about 1.1%; smaller dense tiles and streaming loads were slower; GDN changes had no repeatable gain. [Experiments](artifacts/prefill-normalization.json). |
 | Conversation checkpoints and asynchronous capture | Retained: edits, growing histories and rotation with bounded RAM; AR/MTP cancellation, image replay and disk restart pass, including four execution sessions. Intermediate copies allow peers to continue, and coincident RAM/disk boundaries share one copy. [Functional checks](../../../tests/functional/README.md). |
 | Prefix-independent MTP cache projections | Retained: exact seeded replay across prompt splits and checkpoint replacement, using shared Q8 row arithmetic. [Checks and timings](artifacts/mtp-cache-replay.json). |
 | Skip discarded MTP outputs | Retained: K/V-only prefill, compact catch-up and wider projection tiles; C1 costs remeasured. Prefill is within 0.3% of main; d0 TG remains 1.1% slower, d4K TG is 0.4% faster. |
@@ -86,5 +92,5 @@ work; this is not pure scheduler overhead. These are profile observations,
 not unprofiled throughput measurements.
 
 Next: improve prefill at depth and target/draft batch projection reuse while
-preserving [quality](QUALITY.md). The 1700 tok/s PP and flat d0–d128K
+preserving [quality](QUALITY.md). The 1750 tok/s PP and flat d0–d128K
 objectives remain unmet; see [current benchmarks](BENCHMARKS.md).

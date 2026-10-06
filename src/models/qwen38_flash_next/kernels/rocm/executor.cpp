@@ -955,8 +955,13 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
       (c.context_length + c.compress_ratio - 1) / c.compress_ratio;
   e->mask_words_ = (max_blocks + 31) / 32;
   s.mask = Alloc<std::uint32_t>(a, T * e->mask_words_, error_msg);
-  s.scores =
-      f32(static_cast<std::size_t>(e->select_chunk_) * e->mask_words_ * 32);
+  // Keep score/selection traffic near the device cache size. Captured
+  // verification still needs all its rows at the maximum context.
+  const std::size_t score_stride = std::size_t{e->mask_words_} * 32;
+  e->select_score_floats_ =
+      std::max(kVecBatch * score_stride,
+               std::min(std::size_t{5 * 1024 * 1024}, 512 * score_stride));
+  s.scores = f32(e->select_score_floats_);
   s.ctx = f32(T * c.AttentionQDim());
   s.attn_partials = f32(static_cast<std::size_t>(kVecBatch) * c.num_heads *
                         kAttnSplits * (c.head_dim + 2));
@@ -1674,7 +1679,7 @@ void Executor::Combine(float* res, const float* gamma,
     // The MoE epilogue was deferred to this combine (see Moe).
     moe_pending_ = false;
     const auto* down = reinterpret_cast<const __half*>(s_.down_e);
-    if (xn_half_ &&
+    if (wide_mixer_ && MatrixRows(n_tokens) &&
         HcCombineMoeF16(res, down, s_.weights, s_.shexp_out,
                         s_.router + c.num_experts, c.num_experts + 1,
                         c.num_experts_used, s_.inject, inject_parts_, gamma,
@@ -2068,15 +2073,21 @@ bool Executor::Attention(const DeviceLayer& l, Session::AttentionState& s,
                       index_capacity, stream_, s.rope);
     // Align score rows to full cache lines. The selector still considers
     // only complete causal blocks, so padding cannot change the ranking.
+    // Wide prefill is never captured: compact score rows to the populated
+    // context. Graphs retain the maximum stride for replay at later positions.
+    const auto score_context =
+        n_tokens > kVecBatch ? start_pos + n_tokens : max_context;
     const std::uint32_t blocks =
-        (max_context + c.compress_ratio - 1) / c.compress_ratio;
+        (score_context + c.compress_ratio - 1) / c.compress_ratio;
     const std::uint32_t max_blocks = (blocks + 31) / 32 * 32;
+    const auto select_chunk = static_cast<std::uint32_t>(std::min(
+        std::size_t{512}, std::bit_floor(select_score_floats_ / max_blocks)));
     // Catch-up consumes only the final attention tile. Keep all its query
     // masks (sparse attention packs four queries; dense tiles hold sixteen)
     // but avoid scoring the unused prefix against the complete context.
     const auto first_query = last_only ? (n_tokens - 1) / 16 * 16 : 0U;
-    for (std::uint32_t t0 = first_query; t0 < n_tokens; t0 += select_chunk_) {
-      const std::uint32_t n = std::min(select_chunk_, n_tokens - t0);
+    for (std::uint32_t t0 = first_query; t0 < n_tokens; t0 += select_chunk) {
+      const std::uint32_t n = std::min(select_chunk, n_tokens - t0);
       // Batches wider than kVecBatch are never captured, so the host
       // position bounds the scored range (a replayed graph must cover
       // max_blocks).
@@ -2095,11 +2106,12 @@ bool Executor::Attention(const DeviceLayer& l, Session::AttentionState& s,
   // Wide batches run the fused WMMA kernel (never inside a graph: the kv
   // extent is a host value), output gate included, skipping the key tiles
   // no query of a block selected; the per-token kernel covers the rest.
-  if (last_only && !Check(hipMemsetAsync(s_.ctx, 0,
-                                         static_cast<std::size_t>(n_tokens) *
-                                             c.AttentionQDim() * sizeof(float),
-                                         stream_),
-                          "draft attention output initialization", error_msg)) {
+  if (last_only &&
+      !Check(hipMemsetAsync(s_.ctx, 0,
+                            static_cast<std::size_t>(n_tokens) *
+                                c.AttentionQDim() * sizeof(float),
+                            stream_),
+             "partial attention output initialization", error_msg)) {
     return false;
   }
   if (checkpoint_tokens != 0 && checkpoint_tokens < n_tokens) {
@@ -2611,6 +2623,11 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
     if (!HcMix(l.hc_attn, s_.res, normed, s_.mixed, s_.inject, n, error_msg)) {
       return false;
     }
+    // The last target layer's query outputs have no later cache consumer.
+    // Preserve all K/V/indexer rows and the final query's original tile.
+    const bool last_attention = prefill_phase && !session.mtp_enabled_ &&
+                                il + 1 == c.num_layers && n >= 1024 &&
+                                n_logits == 1 && checkpoint == nullptr;
     if (l.linear) {
       const auto capture =
           checkpoint ? GdnCheckpoint{checkpoint->state->linear_[il].state,
@@ -2624,24 +2641,50 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
     } else if (!Attention(l, session.attention_[il], s_.mixed, s_.block_out, n,
                           &session.control_->position,
                           &session.control_->blocks, start_pos, pool_grid,
-                          session.max_context_, sparse, error_msg, false, false,
-                          true, checkpoint ? checkpoint->tokens : 0)) {
+                          session.max_context_, sparse, error_msg,
+                          last_attention, false, true,
+                          checkpoint ? checkpoint->tokens : 0)) {
       return false;
     }
 
-    // Each combine also norms the residual for the mixer that follows it,
-    // unless PLE rewrites the residual first.
-    Combine(s_.res, l.hc_ffn.norm.f32(), n);
-    if (!HcMix(l.hc_ffn, s_.res, true, s_.mixed, s_.inject, n, error_msg) ||
-        !Moe(l, s_.mixed, s_.block_out, n, error_msg)) {
-      return false;
-    }
     const float* next_norm =
         il + 1 < c.num_layers
             ? (c.IsPleLayer(il + 1) ? nullptr
                                     : layers[il + 1].hc_attn.norm.f32())
-            : model_->hc_head().norm.f32();
-    Combine(s_.res, next_norm, n);
+            : nullptr;
+    // Cache updates precede the FFN. Without MTP, only requested head rows
+    // and the checkpoint frontier consume the final layer's residual.
+    // Keep aligned tiles and at least 96 rows to retain the wide arithmetic.
+    const auto needed =
+        std::max({96U, n_logits, checkpoint ? n - checkpoint->tokens + 1 : 0U});
+    const auto skipped = prefill_phase && !session.mtp_enabled_ &&
+                                 il + 1 == c.num_layers && n > needed
+                             ? (n - needed) / 128 * 128
+                             : 0U;
+    const auto finish = [&](std::uint32_t rows) {
+      Combine(s_.res, l.hc_ffn.norm.f32(), rows);
+      if (!HcMix(l.hc_ffn, s_.res, true, s_.mixed, s_.inject, rows,
+                 error_msg) ||
+          !Moe(l, s_.mixed, s_.block_out, rows, error_msg))
+        return false;
+      Combine(s_.res, next_norm, rows);
+      return true;
+    };
+    if (skipped != 0) {
+      struct RestoreScratch {
+        const Executor* executor;
+        Scratch scratch;
+        ~RestoreScratch() { executor->UseScratch(scratch); }
+      } restore{this, s_};
+      auto tail = RowScratch(s_, skipped);
+      tail.inject =
+          s_.inject + std::size_t{skipped} * c.hc_count * inject_parts_;
+      UseScratch(tail);
+      if (!finish(n - skipped))
+        return false;
+    } else if (!finish(n)) {
+      return false;
+    }
     normed = next_norm != nullptr;
   }
   if (end_layer < c.num_layers) {
@@ -2685,9 +2728,7 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
   }
   if (n_logits > 0) {
     PrefillPhase head_phase(false);
-    // The head mixer norms its tail rows itself: the last combine's norm is
-    // laid out for the whole batch (and tiled on the wide route), so a row
-    // offset into it is not addressable.
+    // Only the requested tail needs the head's normalization.
     const std::size_t skip = static_cast<std::size_t>(n - n_logits);
     const DeviceMixer& head = model_->hc_head();
     if (!HcMix(head, s_.res + skip * c.HcDim(), false, s_.mixed, nullptr,
