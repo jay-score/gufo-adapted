@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -29,6 +30,38 @@ namespace gufo::models::qwen38_flash_next::rocm {
 class Executor;
 struct ArgmaxCandidate;
 struct SnapshotHeader;
+
+/// Independent host checkpoint. Immutable cache prefixes share bounded blocks;
+/// mutable regions are captured afresh. No block borrows a live device pointer.
+class HostSnapshot {
+public:
+  [[nodiscard]] std::uint64_t SizeBytes() const noexcept { return size_; }
+  [[nodiscard]] std::uint64_t CopiedBytes() const noexcept { return copied_; }
+  [[nodiscard]] std::uint64_t SharedBytes() const noexcept { return shared_; }
+  [[nodiscard]] bool CopyTo(std::span<std::uint8_t> destination) const;
+  void StreamTo(
+      const std::function<void(std::span<const std::uint8_t>)>& sink) const;
+
+private:
+  friend class Executor;
+  struct Chunk {
+    std::shared_ptr<const std::uint8_t[]> data;
+    std::uint64_t bytes;
+  };
+  struct Region {
+    std::uint64_t offset;
+    std::uint64_t bytes;
+    std::uint32_t rows_id;
+    std::vector<Chunk> chunks;
+  };
+  [[nodiscard]] bool Visit(
+      std::uint64_t offset, std::uint64_t bytes,
+      const std::function<bool(std::span<const std::uint8_t>)>& visit) const;
+  std::vector<Region> regions_;
+  std::uint64_t size_{0};
+  std::uint64_t copied_{0};
+  std::uint64_t shared_{0};
+};
 
 /// Per-sequence state on the device: recurrent SSM state, KV and indexer
 /// caches, PLE conv history, plus the host-side n-gram window. A
@@ -130,6 +163,15 @@ private:
   std::vector<float*> rollback_allocations_;
   std::uint32_t rollback_depth_{0};
   void TrimRollback(std::uint32_t depth) noexcept;
+  // Weak ownership keeps execution slots from pinning evicted checkpoints.
+  mutable std::weak_ptr<const HostSnapshot> snapshot_base_;
+  mutable std::mutex snapshot_capture_mutex_;
+  mutable std::uint32_t snapshot_trunk_prefix_{0};
+  mutable std::uint32_t snapshot_draft_prefix_{0};
+  void LimitSnapshotPrefix(std::uint32_t trunk, std::uint32_t draft) {
+    snapshot_trunk_prefix_ = std::min(snapshot_trunk_prefix_, trunk);
+    snapshot_draft_prefix_ = std::min(snapshot_draft_prefix_, draft);
+  }
 };
 
 /// Runs the trunk graph on the GPU for one session at a time. Buffers are
@@ -274,6 +316,9 @@ public:
                                   std::uint32_t hidden_rows,
                                   std::span<std::uint8_t> payload,
                                   std::string* error_msg) const;
+  [[nodiscard]] std::shared_ptr<const HostSnapshot> SaveHostSnapshot(
+      const Session& session, std::uint32_t hidden_rows,
+      std::string* error_msg) const;
   /// Reuse at most the rollback rows needed by the restored operation;
   /// restoration never grows scratch. Callers derive this bound from the
   /// restored policy (or the concrete verifier width in a diagnostic).
@@ -281,6 +326,10 @@ public:
                                      std::span<const std::uint8_t> payload,
                                      SnapshotInfo* info, std::string* error_msg,
                                      std::uint32_t next_drafts = 0) const;
+  [[nodiscard]] bool RestoreSnapshot(
+      Session& session, const std::shared_ptr<const HostSnapshot>& snapshot,
+      SnapshotInfo* info, std::string* error_msg,
+      std::uint32_t next_drafts = 0) const;
 
   /// Rewinds the draft block's own context.
   void MtpRewind(Session& session, std::uint32_t position) const noexcept {
@@ -307,8 +356,16 @@ public:
 private:
   Executor() = default;
 
+  [[nodiscard]] bool RestoreSnapshotImpl(Session& session,
+                                         std::span<const std::uint8_t> payload,
+                                         const HostSnapshot* snapshot,
+                                         SnapshotInfo* info,
+                                         std::string* error_msg,
+                                         std::uint32_t next_drafts) const;
+
   /// Visits every device region of a snapshot in payload order with
-  /// (device pointer or null when sizing, payload offset, bytes, name).
+  /// (device pointer or null when sizing, payload offset, bytes, name,
+  /// immutable region ID, bytes/row, draft region, pooled rows).
   /// Returns the payload size, or 0 once a visit failed.
   template<typename Visit>
   static std::uint64_t WalkSnapshot(const SnapshotHeader& h,

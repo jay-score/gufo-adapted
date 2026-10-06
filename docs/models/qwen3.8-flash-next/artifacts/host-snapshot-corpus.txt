@@ -1,0 +1,5 @@
+A cache checkpoint must describe exactly the tokens and image embeddings that produced its state. A new user turn may remove old reasoning while retaining the system prompt and the user's question. The server should retain a safe earlier boundary and a complete prompt for exact retries. An interrupted tool call can be resumed only if the stored state matches the rendered history.
+
+For a small example, let the input sequence be [2, 3, 5, 7]. Its sum is 17. Appending 11 changes the sum to 28 without changing the preceding sequence. Replacing 5 with 13 instead changes the middle of the sequence. A cache cannot reuse state beyond that edit. Tests should compare complete output distributions at matching positions, account for retained snapshot bytes, and keep cancellation and speculative rollback correct.
+
+A screenshot is part of the input. Appending a second image must preserve the first image's identity. Replacing the first image must reject its old cached state. Disk persistence and memory reuse must follow the same rule. Every restored checkpoint needs enough metadata to identify its inputs and its stable token boundary.

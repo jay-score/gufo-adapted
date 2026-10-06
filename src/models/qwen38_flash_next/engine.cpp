@@ -1,8 +1,5 @@
 #include "src/models/qwen38_flash_next/engine.hpp"
 
-#include <sys/mman.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -12,7 +9,6 @@
 #include <cstring>
 #include <limits>
 #include <optional>
-#include <thread>
 #include <type_traits>
 
 #include "src/core/gguf_reader.hpp"
@@ -391,9 +387,8 @@ std::unique_ptr<SessionSnapshot> Session::SaveSnapshot(
       model_->executor_->SnapshotBytes(*session_, hidden_rows);
   const std::uint64_t host_bytes = SessionSnapshotHostBytes(
       token_count, model_->VocabSize(), image_identity.size());
-  std::unique_ptr<SessionSnapshot> snapshot(
-      new SessionSnapshot(host_bytes + executor_bytes));
-  std::uint8_t* out = snapshot->data_.get();
+  std::unique_ptr<SessionSnapshot> snapshot(new SessionSnapshot(host_bytes));
+  std::uint8_t* out = snapshot->host_.data();
   const SessionSnapshotHeader header{
       .magic = kSessionSnapshotMagic,
       .version = kSnapshotPayloadVersion,
@@ -414,23 +409,30 @@ std::unique_ptr<SessionSnapshot> Session::SaveSnapshot(
   out += tokens_.size() * sizeof(std::int32_t);
   std::memcpy(out, logits_.data(), logits_.size() * sizeof(float));
   out += logits_.size() * sizeof(float);
-  if (!model_->executor_->SaveSnapshot(
-          *session_, hidden_rows,
-          std::span<std::uint8_t>(out,
-                                  static_cast<std::size_t>(executor_bytes)),
-          error_msg)) {
+  snapshot->executor_ =
+      model_->executor_->SaveHostSnapshot(*session_, hidden_rows, error_msg);
+  if (!snapshot->executor_)
     return nullptr;
-  }
+  snapshot->size_ += snapshot->executor_->SizeBytes();
   return snapshot;
 }
 
 bool Session::RestoreSnapshot(const SessionSnapshot& snapshot,
                               std::string* error_msg) {
-  return RestoreSnapshot(snapshot.bytes(), error_msg);
+  return RestoreSnapshotImpl(snapshot.host_, snapshot.executor_, error_msg);
 }
 
 bool Session::RestoreSnapshot(std::span<const std::uint8_t> payload,
                               std::string* error_msg) {
+  return RestoreSnapshotImpl(payload, {}, error_msg);
+}
+
+bool Session::RestoreSnapshotImpl(
+    std::span<const std::uint8_t> payload,
+    const std::shared_ptr<const rocm::HostSnapshot>& snapshot,
+    std::string* error_msg) {
+  const auto payload_bytes =
+      payload.size() + (snapshot ? snapshot->SizeBytes() : 0);
   SessionSnapshotHeader header{};
   if (payload.size() < sizeof(header)) {
     AssignError(error_msg, "session snapshot is truncated");
@@ -446,10 +448,10 @@ bool Session::RestoreSnapshot(std::span<const std::uint8_t> payload,
       header.policy_concurrency != model_->DecodeConcurrency() ||
       header.token_count > ContextSize() ||
       (header.image_identity_bytes != 0 && header.image_identity_bytes != 32) ||
-      payload.size() != SessionSnapshotHostBytes(header.token_count,
-                                                 header.vocab_size,
-                                                 header.image_identity_bytes) +
-                            header.executor_bytes) {
+      payload_bytes != SessionSnapshotHostBytes(header.token_count,
+                                                header.vocab_size,
+                                                header.image_identity_bytes) +
+                           header.executor_bytes) {
     AssignError(error_msg, "session snapshot does not fit this session");
     return false;
   }
@@ -486,11 +488,14 @@ bool Session::RestoreSnapshot(std::span<const std::uint8_t> payload,
       MtpEnabled() ? restored_policy.Choose(remaining ? remaining - 1 : 0,
                                             header.token_count)
                    : 0;
-  if (!model_->executor_->RestoreSnapshot(
-          *session_,
-          std::span<const std::uint8_t>(
-              in, static_cast<std::size_t>(header.executor_bytes)),
-          &info, error_msg, next_drafts)) {
+  const bool restored =
+      snapshot ? model_->executor_->RestoreSnapshot(*session_, snapshot, &info,
+                                                    error_msg, next_drafts)
+               : model_->executor_->RestoreSnapshot(
+                     *session_,
+                     {in, static_cast<std::size_t>(header.executor_bytes)},
+                     &info, error_msg, next_drafts);
+  if (!restored) {
     Reset();
     return false;
   }
@@ -512,51 +517,43 @@ bool Session::RestoreSnapshot(std::span<const std::uint8_t> payload,
   return true;
 }
 
-SessionSnapshot::SessionSnapshot(std::uint64_t size)
-    : data_(new std::uint8_t[size]), size_(size) {
-  // Populate before asking for huge pages: first-touching an advised buffer
-  // can synchronously compact fragmented UMA memory for seconds. Background
-  // collapse may still promote the populated pages. Restrict both hints to
-  // complete pages owned by this allocation; neither changes the payload.
-  const long page = sysconf(_SC_PAGESIZE);
-  if (page > 0) {
-    const auto address = reinterpret_cast<std::uintptr_t>(data_.get());
-    const auto skip = (page - address % page) % page;
-    if (size > skip) {
-      const auto length = (size - skip) / page * page;
-      if (length != 0) {
-        // Bound the fault workers to four, with at least 32 MiB each. This
-        // avoids replacing compaction stalls with serial base-page faults.
-        const auto workers = std::min<std::size_t>(4, length / (32ULL << 20));
-        if (workers > 1) {
-          const auto pages = length / page;
-          std::vector<std::jthread> faults;
-          for (std::size_t worker = 0; worker < workers; ++worker) {
-            const auto begin = pages * worker / workers * page;
-            const auto end = pages * (worker + 1) / workers * page;
-            faults.emplace_back([this, skip, begin, end] {
-              (void)madvise(data_.get() + skip + begin, end - begin,
-                            MADV_POPULATE_WRITE);
-            });
-          }
-          // Join before huge-page advice or any snapshot writer uses the
-          // buffer.
-        } else {
-          (void)madvise(data_.get() + skip, length, MADV_POPULATE_WRITE);
-        }
-        (void)madvise(data_.get() + skip, length, MADV_HUGEPAGE);
-      }
-    }
-  }
+SessionSnapshot::SessionSnapshot(std::uint64_t host_bytes)
+    : host_(host_bytes), size_(host_bytes) {}
+
+std::span<const std::uint8_t> SessionSnapshot::bytes() const {
+  std::call_once(materialize_, [&] {
+    std::unique_ptr<std::uint8_t[]> data(new std::uint8_t[size_]);
+    if (!CopyTo({data.get(), size_}))
+      throw std::runtime_error("snapshot materialization failed");
+    data_ = std::move(data);
+  });
+  return {data_.get(), size_};
 }
 
 bool SessionSnapshot::CopyTo(
     std::span<std::uint8_t> destination) const noexcept {
-  if (destination.size() != size_) {
+  if (destination.size() != size_)
+    return false;
+  try {
+    std::memcpy(destination.data(), host_.data(), host_.size());
+    return executor_->CopyTo(destination.subspan(host_.size()));
+  } catch (...) {
     return false;
   }
-  std::memcpy(destination.data(), data_.get(), size_);
-  return true;
+}
+
+void SessionSnapshot::StreamTo(
+    const std::function<void(std::span<const std::uint8_t>)>& sink) const {
+  sink(host_);
+  executor_->StreamTo(sink);
+}
+
+std::uint64_t SessionSnapshot::CopiedDeviceBytes() const noexcept {
+  return executor_->CopiedBytes();
+}
+
+std::uint64_t SessionSnapshot::SharedDeviceBytes() const noexcept {
+  return executor_->SharedBytes();
 }
 
 bool Session::DraftReplay(std::int32_t next_token,

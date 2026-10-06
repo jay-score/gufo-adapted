@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -34,6 +35,7 @@ namespace rocm {
 class DeviceModel;
 class Executor;
 class Session;
+class HostSnapshot;
 }  // namespace rocm
 
 /// Tokens the MTP draft head may propose.
@@ -255,6 +257,11 @@ private:
   friend class Model;
   Session(std::shared_ptr<Model> model, std::unique_ptr<rocm::Session> session);
 
+  bool RestoreSnapshotImpl(
+      std::span<const std::uint8_t> payload,
+      const std::shared_ptr<const rocm::HostSnapshot>& snapshot,
+      std::string* error_msg);
+
   bool Feed(std::span<const std::int32_t> tokens, std::string* error_msg,
             bool prefill = false);
   /// Trunk rows the draft block may still read: [hidden_base_, size).
@@ -316,15 +323,21 @@ public:
   SessionSnapshot& operator=(SessionSnapshot&&) = delete;
 
   [[nodiscard]] std::uint64_t SizeBytes() const noexcept { return size_; }
-  [[nodiscard]] std::span<const std::uint8_t> bytes() const noexcept {
-    return {data_.get(), size_};
-  }
+  [[nodiscard]] std::span<const std::uint8_t> bytes() const;
   [[nodiscard]] bool CopyTo(std::span<std::uint8_t> destination) const noexcept;
+  /// Export in payload order without materializing a contiguous copy.
+  void StreamTo(
+      const std::function<void(std::span<const std::uint8_t>)>& sink) const;
+  [[nodiscard]] std::uint64_t CopiedDeviceBytes() const noexcept;
+  [[nodiscard]] std::uint64_t SharedDeviceBytes() const noexcept;
 
 private:
-  explicit SessionSnapshot(std::uint64_t size);
+  explicit SessionSnapshot(std::uint64_t host_bytes);
 
-  std::unique_ptr<std::uint8_t[]> data_;
+  std::vector<std::uint8_t> host_;
+  std::shared_ptr<const rocm::HostSnapshot> executor_;
+  mutable std::once_flag materialize_;
+  mutable std::unique_ptr<std::uint8_t[]> data_;
   std::uint64_t size_{0};
 
   friend class Session;

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "src/cli/serve/inference_backend.hpp"
+#include "src/core/platform/tuning.hpp"
 #include "src/models/qwen38_flash_next/engine.hpp"
 #include "tests/models/qwen27b/sampling_cases.hpp"
 
@@ -174,11 +175,16 @@ void CheckRollbackReuse(const std::shared_ptr<qfn::Model>& model) {
     Require(session->Evaluate(prompt.front(), &error), error);
   const auto full = session->SaveSnapshot(&error);
   Require(full && session->RestoreSnapshot(*full, &error), error);
-  Require(session->AllocatedBytes() == empty_bytes,
-          "restore kept rollback that the restored context cannot use");
+  // Windows retains warm scratch so recorded rollback graphs stay valid.
+  // Platforms without that tuning trim all rows at a full context.
+  const auto restored_bytes =
+      gufo::platform::PlatformTuning().keep_rollback_rows ? warm_bytes
+                                                          : empty_bytes;
+  Require(session->AllocatedBytes() == restored_bytes,
+          "restore violated the configured rollback retention policy");
   session->Reset();
-  Require(session->AllocatedBytes() == empty_bytes,
-          "explicit reset retained rollback");
+  Require(session->AllocatedBytes() == restored_bytes,
+          "reset violated the configured rollback retention policy");
   std::cout
       << "rollback restore is bounded, reuses warm rows and replays exactly\n";
 }

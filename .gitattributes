@@ -1,0 +1,2 @@
+# Preserve the exact bytes used by the recorded matched-logit evaluation.
+docs/models/qwen3.8-flash-next/artifacts/host-snapshot-corpus.txt -text whitespace=cr-at-eol
