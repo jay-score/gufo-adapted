@@ -860,6 +860,28 @@ void TestResponsesClientCompatTolerances() {
   }
 }
 
+void TestMidConversationSystemMessagesKeepOrder() {
+  // Codex sends developer messages mid-conversation. The adapter keeps them in
+  // place; each model template decides how to render them.
+  FakeBackend backend;
+  const auto body = gufo::json::parse(R"({
+    "model":"test-model","messages":[
+      {"role":"user","content":"first"},
+      {"role":"assistant","content":"noted"},
+      {"role":"developer","content":"compacted state"},
+      {"role":"user","content":"second"}]})");
+  const auto response =
+      gufo::server::HandleOpenAiChat(Request(body.dump()), backend);
+  Expect(response.status == 200 && backend.last_request.messages.size() == 4 &&
+             backend.last_request.messages[0].content == "first" &&
+             backend.last_request.messages[1].content == "noted" &&
+             backend.last_request.messages[2].role ==
+                 gufo::tokenization::ChatRole::kDeveloper &&
+             backend.last_request.messages[2].content == "compacted state" &&
+             backend.last_request.messages[3].content == "second",
+         "Mid-conversation developer messages reach the backend in place");
+}
+
 void TestToolNameCharacters() {
   const auto declare = [](const std::string& name) {
     auto body = gufo::json::parse(R"({
@@ -5012,6 +5034,7 @@ int main() {
   TestToolParameterCompatibility();
   TestInvalidToolsFailBeforeGeneration();
   TestResponsesClientCompatTolerances();
+  TestMidConversationSystemMessagesKeepOrder();
   TestToolNameCharacters();
   TestMalformedHistoricalFunctions();
   TestToolClosingFraming();

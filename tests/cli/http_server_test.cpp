@@ -1009,6 +1009,66 @@ void TestCompatibilityRequests() {
          "summary":[],"encrypted_content":"gAAAA"}]})");
   ExpectStatus(opaque_replay, 400);
 
+  // Codex re-sends developer items mid-conversation. They stay in place, so
+  // the prompt before them is unchanged and reusable.
+  const auto in_place =
+      response_body(server.Post("/v1/responses",
+                                R"({"instructions":"Base rules.","input":[
+        {"role":"user","content":"first"},
+        {"type":"message","role":"assistant","content":[
+          {"type":"output_text","text":"noted","annotations":[]}]},
+        {"type":"message","role":"developer","content":[
+          {"type":"input_text","text":"Compacted state"}]},
+        {"role":"user","content":"second"}]})"));
+  assert(in_place.member_str("status") == "completed");
+  const auto in_place_messages = server.backend->LastCall().chat.messages;
+  assert(in_place_messages.size() == 5 &&
+         in_place_messages[0].role == gufo::tokenization::ChatRole::kSystem &&
+         in_place_messages[0].content == "Base rules." &&
+         in_place_messages[1].content == "first" &&
+         in_place_messages[2].content == "noted" &&
+         in_place_messages[3].role ==
+             gufo::tokenization::ChatRole::kDeveloper &&
+         in_place_messages[3].content == "Compacted state" &&
+         in_place_messages[4].content == "second");
+
+  // A developer item inside a replayed reasoning/function_call group waits
+  // for the group to end instead of splitting the assistant turn.
+  const auto replay_items = gufo::json::parse(R"([
+      {"role":"user","content":"Check state."},
+      {"type":"reasoning","summary":[
+        {"type":"summary_text","text":"I will inspect."}]},
+      {"type":"function_call","call_id":"call_1","name":"lookup",
+       "arguments":"{\"key\":\"state\"}"},
+      {"type":"function_call_output","call_id":"call_1","output":"OK"}])");
+  const auto developer =
+      gufo::json::parse(R"({"role":"developer","content":"Follow policy."})");
+  for (const std::size_t position : {2U, 3U}) {
+    auto input = gufo::json::Value::array();
+    for (std::size_t i = 0; i < replay_items.size(); ++i) {
+      if (i == position)
+        input.push_back(developer);
+      input.push_back(replay_items.items()[i]);
+    }
+    auto body = gufo::json::Value::object();
+    body["input"] = std::move(input);
+    const auto replay =
+        response_body(server.Post("/v1/responses", body.dump()));
+    assert(replay.member_str("status") == "completed");
+    const auto grouped = server.backend->LastCall().chat.messages;
+    assert(grouped.size() == 4);
+    assert(grouped[0].role == gufo::tokenization::ChatRole::kUser &&
+           grouped[1].role == gufo::tokenization::ChatRole::kAssistant &&
+           grouped[1].content.empty() &&
+           grouped[1].thought == "I will inspect." &&
+           grouped[1].tool_calls.size() == 1 &&
+           grouped[1].tool_calls[0].id == "call_1" &&
+           grouped[2].role == gufo::tokenization::ChatRole::kDeveloper &&
+           grouped[2].content == "Follow policy." &&
+           grouped[3].role == gufo::tokenization::ChatRole::kTool &&
+           grouped[3].tool_call_id == "call_1" && grouped[3].content == "OK");
+  }
+
   // The Responses API carries request-only fields with no native effect here
   // (hosted tool types, include, reasoning.summary, text.verbosity). Accept
   // them and keep every executable function tool, flattening the client-side
