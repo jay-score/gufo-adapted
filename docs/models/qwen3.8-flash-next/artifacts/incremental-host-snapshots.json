@@ -1,0 +1,1446 @@
+{
+  "date": "2026-10-06",
+  "source_base": "a3458e5b58c4dae4d3ffa8253baaf0d0ae54f6e6",
+  "toolchain": "Windows 11 gfx1151; TheRock ROCm 10.0.0 / clang 23; MSVC 14.51 headers/SDK; pinned vcpkg; release and gpu-test presets",
+  "binary_sha256": {
+    "baseline": "464277d5a4407fe3ec50ae8c34cb4ecfb557a21b759f756b546344a638292a5e",
+    "candidate": "e1c1910f644c7350ee2426889746bf3b874922973ad9ff39fc44a855670b397a",
+    "snapshot_test": "9067a0e37391e95e151ebd19f12c65de1e46309a9723b82e36c0a9702b87535f",
+    "disk_stream_compatibility_candidate": "3df0a32d8ea14d601f47637f8b5d5cb1f105c582fc5dfe9c300ad8cc0868e263"
+  },
+  "model_artifacts": {
+    "Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf": {
+      "bytes": 10946624,
+      "sha256": "5ce89370720f8bf90890f439361282104c1aa1482d4013bb9a50923e758e71a4"
+    },
+    "Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf": {
+      "bytes": 49835229856,
+      "sha256": "577a38a2392b40ca2193cea502e1d92f60b8cd370675d308e0ec21885d9daaa7"
+    },
+    "Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf": {
+      "bytes": 43836407744,
+      "sha256": "d4634e6d84f0ebb0940be15c90d3790bf6464e3dea3a1cddc567dc0e83ad8833"
+    },
+    "mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf": {
+      "bytes": 2786568256,
+      "sha256": "5ff54097406a905cf3a724c709124ceb0e3e10235ee862298969e91c96fa96e6"
+    },
+    "mmproj-BF16.gguf": {
+      "bytes": 907542944,
+      "sha256": "2e788f8c511d8093c7b43cb87b2fd7e14228340318057f8fb20c86df2efe2355"
+    }
+  },
+  "logit_evaluation": {
+    "corpus_sha256": "e29a67f814ab3fe409f9c845669e420746d3c5ab55196e0085efbde4f1fae49e",
+    "schedules": [
+      "1",
+      "1",
+      "2,4,8"
+    ],
+    "positions_per_schedule": 225,
+    "vocab": 248320,
+    "baseline_perplexity": [
+      21.579505,
+      21.579505,
+      21.579505
+    ],
+    "candidate_perplexity": [
+      21.579505,
+      21.579505,
+      21.579505
+    ],
+    "exact_complete_logit_rows": 675,
+    "hash_dumps": [
+      {
+        "schedule": 0,
+        "baseline_sha256": "c7f6885ec98108e228508018584cab44c3eceb656332ab605615296678da6487",
+        "candidate_sha256": "c7f6885ec98108e228508018584cab44c3eceb656332ab605615296678da6487"
+      },
+      {
+        "schedule": 1,
+        "baseline_sha256": "c7f6885ec98108e228508018584cab44c3eceb656332ab605615296678da6487",
+        "candidate_sha256": "c7f6885ec98108e228508018584cab44c3eceb656332ab605615296678da6487"
+      },
+      {
+        "schedule": 2,
+        "baseline_sha256": "c7f6885ec98108e228508018584cab44c3eceb656332ab605615296678da6487",
+        "candidate_sha256": "c7f6885ec98108e228508018584cab44c3eceb656332ab605615296678da6487"
+      }
+    ]
+  },
+  "snapshots": {
+    "ar": {
+      "copied_device_bytes": 171531264,
+      "shared_device_bytes": 50307072
+    },
+    "mtp": {
+      "copied_device_bytes": 176357120,
+      "shared_device_bytes": 54497280
+    },
+    "prefix_tokens": 2047,
+    "grown_tokens": 4095,
+    "all_exports_byte_exact": true,
+    "sharing": "Whole allocation blocks only; a rewind recopies at most one 1 MiB partial block per immutable region."
+  },
+  "tests": {
+    "snapshot": "pass, including streaming/contiguous equality, branch/reset/cancellation/lifetime",
+    "prefill": "pass, including peer capture and exact boundary logits",
+    "batches": "pass C2/C4/C6/C8 and sampled residuals under Windows defaults and tuning=none",
+    "rollback": "pass 105 prefixes",
+    "image_prefix": "pass AR/MTP full-logit and perplexity equality",
+    "http_cache_growth_checks": 27,
+    "http_cache_edit_checks": 15,
+    "http_cancellation_cases": 2,
+    "http_cancellation": [
+      {
+        "case": "content-preserve0-sampled0",
+        "request": {
+          "model": "cache-test",
+          "messages": [
+            {
+              "role": "system",
+              "content": "content-preserve0-sampled0. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. "
+            },
+            {
+              "role": "user",
+              "content": "Count from one to one hundred, separated by commas."
+            },
+            {
+              "role": "assistant",
+              "content": "1, 2, 3,"
+            },
+            {
+              "role": "user",
+              "content": "Now reply with only the number 7."
+            }
+          ],
+          "max_tokens": 12,
+          "temperature": 0,
+          "seed": 1234,
+          "top_k": 20,
+          "top_p": 0.95,
+          "chat_template_kwargs": {
+            "enable_thinking": false,
+            "preserve_thinking": false
+          },
+          "stream": false
+        },
+        "sha256": "b5df3bf2b8ae6be77731a62004a85e0a7f9fa5f23142ea9b14587cf043d7e212",
+        "discard_assistant": false,
+        "drop_reasoning": false,
+        "rewritten_tool_reasoning": false,
+        "append_image": false,
+        "interrupt_seconds": 1.1076439000025857,
+        "cached": 317,
+        "prefill": 34,
+        "ttft_ms": 363.4577,
+        "disk": false,
+        "accepted": 0,
+        "proposed": 2,
+        "exact": true,
+        "full_prefill_equal": true,
+        "followup": {
+          "request": {
+            "model": "cache-test",
+            "messages": [
+              {
+                "role": "system",
+                "content": "content-preserve0-sampled0. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. "
+              },
+              {
+                "role": "user",
+                "content": "Count from one to one hundred, separated by commas."
+              },
+              {
+                "role": "assistant",
+                "content": "1, 2, 3,"
+              },
+              {
+                "role": "user",
+                "content": "Now reply with only the number 7."
+              },
+              {
+                "role": "assistant",
+                "content": "7"
+              },
+              {
+                "role": "user",
+                "content": "What number did I ask you to reply with?"
+              }
+            ],
+            "max_tokens": 8,
+            "temperature": 0,
+            "seed": 1234,
+            "top_k": 20,
+            "top_p": 0.95,
+            "chat_template_kwargs": {
+              "enable_thinking": false,
+              "preserve_thinking": false
+            },
+            "stream": false
+          },
+          "sha256": "b5df3bf2b8ae6be77731a62004a85e0a7f9fa5f23142ea9b14587cf043d7e212",
+          "cached": 317,
+          "prefill": 55,
+          "ttft_ms": 402.8081,
+          "disk": false,
+          "accepted": 0,
+          "proposed": 2
+        }
+      },
+      {
+        "case": "content-preserve1-sampled1",
+        "request": {
+          "model": "cache-test",
+          "messages": [
+            {
+              "role": "system",
+              "content": "content-preserve1-sampled1. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. "
+            },
+            {
+              "role": "user",
+              "content": "Count from one to one hundred, separated by commas."
+            },
+            {
+              "role": "assistant",
+              "content": "1, 2, 3,",
+              "reasoning_content": ""
+            },
+            {
+              "role": "user",
+              "content": "Now reply with only the number 7."
+            }
+          ],
+          "max_tokens": 12,
+          "temperature": 0.8,
+          "seed": 1234,
+          "top_k": 20,
+          "top_p": 0.95,
+          "chat_template_kwargs": {
+            "enable_thinking": false,
+            "preserve_thinking": true
+          },
+          "stream": false
+        },
+        "sha256": "b5df3bf2b8ae6be77731a62004a85e0a7f9fa5f23142ea9b14587cf043d7e212",
+        "discard_assistant": false,
+        "drop_reasoning": false,
+        "rewritten_tool_reasoning": false,
+        "append_image": false,
+        "interrupt_seconds": 1.0067323999974178,
+        "cached": 324,
+        "prefill": 31,
+        "ttft_ms": 367.6876,
+        "disk": false,
+        "accepted": 0,
+        "proposed": 2,
+        "exact": true,
+        "full_prefill_equal": true,
+        "followup": {
+          "request": {
+            "model": "cache-test",
+            "messages": [
+              {
+                "role": "system",
+                "content": "content-preserve1-sampled1. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. Follow the user instruction carefully and answer accurately. "
+              },
+              {
+                "role": "user",
+                "content": "Count from one to one hundred, separated by commas."
+              },
+              {
+                "role": "assistant",
+                "content": "1, 2, 3,",
+                "reasoning_content": ""
+              },
+              {
+                "role": "user",
+                "content": "Now reply with only the number 7."
+              },
+              {
+                "role": "assistant",
+                "content": "7"
+              },
+              {
+                "role": "user",
+                "content": "What number did I ask you to reply with?"
+              }
+            ],
+            "max_tokens": 8,
+            "temperature": 0.8,
+            "seed": 1234,
+            "top_k": 20,
+            "top_p": 0.95,
+            "chat_template_kwargs": {
+              "enable_thinking": false,
+              "preserve_thinking": true
+            },
+            "stream": false
+          },
+          "sha256": "b5df3bf2b8ae6be77731a62004a85e0a7f9fa5f23142ea9b14587cf043d7e212",
+          "cached": 356,
+          "prefill": 24,
+          "ttft_ms": 385.5925,
+          "disk": false,
+          "accepted": 0,
+          "proposed": 2
+        }
+      }
+    ],
+    "disk_compatibility": {
+      "candidate-read-write": [
+        {
+          "case": "content-preserve0-sampled0",
+          "cached": 351,
+          "prefill": 0,
+          "disk": true,
+          "exact": true
+        }
+      ],
+      "baseline-read": [
+        {
+          "case": "content-preserve1-sampled1",
+          "cached": 355,
+          "prefill": 0,
+          "disk": true,
+          "exact": true
+        }
+      ],
+      "candidate-stream-write": [
+        {
+          "case": "content-preserve1-sampled1",
+          "sha256": "b5df3bf2b8ae6be77731a62004a85e0a7f9fa5f23142ea9b14587cf043d7e212",
+          "cached": 2340,
+          "prefill": 31,
+          "disk": false,
+          "exact": true,
+          "full_prefill_equal": true
+        }
+      ],
+      "baseline-stream-read": [
+        {
+          "case": "content-preserve1-sampled1",
+          "cached": 2371,
+          "prefill": 0,
+          "disk": true,
+          "exact": true
+        }
+      ]
+    }
+  },
+  "performance": {
+    "scope": "Production HTTP C1 MTP; 2079 new prompt tokens and 126-128 actual reply tokens on warm turns; four matched growing-history turns per background size",
+    "baseline_command": [
+      "R:/gufo-baseline.exe",
+      "serve",
+      "llm",
+      "--model",
+      "C:/Users/pegas/Documents/Llama/LLama-GUI/models/unsloth_Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
+      "--mtp-model",
+      "C:/Users/pegas/Documents/Llama/LLama-GUI/models/unsloth_Qwen3.8-Flash-Next-GGUF/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf",
+      "--speculative",
+      "mtp",
+      "--context",
+      "49152",
+      "--sessions",
+      "1",
+      "--port",
+      "18081",
+      "--served-model-name",
+      "cache-test",
+      "--think",
+      "off",
+      "--temperature",
+      "0",
+      "--seed",
+      "441",
+      "--prefill-chunk",
+      "2048"
+    ],
+    "candidate_command": [
+      "R:/gufo.exe",
+      "serve",
+      "llm",
+      "--model",
+      "C:/Users/pegas/Documents/Llama/LLama-GUI/models/unsloth_Qwen3.8-Flash-Next-GGUF/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
+      "--mtp-model",
+      "C:/Users/pegas/Documents/Llama/LLama-GUI/models/unsloth_Qwen3.8-Flash-Next-GGUF/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf",
+      "--speculative",
+      "mtp",
+      "--context",
+      "49152",
+      "--sessions",
+      "1",
+      "--port",
+      "18081",
+      "--served-model-name",
+      "cache-test",
+      "--think",
+      "off",
+      "--temperature",
+      "0",
+      "--seed",
+      "441",
+      "--prefill-chunk",
+      "2048"
+    ],
+    "workload": {
+      "system_prefix": "Snapshot measurement {depth}. Archive notes are background. Follow the newest user instruction.\n",
+      "system_background_unit": " archive",
+      "background_repetitions": [
+        16384,
+        32768
+      ],
+      "user_background_unit": " note",
+      "user_background_repetitions": 2048,
+      "instruction": "\nRepeat the word beta separated by spaces forever. Do not explain or stop early.",
+      "history": "Append the full returned assistant message and next user turn; five turns each depth. Turn zero bypasses cache lookup and is excluded from medians.",
+      "request": {
+        "model": "cache-test",
+        "temperature": 0,
+        "seed": 441,
+        "max_completion_tokens": 128,
+        "reasoning_effort": "none"
+      }
+    },
+    "excluded_run": "Initial baseline overlapped model-file hashing; use the clean repeated baseline instead.",
+    "medians": [
+      {
+        "background_tokens": 16384,
+        "measured_turns": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "wall_ms": {
+          "baseline": 5167.659050006478,
+          "candidate": 4747.345050003787,
+          "reduction_percent": 8.13354743289737
+        },
+        "snapshot_ms": {
+          "baseline": 552.0046500000001,
+          "candidate": 243.36085,
+          "reduction_percent": 55.91326087561038
+        },
+        "ttft_ms": {
+          "baseline": 3201.5922,
+          "candidate": 2937.98045,
+          "reduction_percent": 8.233770372129223
+        }
+      },
+      {
+        "background_tokens": 32768,
+        "measured_turns": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "wall_ms": {
+          "baseline": 5666.964949996327,
+          "candidate": 4869.299499994668,
+          "reduction_percent": 14.07570819724545
+        },
+        "snapshot_ms": {
+          "baseline": 896.98725,
+          "candidate": 266.2477,
+          "reduction_percent": 70.31756025517643
+        },
+        "ttft_ms": {
+          "baseline": 3554.8303,
+          "candidate": 3050.2346,
+          "reduction_percent": 14.19464946048199
+        }
+      }
+    ],
+    "records": [
+      {
+        "background_tokens": 16384,
+        "turn": 0,
+        "exact_reply_sha256": "3973ad862f007adb07289cac977466d96724748c95633f6e519572612df71c7f",
+        "baseline": {
+          "wall_ms": 20479.083700003684,
+          "usage": {
+            "prompt_tokens": 18487,
+            "completion_tokens": 128,
+            "total_tokens": 18615,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "cached_tokens": 0,
+            "prompt_tokens_per_second": 1003.1482696335356,
+            "completion_tokens_per_second": 73.37022097620225,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 111,
+            "gufo": {
+              "cache_hit": false,
+              "cache_miss_reason": "disabled",
+              "cache_common_prefix_tokens": 0,
+              "cache_checkpoint_tokens": 0,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 2912487548,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 548.5917999999999,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 18487,
+              "prefill_chunks": 11,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 2048,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 67.7943,
+              "prefill_ms": 18428.980600000003,
+              "decode_ms": 1744.577,
+              "ttft_ms": 18614.7278,
+              "mean_inter_token_ms": 14.65472755905512,
+              "max_inter_token_ms": 199.752,
+              "execution_plan": "serial-c1"
+            }
+          }
+        },
+        "candidate": {
+          "wall_ms": 20523.70529998734,
+          "usage": {
+            "prompt_tokens": 18487,
+            "completion_tokens": 128,
+            "total_tokens": 18615,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "cached_tokens": 0,
+            "prompt_tokens_per_second": 995.156579869853,
+            "completion_tokens_per_second": 73.54360253681762,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 111,
+            "gufo": {
+              "cache_hit": false,
+              "cache_miss_reason": "disabled",
+              "cache_common_prefix_tokens": 0,
+              "cache_checkpoint_tokens": 0,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 2912487548,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 547.4525,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 18487,
+              "prefill_chunks": 11,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 2048,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 67.5676,
+              "prefill_ms": 18576.9761,
+              "decode_ms": 1740.4641000000004,
+              "ttft_ms": 18709.859,
+              "mean_inter_token_ms": 14.178312598425194,
+              "max_inter_token_ms": 143.1009,
+              "execution_plan": "serial-c1"
+            }
+          }
+        }
+      },
+      {
+        "background_tokens": 16384,
+        "turn": 1,
+        "exact_reply_sha256": "3973ad862f007adb07289cac977466d96724748c95633f6e519572612df71c7f",
+        "baseline": {
+          "wall_ms": 4956.791799995699,
+          "usage": {
+            "prompt_tokens": 20694,
+            "completion_tokens": 128,
+            "total_tokens": 20822,
+            "prompt_tokens_details": {
+              "cached_tokens": 18615
+            },
+            "cached_tokens": 18615,
+            "prompt_tokens_per_second": 742.3640148202852,
+            "completion_tokens_per_second": 71.78680440759763,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 111,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 2687339440,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 477.35409999999996,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1865,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 70.5971,
+              "prefill_ms": 2800.5129,
+              "decode_ms": 1783.0574999999997,
+              "ttft_ms": 2995.2721,
+              "mean_inter_token_ms": 15.002084251968505,
+              "max_inter_token_ms": 201.0401,
+              "execution_plan": "serial-c1"
+            }
+          }
+        },
+        "candidate": {
+          "wall_ms": 4630.973199993605,
+          "usage": {
+            "prompt_tokens": 20694,
+            "completion_tokens": 128,
+            "total_tokens": 20822,
+            "prompt_tokens_details": {
+              "cached_tokens": 18615
+            },
+            "cached_tokens": 18615,
+            "prompt_tokens_per_second": 771.2156643954322,
+            "completion_tokens_per_second": 73.08033378528953,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 111,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 2687339440,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 229.6326,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1865,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 72.4906,
+              "prefill_ms": 2695.744,
+              "decode_ms": 1751.4972,
+              "ttft_ms": 2823.7611,
+              "mean_inter_token_ms": 14.163202362204718,
+              "max_inter_token_ms": 119.4512,
+              "execution_plan": "serial-c1"
+            }
+          }
+        }
+      },
+      {
+        "background_tokens": 16384,
+        "turn": 2,
+        "exact_reply_sha256": "486392ab6029200c85f74fd92c9f6fc3723a943da8c716e2dcf4a87be1b42ba4",
+        "baseline": {
+          "wall_ms": 5139.628500008257,
+          "usage": {
+            "prompt_tokens": 22901,
+            "completion_tokens": 127,
+            "total_tokens": 23028,
+            "prompt_tokens_details": {
+              "cached_tokens": 20822
+            },
+            "cached_tokens": 20822,
+            "prompt_tokens_per_second": 704.2936777938066,
+            "completion_tokens_per_second": 71.21289009383841,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 110,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 2925372708,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 552.3985,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1706,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 76.7886,
+              "prefill_ms": 2951.8936000000003,
+              "decode_ms": 1783.3849999999998,
+              "ttft_ms": 3161.8447,
+              "mean_inter_token_ms": 15.26539365079365,
+              "max_inter_token_ms": 208.9145,
+              "execution_plan": "serial-c1"
+            }
+          }
+        },
+        "candidate": {
+          "wall_ms": 4697.188100006315,
+          "usage": {
+            "prompt_tokens": 22901,
+            "completion_tokens": 127,
+            "total_tokens": 23028,
+            "prompt_tokens_details": {
+              "cached_tokens": 20822
+            },
+            "cached_tokens": 20822,
+            "prompt_tokens_per_second": 753.8760433423245,
+            "completion_tokens_per_second": 73.1559192844821,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 110,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 2925372708,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 247.94920000000002,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1706,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 74.4201,
+              "prefill_ms": 2757.7478,
+              "decode_ms": 1736.0181000000005,
+              "ttft_ms": 2895.7695,
+              "mean_inter_token_ms": 14.208560317460316,
+              "max_inter_token_ms": 121.3436,
+              "execution_plan": "serial-c1"
+            }
+          }
+        }
+      },
+      {
+        "background_tokens": 16384,
+        "turn": 3,
+        "exact_reply_sha256": "486392ab6029200c85f74fd92c9f6fc3723a943da8c716e2dcf4a87be1b42ba4",
+        "baseline": {
+          "wall_ms": 5203.607400006149,
+          "usage": {
+            "prompt_tokens": 25107,
+            "completion_tokens": 127,
+            "total_tokens": 25234,
+            "prompt_tokens_details": {
+              "cached_tokens": 23028
+            },
+            "cached_tokens": 23028,
+            "prompt_tokens_per_second": 685.2432067892275,
+            "completion_tokens_per_second": 72.1255975847125,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 110,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 3163292812,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 551.6108,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1548,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 80.0304,
+              "prefill_ms": 3033.9593,
+              "decode_ms": 1760.8173000000002,
+              "ttft_ms": 3241.3397,
+              "mean_inter_token_ms": 15.119146825396825,
+              "max_inter_token_ms": 214.1666,
+              "execution_plan": "serial-c1"
+            }
+          }
+        },
+        "candidate": {
+          "wall_ms": 4797.502000001259,
+          "usage": {
+            "prompt_tokens": 25107,
+            "completion_tokens": 127,
+            "total_tokens": 25234,
+            "prompt_tokens_details": {
+              "cached_tokens": 23028
+            },
+            "cached_tokens": 23028,
+            "prompt_tokens_per_second": 732.4561686285323,
+            "completion_tokens_per_second": 72.72050144393141,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 110,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 3163292812,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 238.77249999999998,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1548,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 79.0296,
+              "prefill_ms": 2838.3951,
+              "decode_ms": 1746.4125999999999,
+              "ttft_ms": 2980.1914,
+              "mean_inter_token_ms": 14.27938888888888,
+              "max_inter_token_ms": 119.9518,
+              "execution_plan": "serial-c1"
+            }
+          }
+        }
+      },
+      {
+        "background_tokens": 16384,
+        "turn": 4,
+        "exact_reply_sha256": "486392ab6029200c85f74fd92c9f6fc3723a943da8c716e2dcf4a87be1b42ba4",
+        "baseline": {
+          "wall_ms": 5195.689600004698,
+          "usage": {
+            "prompt_tokens": 27313,
+            "completion_tokens": 127,
+            "total_tokens": 27440,
+            "prompt_tokens_details": {
+              "cached_tokens": 25234
+            },
+            "cached_tokens": 25234,
+            "prompt_tokens_per_second": 687.4719918818122,
+            "completion_tokens_per_second": 72.3966588998923,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 110,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 3401271028,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 591.0858,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1390,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 80.0654,
+              "prefill_ms": 3024.1232,
+              "decode_ms": 1754.2246,
+              "ttft_ms": 3247.5533,
+              "mean_inter_token_ms": 15.153019841269838,
+              "max_inter_token_ms": 222.9265,
+              "execution_plan": "serial-c1"
+            }
+          }
+        },
+        "candidate": {
+          "wall_ms": 4934.352800002671,
+          "usage": {
+            "prompt_tokens": 27313,
+            "completion_tokens": 127,
+            "total_tokens": 27440,
+            "prompt_tokens_details": {
+              "cached_tokens": 25234
+            },
+            "cached_tokens": 25234,
+            "prompt_tokens_per_second": 707.5813650500411,
+            "completion_tokens_per_second": 72.21442931864893,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 110,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 3401271028,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 341.96450000000004,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1390,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 82.8958,
+              "prefill_ms": 2938.1780000000003,
+              "decode_ms": 1758.6512999999995,
+              "ttft_ms": 3104.6961,
+              "mean_inter_token_ms": 14.352670634920633,
+              "max_inter_token_ms": 118.3292,
+              "execution_plan": "serial-c1"
+            }
+          }
+        }
+      },
+      {
+        "background_tokens": 32768,
+        "turn": 0,
+        "exact_reply_sha256": "3973ad862f007adb07289cac977466d96724748c95633f6e519572612df71c7f",
+        "baseline": {
+          "wall_ms": 35398.31520000007,
+          "usage": {
+            "prompt_tokens": 34871,
+            "completion_tokens": 128,
+            "total_tokens": 34999,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "cached_tokens": 0,
+            "prompt_tokens_per_second": 1053.096286697511,
+            "completion_tokens_per_second": 73.2498437718176,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 111,
+            "gufo": {
+              "cache_hit": false,
+              "cache_miss_reason": "disabled",
+              "cache_common_prefix_tokens": 0,
+              "cache_checkpoint_tokens": 0,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 4937058428,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 980.5121,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 34871,
+              "prefill_chunks": 19,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 2048,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 126.8783,
+              "prefill_ms": 33112.8316,
+              "decode_ms": 1747.4439999999997,
+              "ttft_ms": 33395.9905,
+              "mean_inter_token_ms": 15.183085826771647,
+              "max_inter_token_ms": 247.5834,
+              "execution_plan": "serial-c1"
+            }
+          }
+        },
+        "candidate": {
+          "wall_ms": 35461.977099999785,
+          "usage": {
+            "prompt_tokens": 34871,
+            "completion_tokens": 128,
+            "total_tokens": 34999,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "cached_tokens": 0,
+            "prompt_tokens_per_second": 1047.5119909497557,
+            "completion_tokens_per_second": 72.86382201372037,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 111,
+            "gufo": {
+              "cache_hit": false,
+              "cache_miss_reason": "disabled",
+              "cache_common_prefix_tokens": 0,
+              "cache_checkpoint_tokens": 0,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 4937058428,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 920.0511,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 34871,
+              "prefill_chunks": 19,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 2048,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 142.2995,
+              "prefill_ms": 33289.356400000004,
+              "decode_ms": 1756.7017,
+              "ttft_ms": 33558.4044,
+              "mean_inter_token_ms": 14.261448031496059,
+              "max_inter_token_ms": 122.166,
+              "execution_plan": "serial-c1"
+            }
+          }
+        }
+      },
+      {
+        "background_tokens": 32768,
+        "turn": 1,
+        "exact_reply_sha256": "486392ab6029200c85f74fd92c9f6fc3723a943da8c716e2dcf4a87be1b42ba4",
+        "baseline": {
+          "wall_ms": 5515.399200012325,
+          "usage": {
+            "prompt_tokens": 37078,
+            "completion_tokens": 127,
+            "total_tokens": 37205,
+            "prompt_tokens_details": {
+              "cached_tokens": 34999
+            },
+            "cached_tokens": 34999,
+            "prompt_tokens_per_second": 672.1286141865368,
+            "completion_tokens_per_second": 72.59014853373331,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 110,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 4486958000,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 974.9492,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1865,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 134.0821,
+              "prefill_ms": 3093.1580000000004,
+              "decode_ms": 1749.5486999999998,
+              "ttft_ms": 3478.8461,
+              "mean_inter_token_ms": 15.649607142857134,
+              "max_inter_token_ms": 289.1603,
+              "execution_plan": "serial-c1"
+            }
+          }
+        },
+        "candidate": {
+          "wall_ms": 4702.673399995547,
+          "usage": {
+            "prompt_tokens": 37078,
+            "completion_tokens": 127,
+            "total_tokens": 37205,
+            "prompt_tokens_details": {
+              "cached_tokens": 34999
+            },
+            "cached_tokens": 34999,
+            "prompt_tokens_per_second": 770.8576505119029,
+            "completion_tokens_per_second": 72.78335289982918,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 110,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 4486958000,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 246.2566,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1865,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 145.2153,
+              "prefill_ms": 2696.996,
+              "decode_ms": 1744.9045,
+              "ttft_ms": 2897.523,
+              "mean_inter_token_ms": 14.291158730158728,
+              "max_inter_token_ms": 123.1235,
+              "execution_plan": "serial-c1"
+            }
+          }
+        }
+      },
+      {
+        "background_tokens": 32768,
+        "turn": 2,
+        "exact_reply_sha256": "1e33e97ab5779168f94a2240c69294647479aab0bd9d7cdad64e7c351b48f7bb",
+        "baseline": {
+          "wall_ms": 5585.356299998239,
+          "usage": {
+            "prompt_tokens": 39284,
+            "completion_tokens": 126,
+            "total_tokens": 39410,
+            "prompt_tokens_details": {
+              "cached_tokens": 37205
+            },
+            "cached_tokens": 37205,
+            "prompt_tokens_per_second": 660.5488846684507,
+            "completion_tokens_per_second": 71.42774539342062,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 109,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 4724854808,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 790.1709000000001,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1707,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 131.7559,
+              "prefill_ms": 3147.3825,
+              "decode_ms": 1764.0203999999999,
+              "ttft_ms": 3456.8571,
+              "mean_inter_token_ms": 16.9922536,
+              "max_inter_token_ms": 429.9218,
+              "execution_plan": "serial-c1"
+            }
+          }
+        },
+        "candidate": {
+          "wall_ms": 4833.356999995885,
+          "usage": {
+            "prompt_tokens": 39284,
+            "completion_tokens": 126,
+            "total_tokens": 39410,
+            "prompt_tokens_details": {
+              "cached_tokens": 37205
+            },
+            "cached_tokens": 37205,
+            "prompt_tokens_per_second": 734.5877033763828,
+            "completion_tokens_per_second": 72.3053185037803,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 109,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 4724854808,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 308.46720000000005,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1707,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 143.4206,
+              "prefill_ms": 2830.1589999999997,
+              "decode_ms": 1742.6104000000003,
+              "ttft_ms": 3027.4332,
+              "mean_inter_token_ms": 14.416167999999997,
+              "max_inter_token_ms": 126.8317,
+              "execution_plan": "serial-c1"
+            }
+          }
+        }
+      },
+      {
+        "background_tokens": 32768,
+        "turn": 3,
+        "exact_reply_sha256": "1e33e97ab5779168f94a2240c69294647479aab0bd9d7cdad64e7c351b48f7bb",
+        "baseline": {
+          "wall_ms": 5748.573599994415,
+          "usage": {
+            "prompt_tokens": 41489,
+            "completion_tokens": 126,
+            "total_tokens": 41615,
+            "prompt_tokens_details": {
+              "cached_tokens": 39410
+            },
+            "cached_tokens": 39410,
+            "prompt_tokens_per_second": 620.7928704432153,
+            "completion_tokens_per_second": 70.95279352973591,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 109,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 4962718068,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 874.9411,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1550,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 141.2834,
+              "prefill_ms": 3348.9431000000004,
+              "decode_ms": 1775.8286,
+              "ttft_ms": 3697.0002,
+              "mean_inter_token_ms": 16.245715999999994,
+              "max_inter_token_ms": 323.0958,
+              "execution_plan": "serial-c1"
+            }
+          }
+        },
+        "candidate": {
+          "wall_ms": 4905.24199999345,
+          "usage": {
+            "prompt_tokens": 41489,
+            "completion_tokens": 126,
+            "total_tokens": 41615,
+            "prompt_tokens_details": {
+              "cached_tokens": 39410
+            },
+            "cached_tokens": 39410,
+            "prompt_tokens_per_second": 727.954634455427,
+            "completion_tokens_per_second": 71.63754268901069,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 109,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 4962718068,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 249.6369,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1550,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 149.1945,
+              "prefill_ms": 2855.9471999999996,
+              "decode_ms": 1758.8543,
+              "ttft_ms": 3073.036,
+              "mean_inter_token_ms": 14.552650400000001,
+              "max_inter_token_ms": 128.1482,
+              "execution_plan": "serial-c1"
+            }
+          }
+        }
+      },
+      {
+        "background_tokens": 32768,
+        "turn": 4,
+        "exact_reply_sha256": "1e33e97ab5779168f94a2240c69294647479aab0bd9d7cdad64e7c351b48f7bb",
+        "baseline": {
+          "wall_ms": 5779.446200001985,
+          "usage": {
+            "prompt_tokens": 43694,
+            "completion_tokens": 126,
+            "total_tokens": 43820,
+            "prompt_tokens_details": {
+              "cached_tokens": 41615
+            },
+            "cached_tokens": 41615,
+            "prompt_tokens_per_second": 636.2756445251924,
+            "completion_tokens_per_second": 70.05979214038115,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 109,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 5200619728,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 919.0334,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1393,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 143.5278,
+              "prefill_ms": 3267.4518,
+              "decode_ms": 1798.4637999999998,
+              "ttft_ms": 3630.8145,
+              "mean_inter_token_ms": 16.984284799999998,
+              "max_inter_token_ms": 394.2195,
+              "execution_plan": "serial-c1"
+            }
+          }
+        },
+        "candidate": {
+          "wall_ms": 4930.7216000015615,
+          "usage": {
+            "prompt_tokens": 43694,
+            "completion_tokens": 126,
+            "total_tokens": 43820,
+            "prompt_tokens_details": {
+              "cached_tokens": 41615
+            },
+            "cached_tokens": 41615,
+            "prompt_tokens_per_second": 723.7604462235544,
+            "completion_tokens_per_second": 71.2363020647616,
+            "draft_tokens": 111,
+            "draft_tokens_accepted": 109,
+            "gufo": {
+              "cache_hit": true,
+              "cache_restore_bytes": 0,
+              "cache_snapshot_bytes": 5200619728,
+              "cache_disk_queued_bytes": 0,
+              "cache_shared_bytes": 0,
+              "cache_restore_ms": 0,
+              "cache_snapshot_ms": 282.8585,
+              "cache_disk_enqueue_ms": 0,
+              "cache_disk_hit": false,
+              "cache_shared_prefix_snapshots": 0,
+              "cache_shared_prefix_bytes": 0,
+              "cache_shared_prefix_ms": 0,
+              "prefill_tokens": 2079,
+              "prefill_chunks": 3,
+              "active_decode_prefill_chunks": 0,
+              "max_prefill_chunk_tokens": 1393,
+              "queue_depth_at_submit": 1,
+              "client_queue_depth_at_submit": 1,
+              "resident_requests_at_admission": 1,
+              "requested_logical_concurrency": 1,
+              "physical_execution_width": 1,
+              "queue_ms": 145.3714,
+              "prefill_ms": 2872.4974,
+              "decode_ms": 1768.7611,
+              "ttft_ms": 3098.8853,
+              "mean_inter_token_ms": 14.624454399999998,
+              "max_inter_token_ms": 127.3644,
+              "execution_plan": "serial-c1"
+            }
+          }
+        }
+      }
+    ],
+    "cache_entry_limit": 6,
+    "baseline_snapshot_budget_bytes": 7890100224,
+    "candidate_snapshot_budget_bytes": 7465216000,
+    "byte_admission_skips": 0
+  }
+}

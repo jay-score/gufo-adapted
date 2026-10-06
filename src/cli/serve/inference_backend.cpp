@@ -2755,8 +2755,8 @@ public:
   void StreamPersistentSnapshot(const TextRunnerSnapshot& snapshot,
                                 const SnapshotSink& sink) const override {
     (void)PersistentSnapshotPayloadBytes(snapshot);
-    sink(dynamic_cast<const QwenFlashNextTextRunnerSnapshot&>(snapshot)
-             .snapshot->bytes());
+    dynamic_cast<const QwenFlashNextTextRunnerSnapshot&>(snapshot)
+        .snapshot->StreamTo(sink);
   }
 
   void RestorePersistentSnapshot(

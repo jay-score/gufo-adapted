@@ -18,6 +18,16 @@ startup in both runs. Response text matched; these are workload-specific
 latencies, not a general throughput claim.
 [Measurements and identities](artifacts/image-prefix-cache.json).
 
+October 6 Windows incremental-checkpoint check (separate from the throughput
+tables): on matched C1 IQ4_XS/Q8_0 MTP conversations growing from 16K/32K
+backgrounds, snapshot elapsed falls **552.00 -> 243.36 ms / 896.99 -> 266.25 ms**.
+Median warm-turn latency falls **5.168 -> 4.747 s / 5.667 -> 4.869 s**
+(**8.1% / 14.1%**). Four corresponding warm turns per depth, 2079 new prompt
+tokens, 126-128 actual output tokens, greedy, thinking off, context 49152, disk
+off; replies and token/draft counts match. These are workload-specific HTTP
+latencies, not a refresh of the kernel throughput tables.
+[Method and evidence](../../plans/flash-next-host-snapshots.md#production-measurements).
+
 [Quality and measurement details](QUALITY.md#benchmark-method) · [Model identities](artifacts/model-identities.json)
 
 ## Single user, autoregressive
@@ -51,7 +61,7 @@ text, including Gufo predictor catch-up.
 | 0 | 1602.82 | 468.76 | +241.9% | 32.18 | 31.73 | +1.4% | 59.41 | 48.12 | +23.5% |
 | 4,096 | 1506.32 | 423.79 | +255.4% | 34.57 | 34.48 | +0.3% | 47.92 | 45.71 | +4.8% |
 | 8,192 | 1492.95 | 394.98 | +278.0% | 34.97 | 32.20 | +8.6% | 50.02 | 44.31 | +12.9% |
-| 12,288 | 1488.03 | 365.91 | +306.7% | 35.18 | 32.32 | +8.8% | 39.95 | 43.53 | -8.2% |
+| 12,288 | 1488.03 | 365.91 | +306.7% | 35.18 | 32.32 | +8.8% | 39.95 | 43.53 | -8.1% |
 | 16,384 | 1471.81 | 341.98 | +330.4% | 33.84 | 32.07 | +5.5% | 50.55 | 43.66 | +15.8% |
 | 32,768 | 1449.56 | 277.61 | +422.2% | 30.67 | 25.41 | +20.7% | 46.81 | 39.28 | +19.2% |
 | 65,536 | 1316.70 | 208.04 | +532.9% | 31.78 | 19.65 | +61.7% | 45.12 | 27.75 | +62.6% |

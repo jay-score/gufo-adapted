@@ -3,6 +3,7 @@
 // persistent byte form, at a prompt boundary and mid-decode.
 #include <chrono>
 #include <cstring>
+#include <future>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -68,6 +69,113 @@ double Millis(std::chrono::steady_clock::time_point start) {
       .count();
 }
 
+std::vector<std::uint8_t> Payload(const qfn::SessionSnapshot& snapshot) {
+  std::vector<std::uint8_t> bytes(snapshot.SizeBytes());
+  Require(snapshot.CopyTo(bytes), "snapshot export failed");
+  std::size_t offset = 0;
+  snapshot.StreamTo([&](auto chunk) {
+    Require(
+        chunk.size() <= bytes.size() - offset &&
+            std::memcmp(bytes.data() + offset, chunk.data(), chunk.size()) == 0,
+        "streamed snapshot differs from contiguous export");
+    offset += chunk.size();
+  });
+  Require(offset == bytes.size(), "streamed snapshot is truncated");
+  return bytes;
+}
+
+void CheckIncrementalSnapshots(const std::shared_ptr<qfn::Model>& model,
+                               std::span<const std::int32_t> prompt,
+                               gufo::core::SessionMode mode) {
+  std::string error;
+  auto source = model->CreateSession(mode, 8192, &error);
+  auto reference = model->CreateSession(mode, 8192, &error);
+  Require(source && reference, error);
+  Require(source->Sync(prompt.first(2047), &error), error);
+  auto prefix = source->SaveSnapshot(&error);
+  Require(prefix && prefix->SharedDeviceBytes() == 0,
+          "initial snapshot unexpectedly shares rows");
+  const auto prefix_bytes = Payload(*prefix);
+  Require(reference->RestoreSnapshot(prefix_bytes, &error), error);
+  Require(source->Sync(prompt, &error) && reference->Sync(prompt, &error),
+          error);
+  auto start = std::chrono::steady_clock::now();
+  auto grown = source->SaveSnapshot(&error);
+  const auto save_ms = Millis(start);
+  auto complete = reference->SaveSnapshot(&error);
+  Require(grown && complete && grown->SharedDeviceBytes() != 0,
+          "growing snapshot did not share its captured prefix");
+  Require(complete->SharedDeviceBytes() == 0,
+          "raw restore retained unproven snapshot provenance");
+  Require(grown->CopiedDeviceBytes() + grown->SharedDeviceBytes() ==
+              complete->CopiedDeviceBytes(),
+          "incremental capture byte accounting differs from full capture");
+  const auto grown_bytes = Payload(*grown);
+  Require(grown_bytes == Payload(*complete),
+          "incremental snapshot differs from independent full capture");
+  auto same = source->SaveSnapshot(&error);
+  Require(same && same->CopiedDeviceBytes() < grown->CopiedDeviceBytes(),
+          "unchanged checkpoint recopied its KV history");
+  Require(Payload(*same) == grown_bytes,
+          "sharing an unchanged prefix changed snapshot bytes");
+
+  // Rewind, overwrite a suffix, and compare against an independent raw restore.
+  std::vector<std::int32_t> branch(prompt.begin(), prompt.end());
+  std::rotate(branch.begin() + 2047, branch.begin() + 2079, branch.end());
+  Require(source->RestoreSnapshot(*prefix, &error) &&
+              reference->RestoreSnapshot(prefix_bytes, &error),
+          error);
+  Require(source->Sync(branch, &error) && reference->Sync(branch, &error),
+          error);
+  auto branched = source->SaveSnapshot(&error);
+  complete = reference->SaveSnapshot(&error);
+  Require(branched && complete && branched->SharedDeviceBytes() != 0, error);
+  Require(Payload(*branched) == Payload(*complete),
+          "branch reused overwritten snapshot rows");
+  Require(Payload(*grown) == grown_bytes,
+          "branch changed an independent older checkpoint");
+
+  // Resetting and recomputing identical tokens must drop all provenance.
+  auto reader = std::async(std::launch::async, [&] { return Payload(*grown); });
+  source->Reset();
+  Require(source->Sync(prompt, &error), error);
+  auto reset = source->SaveSnapshot(&error);
+  Require(reset && reset->SharedDeviceBytes() == 0,
+          "reset reused a token-equal but unproven cache prefix");
+  Require(reader.get() == grown_bytes,
+          "concurrent export depended on the source session");
+
+  // Failed capture drains its queued copies and does not replace the base.
+  unsigned checks = 0;
+  source->SetCancellationCheck([&] { return ++checks > 3; });
+  Require(!source->SaveSnapshot(&error), "cancelled capture succeeded");
+  source->SetCancellationCheck({});
+  auto retry = source->SaveSnapshot(&error);
+  Require(retry && retry->SharedDeviceBytes() != 0, error);
+  Require(Payload(*retry) == Payload(*reset),
+          "cancelled capture damaged the last completed checkpoint");
+  retry.reset();
+  auto expired = source->SaveSnapshot(&error);
+  Require(expired && expired->SharedDeviceBytes() == 0,
+          "session retained an evicted checkpoint");
+
+  // Both the direct chunk restore and contiguous disk bytes survive
+  // destruction.
+  source.reset();
+  Require(reference->RestoreSnapshot(*grown, &error), error);
+  auto survivor = reference->SaveSnapshot(&error);
+  Require(survivor && Payload(*survivor) == grown_bytes,
+          "source destruction invalidated shared checkpoint blocks");
+  Require(reference->RestoreSnapshot(grown_bytes, &error), error);
+  complete = reference->SaveSnapshot(&error);
+  Require(complete && Payload(*complete) == grown_bytes,
+          "version-15 persistent snapshot round trip changed bytes");
+  std::cout << "incremental mode=" << static_cast<int>(mode)
+            << " copied=" << grown->CopiedDeviceBytes()
+            << " shared=" << grown->SharedDeviceBytes()
+            << " save_ms=" << save_ms << " exact=1\n";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -95,6 +203,10 @@ int main(int argc, char** argv) {
     std::vector<std::int32_t> prompt(4095);
     for (std::size_t i = 0; i < prompt.size(); ++i)
       prompt[i] = pattern[i % pattern.size()];
+    CheckIncrementalSnapshots(model, prompt,
+                              gufo::core::SessionMode::kAutoregressive);
+    CheckIncrementalSnapshots(model, prompt,
+                              gufo::core::SessionMode::kSpeculative);
     const sampling::SamplingConfig config{
         .temperature = 0.8F, .top_k = 40, .top_p = 0.9F, .seed = 7};
     constexpr std::size_t kTokens = 48;

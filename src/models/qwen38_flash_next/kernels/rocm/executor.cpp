@@ -1,5 +1,8 @@
 #include "src/models/qwen38_flash_next/kernels/rocm/executor.hpp"
 
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -280,6 +283,8 @@ void Session::TrimRollback(std::uint32_t depth) noexcept {
 }
 
 void Session::Reset() {
+  snapshot_base_.reset();
+  snapshot_trunk_prefix_ = snapshot_draft_prefix_ = 0;
   // With Tuning::keep_rollback_rows the rows stay allocated: every verify
   // rewrites them before a rollback reads them, and freeing them would move
   // the pointers recorded in this session's verify and rollback graphs,
@@ -2041,6 +2046,7 @@ bool Executor::Forward(Session& session, std::span<const std::int32_t> tokens,
   }
   if (speculative && !EnsureRollback(session, n - 1, error_msg))
     return false;
+  session.LimitSnapshotPrefix(start_pos, session.mtp_.position);
   ++session.mutation_epoch_;
   session.spec_base_ = start_pos;
   session.spec_tokens_ = speculative ? n : 0;
@@ -2397,8 +2403,12 @@ template<typename Visit>
 std::uint64_t Executor::WalkSnapshot(const SnapshotHeader& h,
                                      const Session* session, Visit&& visit) {
   std::uint64_t offset = sizeof(SnapshotHeader);
-  const auto region = [&](void* device, std::uint64_t bytes, const char* what) {
-    if (bytes != 0 && !visit(device, offset, bytes, what)) {
+  const auto region = [&](void* device, std::uint64_t bytes, const char* what,
+                          std::uint32_t rows_id = 0,
+                          std::uint64_t row_bytes = 0, bool draft = false,
+                          bool pooled = false) {
+    if (bytes != 0 && !visit(device, offset, bytes, what, rows_id, row_bytes,
+                             draft, pooled)) {
       return false;
     }
     offset += bytes;
@@ -2438,8 +2448,10 @@ std::uint64_t Executor::WalkSnapshot(const SnapshotHeader& h,
   for (std::uint32_t il = 0; il < h.num_layers; ++il) {
     if (((il + 1) % h.full_attention_interval) == 0) {
       const auto* at = attention(il);
-      if (!region(at != nullptr ? at->k_cache : nullptr, kv_bytes, "K cache") ||
-          !region(at != nullptr ? at->v_cache : nullptr, kv_bytes, "V cache")) {
+      if (!region(at != nullptr ? at->k_cache : nullptr, kv_bytes, "K cache",
+                  3 * il + 1, h.kv_row * sizeof(__half)) ||
+          !region(at != nullptr ? at->v_cache : nullptr, kv_bytes, "V cache",
+                  3 * il + 2, h.kv_row * sizeof(__half))) {
         return 0;
       }
       // Serialize only unpooled rows, in chronological order. The physical
@@ -2458,7 +2470,8 @@ std::uint64_t Executor::WalkSnapshot(const SnapshotHeader& h,
           return 0;
       }
       if (!region(at != nullptr ? at->block_k : nullptr, block_bytes,
-                  "pooled block keys"))
+                  "pooled block keys", 3 * il + 3,
+                  h.indexer_head_dim * sizeof(__half), false, true))
         return 0;
     }
   }
@@ -2481,14 +2494,17 @@ std::uint64_t Executor::WalkSnapshot(const SnapshotHeader& h,
     if (!region(
             mtp ? mtp->block_k : nullptr,
             std::uint64_t{h.mtp_blocks} * h.indexer_head_dim * sizeof(__half),
-            "draft pooled keys"))
+            "draft pooled keys", 3 * h.num_layers + 3,
+            h.indexer_head_dim * sizeof(__half), true, true))
       return 0;
     const std::uint64_t mtp_kv_bytes =
         std::uint64_t{h.mtp_position} * h.kv_row * sizeof(__half);
     if (!region(mtp != nullptr ? mtp->k_cache : nullptr, mtp_kv_bytes,
-                "draft K cache") ||
+                "draft K cache", 3 * h.num_layers + 1,
+                h.kv_row * sizeof(__half), true) ||
         !region(mtp != nullptr ? mtp->v_cache : nullptr, mtp_kv_bytes,
-                "draft V cache") ||
+                "draft V cache", 3 * h.num_layers + 2,
+                h.kv_row * sizeof(__half), true) ||
         !region(mtp != nullptr ? mtp->h : nullptr,
                 std::uint64_t{h.hc_dim} * sizeof(float), "draft residual") ||
         !region(mtp != nullptr ? mtp->target_hidden : nullptr,
@@ -2511,7 +2527,8 @@ std::uint64_t Executor::SnapshotBytes(const Session& session,
   h.hidden_rows = hidden_rows;
   return WalkSnapshot(
       h, nullptr,
-      [](void*, std::uint64_t, std::uint64_t, const char*) { return true; });
+      [](void*, std::uint64_t, std::uint64_t, const char*, std::uint32_t,
+         std::uint64_t, bool, bool) { return true; });
 }
 
 bool Executor::SaveSnapshot(const Session& session, std::uint32_t hidden_rows,
@@ -2551,20 +2568,203 @@ bool Executor::SaveSnapshot(const Session& session, std::uint32_t hidden_rows,
     std::memcpy(payload.data() + payload.size() - grid_bytes,
                 session.VisionLayout().images.data(), grid_bytes);
   }
-  return WalkSnapshot(h, &session,
-                      [&](void* device, std::uint64_t offset,
-                          std::uint64_t bytes, const char*) {
-                        if (!session.CheckCancellation(error_msg))
-                          return false;
-                        transfer.Copy(payload.data() + offset, device, bytes);
-                        return true;
-                      }) != 0;
+  const auto bytes =
+      WalkSnapshot(h, &session,
+                   [&](void* device, std::uint64_t offset, std::uint64_t bytes,
+                       const char*, std::uint32_t, std::uint64_t, bool, bool) {
+                     if (!session.CheckCancellation(error_msg))
+                       return false;
+                     transfer.Enqueue(payload.data() + offset, device, bytes);
+                     return true;
+                   });
+  transfer.Finish();
+  return bytes != 0;
+}
+
+bool HostSnapshot::Visit(
+    std::uint64_t offset, std::uint64_t bytes,
+    const std::function<bool(std::span<const std::uint8_t>)>& visit) const {
+  if (offset > size_ || bytes > size_ - offset)
+    return false;
+  for (const auto& region : regions_) {
+    if (bytes == 0)
+      break;
+    if (offset >= region.offset + region.bytes)
+      continue;
+    auto skip = offset - region.offset;
+    for (const auto& chunk : region.chunks) {
+      if (skip >= chunk.bytes) {
+        skip -= chunk.bytes;
+        continue;
+      }
+      const auto count = std::min(bytes, chunk.bytes - skip);
+      if (!visit({chunk.data.get() + skip, static_cast<std::size_t>(count)}))
+        return false;
+      offset += count;
+      bytes -= count;
+      skip = 0;
+      if (bytes == 0)
+        break;
+    }
+  }
+  return bytes == 0;
+}
+
+bool HostSnapshot::CopyTo(std::span<std::uint8_t> destination) const {
+  if (destination.size() != size_)
+    return false;
+  auto* target = destination.data();
+  return Visit(0, size_, [&](auto source) {
+    std::memcpy(target, source.data(), source.size());
+    target += source.size();
+    return true;
+  });
+}
+
+void HostSnapshot::StreamTo(
+    const std::function<void(std::span<const std::uint8_t>)>& sink) const {
+  for (const auto& region : regions_)
+    for (const auto& chunk : region.chunks)
+      sink({chunk.data.get(), chunk.bytes});
+}
+
+std::shared_ptr<const HostSnapshot> Executor::SaveHostSnapshot(
+    const Session& session, std::uint32_t hidden_rows,
+    std::string* error_msg) const {
+  const std::lock_guard lock(session.snapshot_capture_mutex_);
+  if (session.owner_ != this || session.spec_tokens_ != 0 ||
+      hidden_rows > session.position_ ||
+      hidden_rows > options_.max_speculative) {
+    AssignError(error_msg, "snapshot requires a committed session frontier");
+    return nullptr;
+  }
+  auto base = session.snapshot_base_.lock();
+  auto snapshot = std::make_shared<HostSnapshot>();
+  SnapshotHeader h =
+      MakeSnapshotHeader(config(), session.mtp_enabled_, session);
+  h.blocks = session.blocks_;
+  h.mtp_blocks = session.mtp_.blocks;
+  h.mtp_position = session.mtp_.position;
+  h.hidden_rows = hidden_rows;
+  h.ngram_prev = session.ngram_.prev;
+  h.payload_bytes = snapshot->size_ = SnapshotBytes(session, hidden_rows);
+  const auto allocate = [](std::uint64_t bytes) {
+    std::shared_ptr<std::uint8_t[]> data(new std::uint8_t[bytes]);
+    // Preserve the host prefault/huge-page hints, only for newly copied blocks.
+    const long page = sysconf(_SC_PAGESIZE);
+    if (page > 0) {
+      const auto address = reinterpret_cast<std::uintptr_t>(data.get());
+      const auto skip = (page - address % page) % page;
+      const auto length = bytes > skip ? (bytes - skip) / page * page : 0;
+      if (length) {
+        (void)madvise(data.get() + skip, length, MADV_POPULATE_WRITE);
+        (void)madvise(data.get() + skip, length, MADV_HUGEPAGE);
+      }
+    }
+    return data;
+  };
+  const auto host_region = [&](std::uint64_t offset, const void* source,
+                               std::uint64_t bytes) {
+    auto data = allocate(bytes);
+    std::memcpy(data.get(), source, bytes);
+    snapshot->regions_.push_back(
+        {offset, bytes, 0, {{std::move(data), bytes}}});
+  };
+  host_region(0, &h, sizeof(h));
+  // The snapshot owns every queued destination before the transfer can start.
+  // Drain on failure too, before those destinations are destroyed.
+  gufo::hip::SnapshotTransfer transfer;
+  const auto bytes = WalkSnapshot(
+      h, &session,
+      [&](void* device, std::uint64_t offset, std::uint64_t bytes, const char*,
+          std::uint32_t rows_id, std::uint64_t row_bytes, bool draft,
+          bool pooled) {
+        if (!session.CheckCancellation(error_msg))
+          return false;
+        snapshot->regions_.push_back({offset, bytes, rows_id, {}});
+        auto& region = snapshot->regions_.back();
+        std::uint64_t shared = 0;
+        if (base && rows_id != 0) {
+          const auto previous = std::find_if(
+              base->regions_.begin(), base->regions_.end(),
+              [&](const auto& entry) { return entry.rows_id == rows_id; });
+          auto rows = draft ? session.snapshot_draft_prefix_
+                            : session.snapshot_trunk_prefix_;
+          if (pooled)
+            rows = h.compress_ratio ? rows / h.compress_ratio : 0;
+          if (previous != base->regions_.end()) {
+            const auto limit = std::min(
+                {bytes, previous->bytes, std::uint64_t{rows} * row_bytes});
+            for (const auto& chunk : previous->chunks) {
+              const auto count = std::min(chunk.bytes, limit - shared);
+              // Never retain a sliced allocation: repeated rewinds would
+              // otherwise accumulate unused tails from different ancestors.
+              if (count != chunk.bytes)
+                break;
+              region.chunks.push_back(chunk);
+              shared += count;
+            }
+          }
+        }
+        snapshot->shared_ += shared;
+        snapshot->copied_ += bytes - shared;
+        // Recapture a crossed partial block, bounded to 1 MiB per immutable
+        // region. Whole-block sharing retains no discarded ancestor suffix.
+        constexpr std::uint64_t kBlockBytes = 1ULL << 20;
+        for (auto copied = shared; copied < bytes;) {
+          const auto count =
+              rows_id ? std::min(kBlockBytes, bytes - copied) : bytes - copied;
+          auto data = allocate(count);
+          region.chunks.push_back({data, count});
+          transfer.Enqueue(data.get(),
+                           static_cast<const std::uint8_t*>(device) + copied,
+                           count);
+          copied += count;
+        }
+        return true;
+      });
+  transfer.Finish();
+  if (bytes == 0)
+    return nullptr;
+  const auto grid_bytes =
+      std::size_t{h.image_count} * sizeof(qwen::vision::ImageGrid);
+  if (grid_bytes)
+    host_region(snapshot->size_ - grid_bytes,
+                session.VisionLayout().images.data(), grid_bytes);
+  session.snapshot_base_ = snapshot;
+  session.snapshot_trunk_prefix_ = session.position_;
+  session.snapshot_draft_prefix_ = session.mtp_.position;
+  return snapshot;
 }
 
 bool Executor::RestoreSnapshot(Session& session,
                                std::span<const std::uint8_t> payload,
                                SnapshotInfo* info, std::string* error_msg,
                                std::uint32_t next_drafts) const {
+  return RestoreSnapshotImpl(session, payload, nullptr, info, error_msg,
+                             next_drafts);
+}
+
+bool Executor::RestoreSnapshot(
+    Session& session, const std::shared_ptr<const HostSnapshot>& snapshot,
+    SnapshotInfo* info, std::string* error_msg,
+    std::uint32_t next_drafts) const {
+  const auto& header = snapshot->regions_.front().chunks.front();
+  if (!RestoreSnapshotImpl(session, {header.data.get(), header.bytes},
+                           snapshot.get(), info, error_msg, next_drafts))
+    return false;
+  session.snapshot_base_ = snapshot;
+  session.snapshot_trunk_prefix_ = session.position_;
+  session.snapshot_draft_prefix_ = session.mtp_.position;
+  return true;
+}
+
+bool Executor::RestoreSnapshotImpl(Session& session,
+                                   std::span<const std::uint8_t> payload,
+                                   const HostSnapshot* snapshot,
+                                   SnapshotInfo* info, std::string* error_msg,
+                                   std::uint32_t next_drafts) const {
+  const auto payload_bytes = snapshot ? snapshot->size_ : payload.size();
   if (session.owner_ != this) {
     AssignError(error_msg, "session belongs to another executor");
     return false;
@@ -2598,11 +2798,11 @@ bool Executor::RestoreSnapshot(Session& session,
     AssignError(error_msg, "unpooled indexer rows exceed the ring capacity");
     return false;
   }
-  if (h.payload_bytes != payload.size() ||
-      WalkSnapshot(h, nullptr,
-                   [](void*, std::uint64_t, std::uint64_t, const char*) {
-                     return true;
-                   }) != payload.size()) {
+  if (h.payload_bytes != payload_bytes ||
+      WalkSnapshot(
+          h, nullptr,
+          [](void*, std::uint64_t, std::uint64_t, const char*, std::uint32_t,
+             std::uint64_t, bool, bool) { return true; }) != payload_bytes) {
     AssignError(error_msg, "snapshot payload size does not match its header");
     return false;
   }
@@ -2611,8 +2811,19 @@ bool Executor::RestoreSnapshot(Session& session,
   const auto grid_bytes =
       layout.images.size() * sizeof(qwen::vision::ImageGrid);
   if (grid_bytes != 0) {
-    std::memcpy(layout.images.data(),
-                payload.data() + payload.size() - grid_bytes, grid_bytes);
+    auto* destination = reinterpret_cast<std::uint8_t*>(layout.images.data());
+    if (snapshot) {
+      if (!snapshot->Visit(
+              payload_bytes - grid_bytes, grid_bytes, [&](auto bytes) {
+                std::memcpy(destination, bytes.data(), bytes.size());
+                destination += bytes.size();
+                return true;
+              }))
+        return false;
+    } else {
+      std::memcpy(destination, payload.data() + payload_bytes - grid_bytes,
+                  grid_bytes);
+    }
   }
   try {
     layout.Validate(session.max_context_);
@@ -2634,6 +2845,8 @@ bool Executor::RestoreSnapshot(Session& session,
   if (!Check(hipStreamSynchronize(stream_), "restore drain", error_msg)) {
     return false;
   }
+  session.snapshot_base_.reset();
+  session.snapshot_trunk_prefix_ = session.snapshot_draft_prefix_ = 0;
   // Every live state region is overwritten below. Retain only scratch that
   // the restored operation can use; this never allocates new rollback rows.
   // Explicit reset and failed restoration still release all scratch. With
@@ -2644,14 +2857,31 @@ bool Executor::RestoreSnapshot(Session& session,
     session.TrimRollback(std::min({next_drafts, options_.max_speculative - 1,
                                    remaining ? remaining - 1 : 0}));
   }
-  if (WalkSnapshot(h, &session,
-                   [&](void* device, std::uint64_t offset, std::uint64_t bytes,
-                       const char* what) {
-                     return session.CheckCancellation(error_msg) &&
-                            Check(hipMemcpy(device, payload.data() + offset,
-                                            bytes, hipMemcpyHostToDevice),
-                                  what, error_msg);
-                   }) == 0) {
+  const auto restored_bytes = WalkSnapshot(
+      h, &session,
+      [&](void* device, std::uint64_t offset, std::uint64_t bytes,
+          const char* what, std::uint32_t, std::uint64_t, bool, bool) {
+        if (snapshot) {
+          auto* target = static_cast<std::uint8_t*>(device);
+          return snapshot->Visit(offset, bytes, [&](auto source) {
+            if (!session.CheckCancellation(error_msg) ||
+                !Check(hipMemcpyAsync(target, source.data(), source.size(),
+                                      hipMemcpyHostToDevice, stream_),
+                       what, error_msg))
+              return false;
+            target += source.size();
+            return true;
+          });
+        }
+        return session.CheckCancellation(error_msg) &&
+               Check(hipMemcpy(device, payload.data() + offset, bytes,
+                               hipMemcpyHostToDevice),
+                     what, error_msg);
+      });
+  // Drain queued chunk writes even after cancellation, before resetting state.
+  const bool finished = !snapshot || Check(hipStreamSynchronize(stream_),
+                                           "restore finish", error_msg);
+  if (restored_bytes == 0 || !finished) {
     session.Reset();
     return false;
   }
@@ -2793,6 +3023,7 @@ bool Executor::MtpForward(Session& session,
     AssignError(error_msg, "MTP context is full");
     return false;
   }
+  session.LimitSnapshotPrefix(session.position_, pos);
   ++session.mutation_epoch_;
   std::copy(tokens.begin(), tokens.end(), tokens_host_);
   control_host_->position = session.position_;

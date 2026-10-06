@@ -27,6 +27,32 @@ that is correct for every model, including hybrid-recurrent ones. It costs the
 ability to trim a checkpoint: a saved snapshot can only be reused **whole**,
 and only when its tokens are an exact prefix of the new prompt.
 
+### Flash-Next checkpoint capture
+
+Flash-Next host snapshots share immutable attention K/V and completed indexer
+block keys with the preceding retained checkpoint. Capture copies only their
+new suffix (including a partial block crossed by a rewind), plus all mutable
+recurrent, convolution, raw-indexer and predictor frontier state. Sharing follows device-state provenance: reset and raw disk
+restore clear it; native snapshot restore establishes it; writes after a rewind
+invalidate the overwritten suffix. Matching token strings alone never establish
+sharing.
+
+Each checkpoint owns references to independent host blocks and survives source
+session reuse or destruction. The session keeps only a weak checkpoint reference,
+so eviction can release it. Immutable blocks are at most 1 MiB. Sharing retains
+whole blocks; a rewind recopies the crossed partial block instead of retaining unused ancestor tails.
+Queued copies complete before capture publishes a checkpoint, including when
+cancellation interrupts capture.
+
+The version-15 persistent payload remains complete and unchanged. Native restore
+reads the blocks directly; disk export streams them in payload order without
+a contiguous temporary. `CopyTo` writes into caller-owned contiguous storage.
+Requesting the model diagnostic's `bytes()` view materializes and retains a contiguous copy lazily. First captures and captures whose preceding
+checkpoint has expired still copy the complete device state. GPU restore also
+still transfers the complete state. Admission and `cache_snapshot_bytes` continue
+to count logical payload bytes conservatively, including shared prefixes.
+See the [implementation and validation record](plans/flash-next-host-snapshots.md).
+
 ## Why it exists
 
 Prefill cost scales with prompt length. Decode cost scales with tokens

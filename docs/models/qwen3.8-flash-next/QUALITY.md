@@ -82,9 +82,26 @@ residual correction, snapshots, and serving stops/cancellation/continuation.
 The [October 3 Windows audit](../../plans/flash-next-eos.md) records the tested
 IQ4_XS/Q8_0 artifacts, cases, results and remaining coverage limits.
 
+## Incremental host checkpoints on Windows
+
+October 6, 2026, IQ4_XS target, Q8_0 MTP and BF16 projector: all 675 matched-token
+full-logit hashes match the unchanged fork baseline, with perplexity 21.579505
+in each schedule. Incremental and full snapshot exports are byte-identical in
+AR/MTP, including direct disk streaming, branch overwrite, reset, cancellation,
+eviction and source destruction. C2/C4/C6/C8 sampling/logits/RNG and residual
+replay pass with Windows defaults and disabled platform tuning; all 105 explicit
+rollback-prefix continuations and the AR/MTP image-prefix checks pass.
+
+HTTP passes 27 growth checks, 15 history-edit checks and two cancellation/resume
+cases. All ten matched timing replies and token/draft counts agree. Existing
+version-15 disk checkpoints load correctly, and the old executable restores the
+final candidate's streamed checkpoints with identical continuation output.
+These are fork consistency checks; Linux validation is still required.
+[Commands, scope and evidence](../../plans/flash-next-host-snapshots.md).
+
 ## Benchmark method
 
-September 22–23, 2026; one warmed sample per point, greedy, thinking off.
+September 22-23, 2026; one warmed sample per point, greedy, thinking off.
 Single-user uses pp2048/tg128; MTP pp is the maximum across mixed/repetitive
 workloads. C1/2/4/6/8 use the same d0 prompts; every session prefills before
 measured tg128, with at most four prompt-tail tokens reevaluated. Rates sum
