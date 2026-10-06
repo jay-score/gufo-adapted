@@ -188,7 +188,7 @@ if(ENGINE_ENABLE_HIP)
     gufo_qwen38_flash_next)
 endif()
 
-add_library(gufo_logging STATIC src/cli/serve/logging.cpp)
+add_library(gufo_logging STATIC src/cli/serve/logging.cpp src/cli/serve/trace.cpp)
 target_include_directories(gufo_logging PUBLIC ${PROJECT_SOURCE_DIR})
 target_compile_features(gufo_logging PUBLIC cxx_std_20)
 
@@ -386,6 +386,11 @@ if (BUILD_TESTING)
   target_link_libraries(quote_tracker_test PRIVATE gufo_core)
   add_test(NAME quote_tracker_test COMMAND quote_tracker_test)
   set_tests_properties(quote_tracker_test PROPERTIES LABELS "cpu;server;api")
+
+  add_executable(trace_test tests/cli/trace_test.cpp)
+  target_link_libraries(trace_test PRIVATE gufo_logging)
+  add_test(NAME trace_test COMMAND trace_test)
+  set_tests_properties(trace_test PROPERTIES LABELS "cpu;server;trace")
 
   add_executable(http_server_test tests/cli/http_server_test.cpp)
   target_link_libraries(http_server_test PRIVATE gufo_http)
