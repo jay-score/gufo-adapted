@@ -2159,7 +2159,7 @@ void TestSnapshotDoesNotBlockOtherRequests() {
     };
     auto scheduler = MakeScheduler(control, 2, {.decode_active_tokens = 2});
     const std::vector<TextRunnerToken> prompt =
-        history ? std::vector<TextRunnerToken>(2049, 1)
+        history ? std::vector<TextRunnerToken>(2200, 1)
                 : std::vector<TextRunnerToken>{1, 10};
     auto first = scheduler->Submit(prompt, 7, 0.0F);
     const bool started = entered.try_acquire_for(kTestTimeout);
@@ -2189,6 +2189,48 @@ void TestSnapshotDoesNotBlockOtherRequests() {
   }
 }
 
+void TestCapturedDecoderResumesBeforeMorePrefill() {
+  auto control = std::make_shared<FakeControl>();
+  control->max_context = 4096;
+  control->preview_first_token = true;
+  control->block_prefill_label = 2;
+  std::binary_semaphore entered(0), release(0), finished(0);
+  std::atomic<unsigned> captures{0};
+  control->snapshot_callback = [&] {
+    if (captures.fetch_add(1) == 0) {
+      entered.release();
+      release.acquire();
+      finished.release();
+    }
+  };
+  auto scheduler = MakeScheduler(control, 2, {.decode_active_tokens = 2});
+  auto first = scheduler->Submit({1, 10}, 3, 0.0F);
+  Expect(entered.try_acquire_for(kTestTimeout), "first capture starts");
+  auto second = scheduler->Submit({2, 20, 21, 22, 23, 24, 25, 26, 27}, 1, 0.0F);
+  // Finish the capture while the peer's bounded chunk is still running.
+  control->WaitForPrefill(2);
+  release.release();
+  Expect(finished.try_acquire_for(kTestTimeout), "first capture finishes");
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  control->ReleasePrefill();
+  Expect(first.Wait().tokens == ExpectedTokens(1, 3),
+         "captured request resumes exactly");
+  Expect(second.Wait().tokens == ExpectedTokens(2, 1),
+         "peer prefill completes");
+  const auto events = control->Events();
+  const auto position = [&](EventKind kind, TextRunnerToken label,
+                            std::size_t occurrence) {
+    for (std::size_t index = 0; index < events.size(); ++index)
+      if (events[index].kind == kind && events[index].label == label &&
+          occurrence-- == 0)
+        return index;
+    return events.size();
+  };
+  Expect(
+      position(EventKind::kAdvance, 1, 0) < position(EventKind::kPrefill, 2, 1),
+      "a request leaving capture decodes before another peer chunk");
+}
+
 void TestCapturesAtCapacityAllowQueuedProgress() {
   for (const auto [multi, history] :
        {std::pair{false, false}, {true, false}, {false, true}, {true, true}}) {
@@ -2214,7 +2256,7 @@ void TestCapturesAtCapacityAllowQueuedProgress() {
         // Exercise captures during prefill as well as after first-token
         // publication, including the single-slot admission deadlock.
         metadata.cache_prefix_tokens = multi && !history ? 1 : 0;
-        auto prompt = std::vector<TextRunnerToken>(history ? 2049 : 2, 10);
+        auto prompt = std::vector<TextRunnerToken>(history ? 2200 : 2, 10);
         prompt.front() = static_cast<TextRunnerToken>(i + 1);
         requests.push_back(
             scheduler->Submit(prompt, 7, 0.0F, {}, false, metadata));
@@ -2246,7 +2288,7 @@ void TestCapturesAtCapacityAllowQueuedProgress() {
              "all slots capturing must not deadlock queued admission");
       results.get();
       if (history) {
-        auto prompt = std::vector<TextRunnerToken>(2049, 10);
+        auto prompt = std::vector<TextRunnerToken>(2200, 10);
         prompt.front() = 1;
         const auto resumed = scheduler->Submit(prompt, 7, 0.0F).Wait();
         Expect(resumed.cache_hit && resumed.cached_prompt_tokens == 2048 &&
@@ -2626,6 +2668,7 @@ int main() {
       }
     }
   }
+  TestCapturedDecoderResumesBeforeMorePrefill();
   TestCapturesAtCapacityAllowQueuedProgress();
   TestShutdownCancelsRunnerAcquisition();
   TestSnapshotDoesNotBlockOtherRequests();

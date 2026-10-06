@@ -187,8 +187,12 @@ fallback and complete prompt. Prefill stops at those positions and captures the
 whole model state before advancing. Positions lie on a 2,048-token grid spread
 across the prompt; the final grid point is within 2,048 tokens of its end.
 Warm continuations skip grid positions less than 2,048 tokens beyond the reused
-frontier. Capture runs asynchronously while that session is frozen, so other
-requests can continue; a single execution slot skips the extra worker.
+frontier, and every request skips grid positions within 128 tokens of its end:
+such a point would split the final prefill pass for a checkpoint next to the
+complete prompt. Capture runs asynchronously while that session is frozen, so other
+requests can continue; a single execution slot skips the extra worker. A
+request whose first token is already published decodes as soon as its capture
+finishes, before the next bounded prefill chunk of a peer.
 Coincident RAM and disk boundaries share one copy. Admission
 remains subject to the existing byte budget, and intermediate copies preserve
 the original branching fallback. These intermediate checkpoints live in RAM;
@@ -267,15 +271,51 @@ event=snapshot_cache_configured sessions=1 snapshot_entries=128 capacity_bytes=8
 These constraints are why several design choices are not preferences. Change
 them deliberately or not at all.
 
-**A snapshot can only be captured where the state actually sits.** The runner
-serialises the state as it is; there is no way to capture position *N* while
-the state is at *M*. Retaining a checkpoint at a stable boundary therefore
-requires prefill to **stop** at that boundary. A warm continuation cannot both
-reuse a frontier and retain its own boundary in a single uninterrupted pass.
+**A checkpoint must contain the state at its exact token boundary.** Most
+runners stop prefill at that boundary before capturing it. Flash-Next can
+capture a text prompt's stable boundary within the final prefill pass: its
+recurrent kernels retain the boundary state, convolution and PLE retain their
+history, and a one-row head computes the boundary logits. Attention queries
+on either side keep the grouping of separate passes. The final batch can
+include up to 128 tokens beyond the normal 2,048-token chunk, so a prompt that
+ends just past a chunk needs no separate tail pass; the stable boundary must be
+within eight tokens of that batch's end.
+The cache reserves the full payload before enabling this capture. Disk,
+image, intermediate and learned-prefix checkpoints still stop prefill at
+their boundary.
 
 **The reused frontier must be frozen before prefill.** Prefill mutates the
 leased state in place, so a frontier another request might branch from has to
 be captured first.
+
+Flash-Next copies its mutable recurrent, convolution and PLE state into
+private device storage at capture; the small indexer-ring, draft-residual and
+kept-row regions go directly into the host payload. Committed K/V and pooled
+rows remain in the live session while it appends, without a K/V copy.
+A same-session rewind allocates backing blocks for only the rows it would
+overwrite and copies them once for checkpoints sharing those rows. Appending
+allocates no K/V backing blocks. Restore keeps the still-live prefix without
+a K/V upload.
+Reset leaves append-only rows intact; the first write that would overwrite
+them preserves pending checkpoints. Session destruction preserves remaining
+rows before releasing device buffers. Byte readers assemble a complete
+payload before export. Forks copy the live prefix directly between device
+buffers, including detached rows in the shared backing blocks. When both
+sessions branch from a shared checkpoint, restore retains their proven shared
+rows and copies only the different suffix. Equal token histories alone do not
+prove identical K/V, since prefill shapes can change rounding.
+A private HIP pool shared by the executor's sessions allocates and releases
+snapshot storage without synchronizing peer inference streams. Each fresh
+allocation commits device pages, about 4.5 ms per 111 MB on gfx1151, so a
+restore into a slot whose rows other checkpoints still borrow pays that cost
+for the rows it protects. A retained
+Flash-Next snapshot prefers its source execution slot when
+that slot is available, avoiding a full-prefix copy for a rewritten turn.
+A busy source never blocks a branch into another slot; other choices use LRU.
+RAM admission continues to charge the complete payload size, and the disk
+byte format is unchanged. Captures intended for disk complete all device
+copies before prefill resumes, so disk serialization does not introduce a
+background K/V transfer during inference.
 
 **Admission is advisory, never fatal.** A refused reservation or a failed
 capture is a skipped optimisation. The request must still complete.
