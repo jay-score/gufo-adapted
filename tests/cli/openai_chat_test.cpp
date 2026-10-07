@@ -17,6 +17,9 @@
 
 #include "src/core/json.hpp"
 #include "src/core/json_constraint.hpp"
+#include "src/models/qwen/control_tokens.hpp"
+
+using gufo::tokenization::kImEnd;
 
 namespace {
 
@@ -4485,7 +4488,8 @@ void TestToolClosingFraming() {
        ""},
       {call + "\n</function>\n" + call, 2, R"({"text":"42"})", ""},
       {call + "\n" + envelope, 1, R"({"text":"42"})", ""},
-      {call + "\n</invoke>\n<|im_end|>", 1, R"({"text":"42"})", "<|im_end|>"},
+      {call + "\n</invoke>\n<|im_end|>", 1, R"({"text":"42"})",
+       std::string(kImEnd)},
       {"</invoke>\n" + call, 1, R"({"text":"42"})", "</invoke>\n"},
       {"</invoke>", 0, "", "</invoke>"},
       {"Text </parameter>", 0, "", "Text </parameter>"},

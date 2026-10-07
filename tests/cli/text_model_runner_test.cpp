@@ -20,7 +20,11 @@
 #include <vector>
 
 #include "src/core/json.hpp"
+#include "src/models/qwen/control_tokens.hpp"
 #include "src/models/qwen/vision/prompt.hpp"
+
+using gufo::tokenization::kImEnd;
+using gufo::tokenization::kImStart;
 
 namespace {
 
@@ -2021,8 +2025,9 @@ void TestServerInstructionsAreFraming() {
   for (int i = 0; i < 256; ++i)
     vocab.emplace_back(1, static_cast<char>(i));
   std::unordered_map<std::string, TokenId> specials;
-  for (const auto* token : {"<|im_start|>", "<|im_end|>", "<think>", "</think>",
-                            "<tool_call>", "</tool_call>"}) {
+  for (std::string_view token : std::initializer_list<std::string_view>{
+           kImStart, kImEnd, "<think>", "</think>", "<tool_call>",
+           "</tool_call>"}) {
     specials.emplace(token, vocab.size());
     vocab.emplace_back(token);
   }
