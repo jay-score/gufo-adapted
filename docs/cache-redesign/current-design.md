@@ -87,3 +87,21 @@ fit the same line exactly, so experiment 1 measures it per configuration.
 - **Disk-hit side effect.** A disk restore skips the intermediate RAM
   checkpoints below the restored position. A later full prefill creates them,
   costing about 40 ms in #409's run **(measured)**.
+
+## Limits found by the experiments
+
+Details in [Experiments](experiments.md#e3-missed-reuse):
+
+1. **A RAM hit of any length hides a longer disk hit.** Disk is consulted only
+   when RAM has no hit at all (`src/cli/serve/text_model_runner.cpp:1877`).
+   Cost: 22,558 tokens re-prefilled in E2 W2.
+2. **The RAM cache refuses checkpoints instead of evicting.** An incoming
+   checkpoint can evict only entries of equal or lower rank
+   (`MaxRemovalPriority`). A full budget therefore refuses new intermediates:
+   19–42 refusals per run.
+3. **Automatic budgets are small for long contexts.** With two sessions:
+   - RAM 9.2 GB (Flash-Next) or 23 GB (27B): three checkpoints at 100k tokens;
+   - staging 2.3 GB or 5.8 GB, so no checkpoint past about 75k tokens reaches
+     disk.
+4. **27B captures copy the whole state:** 235–265 ms per checkpoint at 149k
+   tokens, up to 635 ms observed.

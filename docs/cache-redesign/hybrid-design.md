@@ -1,0 +1,219 @@
+# Hybrid design: shared KV chunks and small checkpoints
+
+This is option E in [Options](options.md): llama.cpp's idea of checkpointing
+only recurrent state, made efficient for 2–8 concurrent sessions and extended
+to disk. Figures come from [E1](experiments.md#e1-snapshot-size-model-2026-10-07)
+unless stated otherwise:
+
+- Flash-Next with MTP: 114 MiB of fixed state + 27.46 KB per token.
+- 27B: 152 MiB + 64 KiB per token, or 232 MiB fixed with DFlash2.
+
+## Three kinds of state
+
+| Thing | Holds | Lives in | Size |
+| --- | --- | --- | --- |
+| **Session** (at most 8) | A running conversation: KV for positions 0..p, contiguous, plus recurrent state at p | GPU memory, as today | Grows with the conversation |
+| **Chunk** | KV rows for 2,048 tokens. Immutable, identified by every token up to its end, so equal prefixes give equal chunks. Reference-counted | Shared pool: RAM, disk, or both | 2,048 × 27.46 KB ≈ 56 MB (Flash-Next), 128 MiB (27B) |
+| **Checkpoint** | A restorable position p: recurrent and other fixed state at p, the chunks covering 0..p, and a tail of fewer than 2,048 rows that do not fill a chunk | Pool | Fixed state + tail |
+
+Why the split:
+
+- **KV rows never change once written,** so every checkpoint and conversation
+  with the same prefix can share them.
+- **Recurrent state is different at every position** and cannot be rebuilt
+  from KV rows (see [example 7](#example-7-why-kv-rows-cannot-rebuild-recurrent-state)).
+  Each checkpoint therefore keeps its own full copy. This is what llama.cpp's
+  checkpoints store.
+
+## Operations
+
+| Operation | What happens | Cost |
+| --- | --- | --- |
+| **Capture** | Copy the fixed state at p. KV rows stay borrowed from the live session | 114–232 MiB, a few ms |
+| **Spill** | Before a session overwrites rows (rewind, reset, reuse by another conversation), copy rows that no pool chunk holds yet into new chunks, once. Checkpoints that borrowed them now reference the chunks | Only rows not yet in the pool |
+| **Restore** | Find the longest checkpoint whose tokens are a prefix of the prompt. Copy its chunks and tail into the session's KV, load its fixed state, prefill the rest | Same bytes as restoring a full snapshot today |
+| **Evict** | Drop checkpoints by today's ranks (covered intermediates first, as in #409). Free a chunk when nothing references it | — |
+| **Persist** | Write behind: the fixed state, chunks not yet on disk, and the tail | ~170 MB per 2,048 new tokens (Flash-Next), ~280–360 MB (27B) |
+| **Compact** | Merge one lineage's chunk files on disk into larger files (keyframes), without the GPU | Background I/O |
+
+**One index for both tiers.** One token prefix tree holds every checkpoint, and
+each chunk records whether it is in RAM, on disk, or both. A restore takes the
+longest matching checkpoint wherever its pieces live; missing chunks are read
+from disk.
+
+**Budget.** RAM and disk budgets count each chunk once, plus each checkpoint's
+fixed state and tail. Rows still owned by a live session are not counted until
+they are spilled.
+
+**Model interface.** A model exposes two operations instead of one opaque
+blob:
+- save and load its fixed state;
+- read and write KV rows for a token range.
+
+Flash-Next already borrows rows and preserves them once on overwrite (#445).
+27B copies its whole state today and would need the split.
+
+## Example 1: one conversation, one session
+
+Conversation A starts on session 1 with a 10,000-token prompt (Flash-Next).
+
+| Step | Today | Hybrid |
+| --- | --- | --- |
+| Prefill 10,000 tokens and checkpoint the prompt | Full snapshot: 114 MiB + 10,000 × 27.46 KB ≈ 395 MB counted against the RAM budget | Copy 114 MiB of fixed state; KV rows stay in session 1 |
+| Turn 2 adds 1,500 tokens on session 1 | Nothing restored; another full snapshot, ≈ 436 MB | Nothing restored; another 114 MiB copy |
+
+On 27B at 149k tokens the difference is larger: today's capture copies 10 GB
+and took 235–265 ms per checkpoint in E2 W1; the hybrid copies 152 MiB.
+
+## Example 2: a session switches conversation
+
+A pauses at 12,000 tokens. Conversation B needs session 1. Later A comes back
+and lands on session 2.
+
+1. **Spill.** Before B overwrites session 1, A's rows go to the pool: 5 full
+   chunks (rows 0–10,239) plus a tail of 1,760 rows, about 330 MB copied once.
+   A's checkpoints now reference pool chunks instead of session 1.
+2. **B runs** on session 1 as usual.
+3. **A returns on session 2.** The newest checkpoint whose tokens are a prefix
+   of A's prompt is at 12,000. Restore copies 5 chunks + tail (~330 MB) into
+   session 2 and loads 114 MiB of fixed state. Only A's new message is
+   prefilled.
+
+llama.cpp copies A's whole state out of the slot into its host cache, and
+copies it back when A returns. Today gufo keeps a full snapshot per retained
+checkpoint.
+
+## Example 3: subagents sharing a system prompt
+
+Subagent S shares A's first 6,000 tokens (system prompt and tools).
+
+1. **First subagent.** No checkpoint exists at exactly 6,000, and recurrent
+   state needs one there. S restores the nearest earlier checkpoint (say the
+   grid checkpoint at 4,096) and prefills only the 1,904-token gap. During that
+   prefill it captures a checkpoint at 6,000:
+   - fixed state at 6,000;
+   - references to A's chunks 0–1 (rows 0–4,095: same tokens, so same chunks);
+   - its own tail of rows 4,096–5,999. A's chunk 2 also holds A-only tokens
+     past 6,000, so S cannot share it. At most one chunk is duplicated per
+     divergence.
+2. **Every later subagent** restores the checkpoint at 6,000 directly. The
+   shared 6,000 tokens of KV exist once, whichever session runs each subagent.
+
+**Denser checkpoints shrink the gap.** A checkpoint costs only its fixed state,
+so gufo can afford one at every message boundary and every 1,024 tokens. A new
+conversation then prefills a few hundred tokens at most before its divergence
+point. Today each checkpoint is a full copy (2.9 GB at 100k tokens on
+Flash-Next), so only a few are kept.
+
+In E2 W4 a subagent created after a restart reused none of its 6,634 shared
+tokens (27B: 21.6 s). No checkpoint at or below 6,634 had been persisted; disk
+keeps only prompt boundaries. With cheap checkpoints, grid and message-boundary
+checkpoints can go to disk too.
+
+## Example 4: the parent returns after its forks
+
+This is E2 W2. A parent agent reaches about 24,600 tokens. Two forks continue
+from its history, then the parent takes another turn.
+
+- **Today:** the RAM cache filled with the forks' checkpoints and refused
+  others (`event=snapshot action=skipped reason=byte_capacity`, 22 times on
+  Flash-Next). The parent's next turn found only the 4,661-token system prompt
+  in RAM. Disk held the parent's 24,599-token checkpoint, but disk is consulted
+  only when RAM has no hit at all (`src/cli/serve/text_model_runner.cpp:1877`).
+  22,558 tokens were re-prefilled: 24 s on Flash-Next, about 60 s on 27B.
+- **Hybrid:** the forks share the parent's chunks up to their divergence, so
+  the parent's checkpoint costs only its fixed state and stays in RAM. Even if
+  evicted, the one index finds it on disk.
+- **Today's design with a one-line fix:** consulting disk whenever it holds a
+  longer prefix recovers the same tokens in simulation (Phase 0).
+
+## Example 5: a full RAM budget
+
+Production-like Flash-Next (MTP, 2 sessions) got an automatic RAM budget of
+9.23 GB.
+
+- **Today:** a checkpoint at 100k tokens is 2.87 GB, so the budget holds three.
+  An intermediate checkpoint may only evict entries of equal or lower rank
+  (`MaxRemovalPriority`, `src/cli/serve/continuation_cache.cpp:32`), so once
+  the budget is full of other conversations' last copies, new intermediates are
+  refused.
+- **Hybrid:** one 100k-token conversation's KV costs 2.75 GB once. Every further
+  checkpoint of it costs 114 MiB plus a tail of at most 56 MB. The same
+  9.23 GB holds that conversation with about 40–50 checkpoints, or three
+  100k-token conversations with about two checkpoints each.
+
+## Example 6: restart during a long 27B session
+
+E2 W1 grew a real `pi` coding session on 27B to 149k tokens. With today's
+defaults (automatic staging 5.74 GB), checkpoints past about 75k tokens never
+reached disk: 85 writes were skipped with `reason=staging_capacity`, because a
+27B checkpoint at 64k is already 4.35 GB and two queue at once.
+
+Simulated restarts on that trace (the simulator reproduced all 36 real
+requests):
+
+| Restart at | Today restores | Hybrid restores | Extra prefill today |
+| ---: | ---: | ---: | ---: |
+| 60,622 tokens | 60,396 | 60,396 | none |
+| 104,505 tokens | 75,026 | 104,386 | ~29k tokens, ~2 min |
+| 148,523 tokens | 75,026 | 133,842 | ~59k tokens, ~4.5–5 min |
+
+Prefill at that depth ran at 196–250 tokens/s. The hybrid writes about 152 MiB
+of fixed state plus 128 MiB per 2,048 new tokens per checkpoint, so staging is
+never the limit.
+
+## Example 7: why KV rows cannot rebuild recurrent state
+
+The model stacks layers; attention layers sit between GDN or DeltaNet recurrent
+layers. Each recurrent layer updates its state token by token from that token's
+hidden state at that layer, which is the output of every layer below,
+including MoE and MLP blocks:
+
+```text
+token t -> GDN layer 1 (state updated from h1(t)) -> ... -> attention layer (stores K, V of t)
+        -> ... -> GDN layer k (needs hk(t)) -> ...
+```
+
+Only the attention layers' K and V are stored. The hidden states the recurrent
+layers consumed are not, so the recurrent state at position p can only be
+obtained by running every layer again over the tokens since the last saved
+state, which is a prefill. Stored KV rows save only the attention over earlier
+positions. Storing the hidden states instead would cost an estimated 10–15×
+more than KV (hidden size × layers × 2 bytes per token).
+
+Consequences:
+
+- **A diff must carry the recurrent state at its end position.** KV-only diffs
+  save nothing on Flash-Next or 27B. llama.cpp's checkpoints are the other half
+  of the same idea: recurrent state only, with KV kept live in the slot.
+- **Applying diffs costs no compute.** Restoring at diff k means taking the
+  KV rows of the keyframe and of diffs 1..k, plus diff k's fixed state. That
+  reads the same bytes as one full snapshot.
+- **Keyframes do not speed up restores.** They bound dependency chains, which
+  limits the damage of a lost file and simplifies eviction. Built from the GPU
+  they are full copies, exactly the cost this design avoids, so the hybrid
+  builds them by background compaction on disk.
+- **The leftover prefill is the gap to the nearest checkpoint.** It is zero
+  only when a checkpoint sits exactly at the divergence point, which is why
+  cheap, dense checkpoints matter (example 3).
+
+## Phasing
+
+| Phase | Scope | Addresses |
+| --- | --- | --- |
+| 0 | On today's design: consult disk when it holds a longer prefix than RAM; size staging by need or stream writes; count Flash-Next RAM checkpoints by unique bytes | Example 4; deep checkpoints reaching disk; part of example 5 |
+| 1 | Model interface split (fixed state vs KV ranges); RAM chunk pool; small checkpoints; denser checkpoints | Examples 1, 2, 3, 5; capture cost on 27B |
+| 2 | Disk tier on the same chunks; one index for RAM and disk; background compaction | Example 6; write volume; restart value |
+| 3 (optional) | Paged KV in the attention kernels: zero-copy restore, live sessions physically sharing prefix KV, no full-context preallocation per session | Memory per session at high concurrency |
+
+## Open questions
+
+- **Chunk size.** 2,048 matches today's grid and disk spacing. Smaller chunks
+  duplicate less at a divergence but need more metadata.
+- **Checkpoint density policy:** message boundaries, a fixed grid, or both.
+- **Several server processes sharing one disk directory:** reference counting
+  across processes, versus giving each process its own directory.
+- **Crash consistency** of chunk and checkpoint files (write order, fsync).
+- **Output equality after a restore,** which has the same chunk-shape caveat as
+  today's partial hits.
+- **Image prompts:** chunk identity must include image identity.

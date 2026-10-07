@@ -8,12 +8,38 @@
 | **B. llama.cpp style** | Diffs only inside a live slot; full copies for everything cached |
 | **C. Chunked KV** | KV in 2,048-token chunks shared by checkpoints; fixed state per checkpoint; existing prefix tree and eviction ranks; budgets count each chunk once. RAM, disk or both |
 | **D. SGLang style** | One radix tree with per-component reuse rules (full KV, window, recurrent checkpoints), paged KV, host and storage tiers |
+| **E. Hybrid** | Option C organised around live sessions: captures copy only fixed state, KV rows are spilled to a shared chunk pool only when a session overwrites them, one index covers RAM and disk, keyframes come from background compaction. See [Hybrid design](hybrid-design.md) |
 
 B would barely change gufo. Flash-Next already keeps KV once in the live
 session, and gufo's retention across conversations is already richer than
 deleting contained prompts. D's extra machinery addresses scale gufo does not
 have (see [below](#what-sglang-needs-that-gufo-does-not)). The real choice is
-between A and C.
+between A (with the Phase 0 fixes) and E, which is C made concrete.
+
+## Diffs and keyframes
+
+One proposal from the discussion: keep every diff, take a full snapshot
+(keyframe) from time to time, keep X keyframes, and restore from the latest
+keyframe plus the following diffs. It fits gufo with three refinements:
+
+1. **A diff must carry the recurrent state at its end.** Recurrent state
+   cannot be rebuilt from KV rows; only another prefill produces it (see
+   [example 7](hybrid-design.md#example-7-why-kv-rows-cannot-rebuild-recurrent-state)).
+   A KV-only diff saves nothing on Flash-Next or 27B.
+2. **With that, applying diffs is a copy, not a computation.** Restoring at
+   diff k reads the keyframe's KV, the KV rows of diffs 1..k, and diff k's
+   fixed state: the same bytes as one full snapshot. Keyframes therefore do not
+   speed up restores. They bound dependency chains and simplify eviction.
+3. **Build keyframes on disk, not from the GPU.** A keyframe captured from the
+   GPU is a full copy, the cost this design removes. Merging existing files in
+   the background (compaction) produces the same file without touching the
+   GPU.
+
+Branches (edits, forks, subagents) turn the diff chain into a tree. Finding a
+diff's parent by token prefix, with the existing prefix tree, handles that.
+Content-addressed chunks (option C) deduplicate prefixes across conversations
+automatically; parent pointers deduplicate only through a shared checkpoint.
+Option E combines both: chunks for KV, checkpoints for state.
 
 ## Gain depends on context length
 

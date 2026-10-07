@@ -39,11 +39,15 @@ def main(model, workload):
     for i, m in enumerate(meta):
         prompt = data[f"p{i}"]
         ideal = max((lcp(prompt, h) for h in histories), default=0)
+        # Re-tokenized text is a few tokens shorter than the server's own
+        # tokens; express positions in the server's token count.
+        scale = m["prompt_tokens"] / max(1, m["tokenized_prompt"])
+        ideal = min(m["prompt_tokens"], round(ideal * scale))
         histories.append(np.concatenate([prompt, data[f"o{i}"]]))
         actual = m["cached_tokens"] or 0
         gap = max(0, ideal - actual)
         common = m.get("common_prefix_tokens")
-        if gap < 64:
+        if gap < 256:
             cause = "none"
         elif i and m["server_lifetime"] != meta[i - 1]["server_lifetime"] and \
                 m["cache"] != "disk":

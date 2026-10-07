@@ -12,13 +12,15 @@ far should it go?
 | --- | --- |
 | [Current design](current-design.md) | What the continuation cache does today, with source references and known costs |
 | [Other engines](external-engines.md) | llama.cpp, vLLM, SGLang, LMCache and ds4, with links |
-| [Options](options.md) | Candidate designs, pros and cons, and the features still to decide |
+| [Options](options.md) | Candidate designs, pros and cons, diffs and keyframes, and the features still to decide |
+| [Hybrid design](hybrid-design.md) | Option E in detail, with worked examples |
 | [Experiments](experiments.md) | Measurements needed to decide, and their results |
 
 ## Status
 
 1. Write down the discussion and external references. Done.
-2. Run the experiments in [experiments.md](experiments.md). Not started.
+2. Run the experiments in [experiments.md](experiments.md). E1–E5 done for
+   Flash-Next and 27B; cost-model checks and a concurrency-4 run in progress.
 3. Agree on the required features (see [Options](options.md)).
 4. Choose a design, or keep the current one.
 
@@ -72,5 +74,40 @@ ahead, chunk reference counting would replace its policy.
   tokens past its parent costs about 2× less than a full copy at 8k tokens
   and about 24× less at 145k.
 
-**Next.** Measure before choosing (see [Experiments](experiments.md)), then
-discuss the required features.
+**Experiments, first round** ([results](experiments.md#summary-so-far)):
+
+- Scope agreed: Flash-Next and 27B, four workloads (long agent, subagents,
+  multi-user chat, restart), surviving restarts is essential, and disk space
+  is tight.
+- Checkpoint size is exactly linear in position. Flash-Next with MTP:
+  113.8 MiB + 27.46 KB per token. 27B: 152 MiB + 64 KiB per token, plus
+  80 MiB with DFlash2.
+- Defects found in today's design:
+  - a RAM hit of any length hides a longer disk hit;
+  - a full RAM cache refuses new checkpoints;
+  - automatic staging keeps checkpoints past ~75k tokens off disk;
+  - 27B captures copy the whole state (235–635 ms).
+- A simulator of today's cache reproduces the server's actual reuse within
+  0.5% on every run. On the same traces, chunked KV:
+  - adds no in-session reuse beyond a one-line disk-lookup fix;
+  - keeps restarts cheap at depth: today a restart past ~75k tokens costs
+    ~25–50 s on Flash-Next and ~2–5 min on 27B;
+  - cuts 27B RAM copies 4–15× and disk writes 2.5–4.5×.
+
+**Design discussion.**
+
+- Keyframes plus diffs work if each diff carries the recurrent state at its
+  end, and keyframes are built by background compaction on disk (see
+  [Options](options.md#diffs-and-keyframes)).
+- Recurrent state at a divergence point cannot be rebuilt from stored KV
+  rows. The way to shrink the leftover prefill is cheap, dense checkpoints
+  (see [example 7](hybrid-design.md#example-7-why-kv-rows-cannot-rebuild-recurrent-state)).
+- The preferred direction is the [hybrid design](hybrid-design.md): live
+  sessions, a shared KV chunk pool, small checkpoints, one index for RAM and
+  disk. It would be phased: cheap fixes on today's design first (Phase 0),
+  then the RAM pool, then disk, with paged KV optional.
+
+**Next.** Back the hybrid design's theoretical costs with micro-benchmarks
+(copy bandwidth, chunk and full-file I/O), simulate Phase 0 and the hybrid on
+the traces, run today's system at concurrency 4, then discuss the required
+features.

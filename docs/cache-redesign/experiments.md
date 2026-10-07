@@ -128,3 +128,154 @@ residual under 0.01%) **(measured)**:
   filled the budget.
 
 Scripts: `e1_snapshot_size.py`, `run_e1.sh`, `fit_e1.py`.
+
+### E2. Workload traces (2026-10-07)
+
+Production-like servers (the llama-swap command lines plus the disk tier):
+- Flash-Next: MTP, `--sessions 2`, `--context 260000`.
+- 27B: Q8_K_XL, DFlash2, `--sessions 2`, `--context 256000`.
+
+Common settings: automatic RAM and staging budgets, a 16 GiB disk budget, and
+`--trace`. W1 is a real Pi session grown through tool results by
+`tests/functional/agent_long.py` (thinking `low`). W2–W4 are synthetic
+(`workloads.py`, thinking off, real model replies).
+
+Automatic budgets the servers chose **(measured)**:
+
+| Model | RAM cache budget | Staging budget | Fits at 100k tokens |
+| --- | ---: | ---: | --- |
+| Flash-Next (2 sessions) | 8.9–9.2 GB | 2.23–2.31 GB | 3 checkpoints in RAM; nothing past ~75k tokens reaches disk |
+| 27B (2 sessions) | 23.0–23.3 GB | 5.74–5.84 GB | 3 checkpoints in RAM; nothing past ~75k tokens reaches disk |
+
+### E3. Missed reuse
+
+"Ideal" is the longest prefix each prompt shares with any earlier prompt plus
+its output. Prompts were re-tokenized from the trace with the model's own
+vocabulary. Re-tokenized text is a few tokens shorter than the server's count,
+so positions are rescaled per request. Gaps under 256 tokens are ignored: they
+are the re-rendered assistant reply, not a capacity issue.
+
+| Workload | Requests | Ideal reuse | Actual reuse | Largest misses |
+| --- | ---: | ---: | ---: | --- |
+| fn W1 agent to 149k | 36 | 95.4% | 95.4% | none |
+| fn W2 subagents | 36 | 89.1% | 85.7% | parent after forks: 20.6k tokens, ~17 s |
+| fn W3 multi-user | 60 | 87.9% | 87.6% | 1 request, 991 tokens |
+| fn W4 restart | 33 | 89.7% | 88.5% | subagent after restart, 6.6k tokens; agent restore 3.7k short |
+| 27B W1 agent to 149k | 36 | 95.4% | 95.4% | none |
+| 27B W2 subagents | 36 | 89.0% | 85.6% | parent after forks: 20.4k tokens, ~60 s |
+| 27B W3 multi-user | 60 | 89.3% | 88.8% | 2 small requests |
+| 27B W4 restart | 33 | 89.7% | 87.7% | agent after restart: 13.1k tokens, ~37 s; subagent 6.6k tokens, ~22 s |
+
+Causes found **(measured, from logs and source)**:
+
+1. **Disk is ignored after any RAM hit.** It is consulted only when RAM has no
+   hit at all (`src/cli/serve/text_model_runner.cpp:1877`). In W2 the
+   parent's turn after its forks matched only the 4,661-token system prompt in
+   RAM while disk held its 24,599-token checkpoint, so 22,558 tokens were
+   re-prefilled.
+2. **The RAM cache refuses new checkpoints when full.** An incoming checkpoint
+   may only evict entries of equal or lower rank (`MaxRemovalPriority`,
+   `src/cli/serve/continuation_cache.cpp:32`, used at `:759`). Refusals
+   (`event=snapshot action=skipped reason=byte_capacity`) per run: 19–42.
+3. **Deep checkpoints never reach disk.** A full file larger than the
+   automatic staging budget is skipped (`reason=staging_capacity`): 71 skips
+   in fn W1 and 85 in 27B W1. The deepest persisted checkpoint stops at about
+   75k tokens for both models.
+4. **No checkpoint at a shared boundary after a restart.** Disk holds prompt
+   boundaries but not grid checkpoints, so a new subagent sharing a 6.6k-token
+   system prompt reused nothing.
+
+### E4. Overhead of the current design
+
+From the server logs (`analyze_e4.py`) **(measured)**:
+
+| Run | Live captures | Capture time, total / max | Disk writes | Written | Staging skips | RAM refusals |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| fn W1 | 35 | 1.1 s / 158 ms | 6 | 7.1 GB | 71 | 39 |
+| fn W2 | 13 | 0.5 s / 110 ms | 25 | 16.3 GB | 8 | 22 |
+| fn W3 | 18 | 0.9 s / 246 ms | 24 | 13.7 GB | 9 | 41 |
+| fn W4 | 23 | 0.8 s / 117 ms | 26 | 23.2 GB | 29 | 27 |
+| 27B W1 | 35 | 5.9 s / 399 ms | 6 | 16.5 GB | 85 | 39 |
+| 27B W2 | 8 | 2.6 s / 611 ms | 25 | 37.9 GB | 3 | 19 |
+| 27B W3 | 24 | 5.8 s / 634 ms | 25 | 31.7 GB | 7 | 42 |
+| 27B W4 | 25 | 7.3 s / 635 ms | 31 | 70.9 GB | 16 | 31 |
+
+- **27B copies its whole state per capture.** At 149k tokens a 10.0 GB
+  capture took 235–265 ms, every turn.
+- **Flash-Next captures are cheaper** because KV is borrowed (#445).
+
+### E5. Simulation
+
+`simulate_e5.py` replays each tokenized trace under the budgets the server
+actually used. Its variants share capture points, lookup, eviction ranks and
+disk spacing:
+
+| Variant | Accounting | Disk lookup |
+| --- | --- | --- |
+| full | Full copy per checkpoint (today) | Only when RAM misses (today) |
+| full + disk fix | Full copy per checkpoint | Whenever disk holds a longer prefix |
+| chunked | 2,048-token KV chunks counted once; staging holds only new bytes | Only when RAM misses |
+| chunked + disk fix | As chunked | Whenever disk holds a longer prefix |
+
+**Validation.** The "full" variant reproduces the server's actual reuse: within
+64 tokens on 34/36, 53/60, 30/33, 36/36, 34/36, 55/60, 28/33 and 36/36
+requests, and within 0.5% of total reused tokens for every run.
+
+Reused tokens:
+
+| Workload | Actual | full | full + disk fix | chunked | chunked + disk fix |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| fn W1 | 3,088,096 | 3,088,096 | 3,088,096 | 3,088,096 | 3,088,096 |
+| fn W2 | 553,620 | 553,658 | 573,599 | 573,606 | 573,606 |
+| fn W3 | 745,248 | 743,755 | 743,755 | 743,755 | 743,755 |
+| fn W4 | 868,875 | 872,701 | 872,701 | 872,701 | 872,701 |
+| 27B W1 | 3,074,904 | 3,074,904 | 3,074,904 | 3,074,904 | 3,074,904 |
+| 27B W2 | 552,915 | 553,206 | 572,917 | 572,924 | 572,924 |
+| 27B W3 | 853,387 | 853,943 | 853,943 | 853,943 | 853,943 |
+| 27B W4 | 869,495 | 869,489 | 869,489 | 882,556 | 882,556 |
+
+Accounted bytes (simulated, full → chunked):
+
+| Workload | RAM checkpoint bytes | Disk bytes written |
+| --- | --- | --- |
+| fn W1 | 275.5 → 19.4 GB | 7.0 → 5.7 GB |
+| fn W2 | 48.6 → 12.8 GB | 16.3 → 5.2 GB |
+| fn W3 | 80.0 → 24.5 GB | 13.5 → 6.3 GB |
+| fn W4 | 85.2 → 16.9 GB | 26.7 → 6.9 GB |
+| 27B W1 | 650.7 → 41.9 GB | 16.5 → 13.2 GB |
+| 27B W2 | 112.5 → 28.0 GB | 37.8 → 11.7 GB |
+| 27B W3 | 194.7 → 51.7 GB | 31.2 → 13.5 GB |
+| 27B W4 | 194.5 → 36.7 GB | 70.9 → 15.9 GB |
+
+For Flash-Next the RAM column is accounting only (KV is already borrowed); for
+27B it is real copy volume. Disk bytes for W1 are low today only because most
+deep writes were skipped.
+
+**Simulated restarts during the W1 agent sessions.** A restart is inserted
+before request N; the RAM cache empties and disk persists:
+
+| Model | Restart at | Today restores | Chunked restores | Extra prefill today |
+| --- | ---: | ---: | ---: | ---: |
+| Flash-Next | 60,844 | 60,560 | 60,560 | none |
+| Flash-Next | 104,938 | 75,275 | 104,810 | ~29.5k tokens, ~25 s |
+| Flash-Next | 149,145 | 75,275 | 134,388 | ~59k tokens, ~50 s |
+| 27B | 60,622 | 60,396 | 60,396 | none |
+| 27B | 104,505 | 75,026 | 104,386 | ~29k tokens, ~2 min |
+| 27B | 148,523 | 75,026 | 133,842 | ~59k tokens, ~4.5–5 min |
+
+Prefill at 90–150k depth ran at 1,140–1,180 tokens/s on Flash-Next and
+196–250 tokens/s on 27B.
+
+### Summary so far
+
+1. **Reuse rate:** chunking adds nothing to reuse in-session at these
+   concurrency levels. The one large in-session gain (W2) comes equally from a
+   one-line disk-lookup fix.
+2. **Restarts:** chunking matters most here, because deep checkpoints persist.
+   Today the disk tier stops at ~75k tokens; a restart deeper than that costs
+   ~25–50 s on Flash-Next and ~2–5 min on 27B per long session.
+3. **Cost per turn:** chunking cuts RAM copy volume 4–15× on 27B (captures of
+   235–635 ms today) and disk writes 2.5–4.5×.
+4. **Cheap fixes on today's design:** consult disk on a longer prefix; size
+   staging by need or stream writes; count Flash-Next RAM checkpoints by unique
+   bytes. These recover part of points 1 and 2 without a redesign.

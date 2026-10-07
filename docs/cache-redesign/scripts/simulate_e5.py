@@ -146,7 +146,7 @@ class Store:
 
 
 def simulate(requests, policy, ram_budget, disk_budget, staging, fixed,
-             per_token, chunk, sessions):
+             per_token, chunk, sessions, disk_fix=False):
     ram = Store(policy, ram_budget, fixed, per_token, chunk, max_entries=128)
     disk = Store(policy, disk_budget, fixed, per_token, chunk) if disk_budget else None
     live = []  # (Seq, length) per session, most recent last
@@ -173,9 +173,11 @@ def simulate(requests, policy, ram_budget, disk_budget, staging, fixed,
         if hit and hit.length > cached:
             cached, source = hit.length, "memory"
             hit.used = clock
-        if source == "none" and disk:
+        # Today the disk is consulted only when RAM has no hit at all;
+        # disk_fix also uses a disk entry longer than the RAM or live hit.
+        if disk and (source == "none" or disk_fix):
             hit = disk.lookup(prompt)
-            if hit:
+            if hit and hit.length > cached:
                 cached, source = hit.length, "disk"
                 hit.used = clock
         cached = min(cached, len(prompt))
@@ -207,9 +209,18 @@ def simulate(requests, policy, ram_budget, disk_budget, staging, fixed,
                     near = disk.lookup(prompt, limit=position)
                     if near and position - near.length < MIN_STEP:
                         continue
-                if disk.full_bytes(position) > staging:
+                entry = Entry(seq, position, purpose, clock)
+                # Staging holds what one write must copy: the whole snapshot
+                # today, only the fixed state and unshared KV when chunked.
+                if policy == "chunked":
+                    new_chunks = sum(1 for key in disk.chunk_keys(entry)
+                                     if key not in disk.chunk_refs)
+                    staged = disk.entry_cost(entry, new_chunks)
+                else:
+                    staged = disk.full_bytes(position)
+                if staged > staging:
                     continue
-                disk.admit(Entry(seq, position, purpose, clock), ranked=False)
+                disk.admit(entry, ranked=False)
         full = np.concatenate([prompt, request["output"]])
         live.append((Seq(full, chunk), len(full)))
         live = live[-sessions:]
@@ -239,15 +250,28 @@ def main():
     parser.add_argument("--staging", type=int, required=True)
     parser.add_argument("--chunk", type=int, default=2048)
     parser.add_argument("--sessions", type=int, default=2)
+    parser.add_argument("--restart-at", type=int, default=None,
+                        help="simulate a server restart before request N")
+    parser.add_argument("--tag", default="")
     args = parser.parse_args()
     requests = load(args.model, args.workload)
+    if args.restart_at is not None:
+        for index, request in enumerate(requests):
+            request["server_lifetime"] = int(index >= args.restart_at)
     summary = {}
-    for policy in ("full", "chunked"):
+    variants = {"full": ("full", False), "full_diskfix": ("full", True),
+                "chunked": ("chunked", False), "chunked_diskfix": ("chunked", True)}
+    for name, (policy, disk_fix) in variants.items():
         rows, written = simulate(requests, policy, args.ram_budget,
                                  args.disk_budget, args.staging, args.fixed,
-                                 args.per_token, args.chunk, args.sessions)
-        summary[policy] = {"rows": rows, **written}
+                                 args.per_token, args.chunk, args.sessions,
+                                 disk_fix)
+        summary[name] = {"rows": rows, **written}
     actual = [r["cached_tokens"] or 0 for r in requests]
+    scales = [r["prompt_tokens"] / max(1, r["tokenized_prompt"]) for r in requests]
+    for policy in variants:
+        for row, scale in zip(summary[policy]["rows"], scales):
+            row["cached"] = round(row["cached"] * scale)
     full = [r["cached"] for r in summary["full"]["rows"]]
     chunked = [r["cached"] for r in summary["chunked"]["rows"]]
     agree = sum(abs(a - b) <= 64 for a, b in zip(actual, full))
@@ -256,6 +280,8 @@ def main():
         "requests": len(requests), "prompt_tokens": prompt_total,
         "actual_cached": sum(actual), "sim_full_cached": sum(full),
         "sim_chunked_cached": sum(chunked),
+        "sim_full_diskfix_cached": sum(r["cached"] for r in summary["full_diskfix"]["rows"]),
+        "sim_chunked_diskfix_cached": sum(r["cached"] for r in summary["chunked_diskfix"]["rows"]),
         "full_agrees_with_actual_within_64": agree,
         "ram_written_full": summary["full"]["ram_written"],
         "ram_written_chunked": summary["chunked"]["ram_written"],
@@ -268,7 +294,7 @@ def main():
                             requests, actual, summary["full"]["rows"],
                             summary["chunked"]["rows"]))],
     }
-    out = HERE / "results" / "e2" / args.model / args.workload / "e5.json"
+    out = HERE / "results" / "e2" / args.model / args.workload / (f"e5-{args.tag}.json" if args.tag else "e5.json")
     out.write_text(json.dumps(report, indent=1))
     print(json.dumps({k: v for k, v in report.items() if k != "per_request"}))
 
