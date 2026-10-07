@@ -21,9 +21,9 @@ far should it go?
 ## Status
 
 1. Write down the discussion and external references. Done.
-2. Run the experiments in [experiments.md](experiments.md). E1–E5, the
-   micro-benchmarks, the [cost model](cost-model.md) and E7 are done for
-   Flash-Next and 27B. The concurrency-4 run (E6) is in progress.
+2. Run the experiments in [experiments.md](experiments.md). Done for
+   Flash-Next and 27B: E1–E7, the micro-benchmarks and the
+   [cost model](cost-model.md). See the [decision brief](decision-brief.md).
 3. Agree on the required features (see [Options](options.md)).
 4. Choose a design, or keep the current one.
 

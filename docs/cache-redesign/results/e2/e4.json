@@ -41,6 +41,27 @@
    "byte_capacity": 22
   }
  },
+ "fn/w2-c4": {
+  "captures": 27,
+  "capture_ms_total": 1018.7,
+  "capture_ms_max": 296.327,
+  "capture_ms_per_gb": 37.6,
+  "deepest_capture": [
+   34913,
+   1077865820,
+   2.20184
+  ],
+  "disk_writes": 23,
+  "disk_written_gb": 14.48,
+  "disk_write_ms_total": 28652.1,
+  "disk_skips": {
+   "min_step": 56,
+   "staging_capacity": 12
+  },
+  "ram_skips": {
+   "byte_capacity": 27
+  }
+ },
  "fn/w3": {
   "captures": 18,
   "capture_ms_total": 906.2,
@@ -60,6 +81,27 @@
   },
   "ram_skips": {
    "byte_capacity": 41
+  }
+ },
+ "fn/w3-c4": {
+  "captures": 40,
+  "capture_ms_total": 1963.5,
+  "capture_ms_max": 423.87,
+  "capture_ms_per_gb": 48.5,
+  "deepest_capture": [
+   46067,
+   1384087716,
+   28.3165
+  ],
+  "disk_writes": 34,
+  "disk_written_gb": 16.17,
+  "disk_write_ms_total": 31424.0,
+  "disk_skips": {
+   "min_step": 152,
+   "staging_capacity": 10
+  },
+  "ram_skips": {
+   "byte_capacity": 77
   }
  },
  "fn/w4": {
@@ -125,6 +167,27 @@
    "byte_capacity": 19
   }
  },
+ "q27/w2-c4": {
+  "captures": 23,
+  "capture_ms_total": 4827.7,
+  "capture_ms_max": 468.652,
+  "capture_ms_per_gb": 137.3,
+  "deepest_capture": [
+   35420,
+   2565023792,
+   64.9576
+  ],
+  "disk_writes": 24,
+  "disk_written_gb": 36.13,
+  "disk_write_ms_total": 96627.6,
+  "disk_skips": {
+   "min_step": 56,
+   "staging_capacity": 8
+  },
+  "ram_skips": {
+   "byte_capacity": 22
+  }
+ },
  "q27/w3": {
   "captures": 24,
   "capture_ms_total": 5766.2,
@@ -144,6 +207,27 @@
   },
   "ram_skips": {
    "byte_capacity": 42
+  }
+ },
+ "q27/w3-c4": {
+  "captures": 44,
+  "capture_ms_total": 4615.0,
+  "capture_ms_max": 1017.05,
+  "capture_ms_per_gb": 102.6,
+  "deepest_capture": [
+   26358,
+   1971238956,
+   207.842
+  ],
+  "disk_writes": 36,
+  "disk_written_gb": 33.7,
+  "disk_write_ms_total": 902774.7,
+  "disk_skips": {
+   "min_step": 157,
+   "staging_capacity": 1
+  },
+  "ram_skips": {
+   "byte_capacity": 92
   }
  },
  "q27/w4": {

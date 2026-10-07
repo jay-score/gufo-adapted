@@ -16,9 +16,11 @@ against something the production server already does. The tables come from
 | Host copy (pinned, either way) | ~85 GB/s; pageable 61–83 GB/s | copybench.hip | — |
 | Capture of fixed state only | Flash-Next 2–5 ms at any depth | E2 W1 `live_checkpoint` | Flash-Next already captures only fixed state today (#445): 2.2–5.4 ms from 1.8k to 149k tokens |
 | Capture, 27B full copy | 14 ms at 0.36 GB, 235 ms at 10 GB (≈ 67 ms + 17 ms/GB, r² 0.51) | E2 W1 `live_checkpoint`, one agent, no concurrency | Its fixed state is 0.24 GB, so a fixed-state-only 27B capture is ~10–15 ms, matching the 1.8k-token captures |
+| RAM held by checkpoints | Flash-Next: physical well below accounted; 27B: physical ≈ accounted | E2 W1 logs: `retained_bytes` vs `host_available_mib` | Flash-Next accounted 7.1–8.9 GB while available memory fell only 4–6 GB including the live session; 27B accounted 16.5–22.3 GB for a 14–20 GB fall. Counting unique bytes matches what the hardware holds |
 | Disk write + fsync, raw | 0.58–0.60 GB/s at every size | [diskbench.py](scripts/diskbench.py) | — |
 | Disk write in gufo | 0.44 GB/s (serialize + checksum + write + fsync) | E2 `write_ms` against `file_bytes`, about 170 writes | — |
 | Disk cold read | 1.1 GB/s; 1.4–1.5 GB/s when partly cached | diskbench.py; E2 disk restores | Real restores: 55.5k-token 27B file in 2.5 s |
+| Assembling a session from chunks in memory | 106 GB/s for 4 MiB pieces, 88 GB/s for 1 MiB, vs 103 GB/s for one copy | [chunkcopy.hip](scripts/chunkcopy.hip), 8 GiB as many device copies | Per-layer pieces of a 2,048-token chunk are an estimated 1–4 MiB |
 | Chunk files instead of one file | +13% write time, +13% cold-read time (72 × 56 MiB vs 4 GiB) | diskbench.py | Compaction removes it |
 | Prefill N tokens on D cached | Flash-Next 0.36 s + 0.79 ms/token + small depth term; 27B 0.52 s + 2.66 ms/token + 16.5 ns × N × (D + N/2) | [fit_prefill.py](scripts/fit_prefill.py), 150 requests each; median error 9.8% and 3.9% | Simulated prefill time matches measured within 3–8% (E7) |
 
@@ -90,6 +92,28 @@ hybrid means one 2,048-token step: fixed state plus 2,048 tokens of KV.
 earlier measurements in [KV-CACHE.md](../KV-CACHE.md) were 280 s for 101,545
 27B tokens (a different configuration) and 184 s for 203,047 Flash-Next tokens,
 so these numbers are within about 25% and directionally right.
+
+## Background costs
+
+**Compaction** (hybrid only) rewrites a lineage's chunk files into one file.
+It reads and writes the KV bytes once, at 1.1 GB/s and 0.59 GB/s:
+
+| Conversation | KV bytes | Compaction I/O |
+| --- | ---: | ---: |
+| Flash-Next at 149k tokens | 4.1 GB | ~11 s, in the background |
+| 27B at 149k tokens | 9.8 GB | ~25 s, in the background |
+
+**Disk writes per long agent session** (the W1 runs to 149k tokens, from E7):
+
+| Model | Today | Phase 0 | Hybrid |
+| --- | ---: | ---: | ---: |
+| Flash-Next | 7.0 GB, with deep writes skipped | 24.1 GB | 5.7 GB |
+| 27B | 16.5 GB, with deep writes skipped | 56.8 GB | 13.2 GB |
+
+An illustration only, under an assumed endurance rating: at ten such 27B
+sessions a day, Phase 0 writes about 570 GB/day and the hybrid about
+130 GB/day. A drive rated for 600 TB written would last roughly 2.9 years
+versus 12.6 years.
 
 ## Reading the tables
 

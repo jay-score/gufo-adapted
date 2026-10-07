@@ -25,6 +25,7 @@ sessions to 149k tokens, subagents, multi-user chat and restarts:
 | 27B captures copy everything | 14 ms at 1.8k tokens up to 235 ms at 149k (10 GB). Flash-Next already captures only fixed state: 2–5 ms at any depth |
 | In-session reuse is near ideal otherwise | Actual vs ideal reuse within 0.3–1.2 points except W2 and the restarts |
 | The simulator is trustworthy | It reproduces actual reuse within 0.5% and prefill time within 0–8% on every run |
+| Concurrency 4 changes little | Reuse within 0.1–0.6 points of ideal; more sessions hide the W2 defect; the 27B disk writer is busy half the time; the hybrid writes 40–70% less |
 
 ## Options compared (E7 simulation and cost model)
 
@@ -41,8 +42,8 @@ sessions to 149k tokens, subagents, multi-user chat and restarts:
 | Effort | — | Small: lookup rule, streamed writes, accounting | Large: model interface split for each model, chunk pool, new disk format |
 | Risk | Known defects | Low | Medium: new store, format, eviction rules |
 
-At concurrency 2 the hybrid adds efficiency, not reuse that Phase 0 cannot
-reach. E6 tests whether concurrency 4 changes that.
+At concurrency 2 and 4 alike, the hybrid adds efficiency, not reuse that
+Phase 0 cannot reach.
 
 ## Recommendation
 

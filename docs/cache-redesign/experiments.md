@@ -284,6 +284,27 @@ These back the [cost model](cost-model.md) **(measured)**:
   1.8k tokens, where its snapshot (0.36 GB) is mostly fixed state.
 - **Prefill model** ([fit_prefill.py](scripts/fit_prefill.py)), fitted on 150
   requests per model. Median error 9.8% (Flash-Next) and 3.9% (27B).
+- **Restoring from chunks** ([chunkcopy.hip](scripts/chunkcopy.hip)): 8 GiB
+  moved as many device copies on one stream, in scattered order.
+
+  | Piece size | GB/s |
+  | ---: | ---: |
+  | One 8 GiB copy | 103 |
+  | 64 MiB | 109 |
+  | 4 MiB | 106 |
+  | 1 MiB | 88 |
+  | 256 KiB | 56 |
+  | 64 KiB | 23 |
+
+  A 2,048-token chunk split per attention layer and K/V is estimated at about
+  1–4 MiB per piece for these models, so assembling a session from chunks
+  keeps device-copy bandwidth.
+- **Physical vs accounted RAM** (W1 logs):
+  - Flash-Next accounted 7.1–8.9 GB of retained checkpoints, while available
+    memory fell only 4–6 GB including the live session. Borrowed KV is
+    physically shared, which supports unique-bytes accounting.
+  - 27B accounted 16.5–22.3 GB for a 14–20 GB fall, consistent with real full
+    copies.
 
 ### E7. Today, Phase 0 and the hybrid, in seconds
 
@@ -343,6 +364,37 @@ Reading E7:
 - **The capture saving is real only on 27B.** The modelled 18 s on W1 is about
   0.5 s per turn at long context.
 
+### E6. Today's system at concurrency 4
+
+The production-like servers were rerun with `--sessions 4`, a 131,072-token
+context and four parallel clients ([run_e6.sh](scripts/run_e6.sh)). Workloads:
+W3 with 10 users and 100 requests, and W2 with four workers.
+
+| Run | RAM budget | Staging | Ideal reuse | Actual reuse | RAM refusals | Disk written | Disk write time |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 27B W3, concurrency 4 | 20.2 GB | 5.05 GB | 86.7% | 86.1% | 92 | 33.7 GB | 903 s |
+| 27B W2, concurrency 4 | 20.1 GB | 5.03 GB | 89.2% | 89.0% | 22 | 36.1 GB | 97 s |
+| Flash-Next W3, concurrency 4 | 8.5 GB | 2.12 GB | 87.5% | 87.1% | 77 | 16.2 GB | 31 s |
+| Flash-Next W2, concurrency 4 | 9.0 GB | 2.25 GB | 89.0% | 88.9% | 27 | 14.5 GB | 29 s |
+
+E7 on the concurrency-4 traces (four sessions):
+
+| Run | Measured prefill | Today (sim) | Phase 0 | Hybrid | Hybrid + dense | 27B capture, today → hybrid | Disk, today → hybrid |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| 27B W3, concurrency 4 | 478 s | 501 s | 501 s | 501 s | 498 s | 6.6 → 1.7 s | 33.6 → 20.1 GB |
+| 27B W2, concurrency 4 | 230 s | 229 s | 229 s | 229 s | 227 s | 3.0 → 0.5 s | 36.1 → 11.4 GB |
+| Flash-Next W3, concurrency 4 | 159 s | 158 s | 158 s | 158 s | 157 s | — | 15.9 → 8.7 GB |
+| Flash-Next W2, concurrency 4 | 72 s | 71 s | 71 s | 71 s | 70 s | — | 15.4 → 5.3 GB |
+
+- **The W2 miss disappears with four sessions.** The parent's live state stays
+  resident while its forks run, so the disk-lookup defect never triggers.
+  More sessions hide the defect rather than fix it.
+- **Reuse stays near ideal.** As at concurrency 2, the hybrid's gain is in
+  bytes written and capture time, not reuse.
+- **The disk writer is the bottleneck at concurrency 4.** In W3 it spent 903 s
+  writing 33.7 GB during a ~29-minute run, about half the wall time. The
+  hybrid would write 40% less.
+
 ### Summary so far
 
 1. **Reuse within a running server** is not the problem at concurrency 2.
@@ -355,7 +407,10 @@ Reading E7:
 3. **Cost per turn:** the hybrid cuts 27B captures from 100–240 ms to ~14 ms
    per checkpoint, disk writes 2.5–4.5×, and multiplies the checkpoints a RAM
    budget holds by 10–20× at long context.
-4. **Phase 0 first.** It captures most of the reuse gain with small changes.
-   The hybrid adds efficiency (writes, 27B capture time, RAM capacity, dense
-   checkpoints) rather than reuse that Phase 0 cannot reach at concurrency 2.
-   Concurrency 4 (E6) is in progress.
+4. **Concurrency 4 doesn't change the picture (E6).** Reuse stays within
+   0.1–0.6 points of ideal, and more sessions hide the W2 defect rather than
+   fix it. The disk writer becomes the bottleneck: busy half the time on 27B
+   W3. The hybrid writes 40–70% less.
+5. **Phase 0 first.** It captures every measured reuse gain with small
+   changes. The hybrid adds efficiency (disk writes, 27B capture time, RAM
+   capacity, dense checkpoints) rather than reuse that Phase 0 cannot reach.
