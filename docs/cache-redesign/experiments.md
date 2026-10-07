@@ -266,16 +266,96 @@ before request N; the RAM cache empties and disk persists:
 Prefill at 90–150k depth ran at 1,140–1,180 tokens/s on Flash-Next and
 196–250 tokens/s on 27B.
 
+### Micro-benchmarks (2026-10-07)
+
+These back the [cost model](cost-model.md) **(measured)**:
+
+- **GPU copies** ([copybench.hip](scripts/copybench.hip), 56 MiB–10 GiB):
+  device to device 104–110 GB/s; pinned host either way about 85 GB/s;
+  pageable 61–83 GB/s. A 10 GiB device copy takes 103 ms. The real 27B capture
+  of the same 10 GB took 235 ms.
+- **Disk** ([diskbench.py](scripts/diskbench.py), NVMe under dm-crypt):
+  - write + fsync 0.58–0.60 GB/s at every size from 56 MiB to 4 GiB;
+  - cold read 0.97–1.15 GB/s;
+  - 72 files of 56 MiB versus one 4.2 GB file: write 8.0 s vs 7.1 s, cold
+    read 4.18 s vs 3.69 s (+13% each).
+- **Fixed-state captures already exist.** Flash-Next captures 2.2–5.4 ms at
+  1.8k–149k tokens, because its KV is borrowed (#445). 27B captures 13.7 ms at
+  1.8k tokens, where its snapshot (0.36 GB) is mostly fixed state.
+- **Prefill model** ([fit_prefill.py](scripts/fit_prefill.py)), fitted on 150
+  requests per model. Median error 9.8% (Flash-Next) and 3.9% (27B).
+
+### E7. Today, Phase 0 and the hybrid, in seconds
+
+[simulate_e7.py](scripts/simulate_e7.py) replays every trace through four
+variants, with the budgets each server actually chose:
+
+| Variant | Changes from today |
+| --- | --- |
+| Today | — |
+| Phase 0 | Disk consulted whenever it holds a longer prefix; writes streamed, so no staging limit; Flash-Next RAM counted by unique bytes |
+| Hybrid | Shared KV chunks in RAM and on disk, small checkpoints, one index |
+| Hybrid + dense | Also a RAM checkpoint at every message boundary, and the end of the system prompt persisted |
+
+Prefill time is the fitted model applied to each request's uncached tokens.
+For runs without a simulated restart, simulated "today" matches the measured
+prefill time within 1–8%.
+
+| Run | Measured prefill | Today | Phase 0 | Hybrid | Hybrid + dense |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Flash-Next W1 | 130 s | 137 s | 137 s | 137 s | 137 s |
+| Flash-Next W1, restart at 60.8k | — | 137 s | 137 s | 137 s | 137 s |
+| Flash-Next W1, restart at 104.9k | — | 161 s | 137 s | 137 s | 137 s |
+| Flash-Next W1, restart at 149.1k | — | 185 s | 137 s | 137 s | 137 s |
+| Flash-Next W2 | 85 s | 87 s | 71 s | 71 s | 71 s |
+| Flash-Next W3 | 108 s | 108 s | 108 s | 108 s | 107 s |
+| Flash-Next W4 | 108 s | 100 s | 100 s | 100 s | 95 s |
+| 27B W1 | 589 s | 596 s | 596 s | 596 s | 596 s |
+| 27B W1, restart at 60.6k | — | 597 s | 597 s | 597 s | 597 s |
+| 27B W1, restart at 104.5k | — | 718 s | 597 s | 597 s | 597 s |
+| 27B W1, restart at 148.5k | — | 855 s | 597 s | 597 s | 597 s |
+| 27B W2 | 293 s | 292 s | 235 s | 235 s | 233 s |
+| 27B W3 | 352 s | 348 s | 348 s | 348 s | 345 s |
+| 27B W4 | 403 s | 400 s | 400 s | 364 s | 346 s |
+
+Bytes written to disk, and modelled 27B capture time:
+
+| Run | 27B capture, today → hybrid | Disk: today | Phase 0 | Hybrid | Hybrid + dense |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Flash-Next W1 | — | 7.0 GB | 24.1 GB | 5.7 GB | 5.7 GB |
+| Flash-Next W2 | — | 16.3 GB | 15.5 GB | 5.2 GB | 5.7 GB |
+| Flash-Next W3 | — | 13.5 GB | 13.5 GB | 6.3 GB | 6.2 GB |
+| Flash-Next W4 | — | 26.7 GB | 29.0 GB | 6.9 GB | 6.8 GB |
+| 27B W1 | 18.2 → 0.8 s | 16.5 GB | 56.8 GB | 13.2 GB | 13.2 GB |
+| 27B W2 | 3.1 → 0.5 s | 37.8 GB | 36.0 GB | 11.7 GB | 13.0 GB |
+| 27B W3 | 5.5 → 1.0 s | 31.2 GB | 31.2 GB | 13.5 GB | 13.1 GB |
+| 27B W4 | 5.5 → 0.6 s | 70.9 GB | 70.9 GB | 15.9 GB | 15.6 GB |
+
+Reading E7:
+
+- **Phase 0 recovers the in-session miss** (W2: −16 s Flash-Next, −57 s 27B)
+  and the restart losses (−24 to −48 s Flash-Next, −121 to −258 s 27B).
+- **Phase 0 pays in disk writes:** 24–57 GB on the agent runs against 6–13 GB
+  for the hybrid. With a 16 GiB disk budget it also keeps fewer checkpoints;
+  27B W4 is where that shows (400 s vs 364 s for the hybrid).
+- **Dense checkpoints are worth it only with the hybrid:** W4 −5 s Flash-Next,
+  −18 s 27B, for almost no extra disk.
+- **The capture saving is real only on 27B.** The modelled 18 s on W1 is about
+  0.5 s per turn at long context.
+
 ### Summary so far
 
-1. **Reuse rate:** chunking adds nothing to reuse in-session at these
-   concurrency levels. The one large in-session gain (W2) comes equally from a
-   one-line disk-lookup fix.
-2. **Restarts:** chunking matters most here, because deep checkpoints persist.
-   Today the disk tier stops at ~75k tokens; a restart deeper than that costs
-   ~25–50 s on Flash-Next and ~2–5 min on 27B per long session.
-3. **Cost per turn:** chunking cuts RAM copy volume 4–15× on 27B (captures of
-   235–635 ms today) and disk writes 2.5–4.5×.
-4. **Cheap fixes on today's design:** consult disk on a longer prefix; size
-   staging by need or stream writes; count Flash-Next RAM checkpoints by unique
-   bytes. These recover part of points 1 and 2 without a redesign.
+1. **Reuse within a running server** is not the problem at concurrency 2.
+   The one large in-session miss comes from a defect (a RAM hit hides a longer
+   disk hit) that Phase 0 fixes.
+2. **Restarts are where today's design fails at depth.** The disk tier stops
+   at ~75k tokens; a deeper restart costs ~25–50 s on Flash-Next and ~2–4 min
+   on 27B. Phase 0 (streamed writes) and the hybrid both fix it. Phase 0 writes
+   2–4× more and fits fewer checkpoints on disk.
+3. **Cost per turn:** the hybrid cuts 27B captures from 100–240 ms to ~14 ms
+   per checkpoint, disk writes 2.5–4.5×, and multiplies the checkpoints a RAM
+   budget holds by 10–20× at long context.
+4. **Phase 0 first.** It captures most of the reuse gain with small changes.
+   The hybrid adds efficiency (writes, 27B capture time, RAM capacity, dense
+   checkpoints) rather than reuse that Phase 0 cannot reach at concurrency 2.
+   Concurrency 4 (E6) is in progress.

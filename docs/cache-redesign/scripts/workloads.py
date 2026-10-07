@@ -95,9 +95,13 @@ class Conversation:
         self.turn += 1
 
 
-def run_schedule(client, schedule, workers=2):
+WORKERS = 2
+
+
+def run_schedule(client, schedule, workers=None):
     """Runs (conversation, next_user, max_tokens) steps in order on N workers;
     a worker waits while the step's conversation is still running."""
+    workers = workers or WORKERS
     queue = list(schedule)
     lock = threading.Lock()
 
@@ -167,12 +171,15 @@ def w2(client):
     run_schedule(client, [(parent, out(10000), 96)] * 3, workers=1)
 
 
+USERS, STEPS = 6, 60
+
+
 def w3(client):
     rng = random.Random(7)
     docs = Text(DOCS, 3)
     default_system = {"role": "system", "content": system_prompt(30, 3000)}
     users = []
-    for i in range(6):
+    for i in range(USERS):
         if i < 3:
             system = default_system
         else:
@@ -186,9 +193,9 @@ def w3(client):
             text += "\nHere is a document:\n" + docs.take(rng.randrange(12000, 26000))
         return text
 
-    weights = [3, 3, 2, 2, 1, 1]
+    weights = ([3, 3, 2, 2, 1, 1] * ((USERS + 5) // 6))[:USERS]
     schedule = []
-    for _ in range(60):
+    for _ in range(STEPS):
         user = rng.choices(users, weights)[0]
         schedule.append((user, message, 200))
     run_schedule(client, schedule)
@@ -228,18 +235,32 @@ def main():
     parser.add_argument("--model", choices=tuple(serverctl.MODELS), required=True)
     parser.add_argument("--port", type=int, default=18432)
     parser.add_argument("--disk-bytes", type=int, default=16 << 30)
+    parser.add_argument("--sessions", type=int, default=2)
+    parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--users", type=int, default=6)
+    parser.add_argument("--steps", type=int, default=60)
+    parser.add_argument("--context", default=None)
+    parser.add_argument("--tag", default="")
     args = parser.parse_args()
-    out = serverctl.HERE / "results" / "e2" / args.model / args.workload
+    global WORKERS, USERS, STEPS
+    WORKERS, USERS, STEPS = args.workers, args.users, args.steps
+    name = args.workload + (f"-{args.tag}" if args.tag else "")
+    out = serverctl.HERE / "results" / "e2" / args.model / name
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
-    cache = serverctl.HERE / "cache" / f"e2-{args.model}-{args.workload}"
+    cache = serverctl.HERE / "cache" / f"e2-{args.model}-{name}"
     shutil.rmtree(cache, ignore_errors=True)
     traces = iter(range(100))
 
     def server_factory():
-        return serverctl.Server(args.model, args.port, out / "server.log",
-                                out / f"trace-{next(traces)}.jsonl", cache,
-                                disk_bytes=args.disk_bytes, think="off")
+        server = serverctl.Server(args.model, args.port, out / "server.log",
+                                  out / f"trace-{next(traces)}.jsonl", cache,
+                                  disk_bytes=args.disk_bytes, think="off",
+                                  sessions=args.sessions)
+        if args.context:
+            index = server.command.index("--context")
+            server.command[index + 1] = args.context
+        return server
 
     def client_factory(server):
         return Client(server, out / "client.jsonl")

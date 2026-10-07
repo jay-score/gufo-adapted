@@ -14,13 +14,15 @@ far should it go?
 | [Other engines](external-engines.md) | llama.cpp, vLLM, SGLang, LMCache and ds4, with links |
 | [Options](options.md) | Candidate designs, pros and cons, diffs and keyframes, and the features still to decide |
 | [Hybrid design](hybrid-design.md) | Option E in detail, with worked examples |
+| [Cost model](cost-model.md) | Per-operation costs, today vs hybrid, from measured constants |
 | [Experiments](experiments.md) | Measurements needed to decide, and their results |
 
 ## Status
 
 1. Write down the discussion and external references. Done.
-2. Run the experiments in [experiments.md](experiments.md). E1–E5 done for
-   Flash-Next and 27B; cost-model checks and a concurrency-4 run in progress.
+2. Run the experiments in [experiments.md](experiments.md). E1–E5, the
+   micro-benchmarks, the [cost model](cost-model.md) and E7 are done for
+   Flash-Next and 27B. The concurrency-4 run (E6) is in progress.
 3. Agree on the required features (see [Options](options.md)).
 4. Choose a design, or keep the current one.
 
