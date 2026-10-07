@@ -1,8 +1,10 @@
 # Experiments
 
 Measurements that decide between [option A and option C](options.md). All of
-them run on unmodified main binaries; analysis scripts live outside `src/` and
-`tools/`.
+them run on unmodified main binaries. The drivers and analysis scripts are in
+[scripts/](scripts/), and small result files in [results/](results/). The
+scripts expect the gufo binary at `bin/gufo` next to them and write `results/`
+and `cache/` there.
 
 ## Scope (agreed 2026-10-07)
 
@@ -92,4 +94,37 @@ the current design and merge #409. The threshold is still to be agreed.
 
 ## Results
 
-None yet.
+### E1. Snapshot size model (2026-10-07)
+
+Disk `payload_bytes` against checkpoint tokens, main-equivalent build,
+`--sessions 1`. Every configuration fits fixed + per-token exactly (largest
+residual under 0.01%) **(measured)**:
+
+| Configuration | Fixed | Per token | At 100k tokens |
+| --- | ---: | ---: | ---: |
+| Flash-Next, AR, `--context 260000` | 113.5 MiB | 25.35 KB | 2.65 GB |
+| Flash-Next, AR, `--context 32768` | 113.5 MiB | 25.35 KB | 2.65 GB |
+| Flash-Next, MTP, `--context 260000` | 113.8 MiB | 27.46 KB | 2.87 GB |
+| 27B, AR, `--context 256000` | 152.4 MiB | 65.54 KB (64 KiB) | 6.71 GB |
+| 27B, AR, `--context 32768` | 152.4 MiB | 65.54 KB | 6.71 GB |
+| 27B, DFlash2, `--context 256000` | 232.4 MiB | 65.54 KB | 6.80 GB |
+
+- **Context size doesn't matter.** Checkpoint size depends only on the token
+  position, not on `--context`.
+- **Speculative drafting adds state.** MTP adds 2.1 KB per token; DFlash2 adds
+  80 MiB of fixed state.
+- **27B is hybrid too.** It has a 152 MiB fixed part, but its per-token cost
+  is 2.6× Flash-Next's, so sharing KV would save proportionally more on 27B.
+- **Automatic RAM budgets are small.** With one session loaded they were
+  12.9–17.5 GB for Flash-Next and 33–34 GB for 27B. At 100k tokens that is
+  about 4–6 Flash-Next checkpoints or 5 for 27B.
+- **Deep checkpoints don't reach disk.** The automatic staging limit (3.4 GiB
+  with Flash-Next loaded) is below one Flash-Next checkpoint at 131k tokens,
+  and two 27B checkpoints at 64k exceed even 6 GiB. Today's defaults skip
+  persisting those deep checkpoints (`reason=staging_capacity`).
+- **The RAM cache can refuse the newest checkpoint.** At 127k tokens it
+  refused the prompt checkpoint (`reason=byte_capacity`, 3.34 GB against a
+  14.6 GB budget), because the request's own earlier checkpoints already
+  filled the budget.
+
+Scripts: `e1_snapshot_size.py`, `run_e1.sh`, `fit_e1.py`.
