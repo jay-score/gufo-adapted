@@ -10,6 +10,7 @@ far should it go?
 
 | Document | Contents |
 | --- | --- |
+| [Decision brief](decision-brief.md) | One-page summary of the evidence, options and recommendation |
 | [Current design](current-design.md) | What the continuation cache does today, with source references and known costs |
 | [Other engines](external-engines.md) | llama.cpp, vLLM, SGLang, LMCache and ds4, with links |
 | [Options](options.md) | Candidate designs, pros and cons, diffs and keyframes, and the features still to decide |
