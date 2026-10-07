@@ -116,7 +116,8 @@ Chat Completions clients may override it with
 the GUI passes `--cache-disk`, `--cache-disk-bytes`, and
 `--cache-disk-staging-bytes`. The suggested folder is `%LOCALAPPDATA%\Gufo\cache`
 on Windows (`~/.cache/gufo` otherwise); Gufo creates it when needed. The disk
-limit defaults to 8 GiB and the RAM staging limit to 0 (automatic, at most 1 GiB).
+limit defaults to 8 GiB and the RAM staging limit to 0 (automatic, the smaller
+of one eighth of available RAM after loading and the disk limit).
 Large snapshots need larger limits: Flash-Next/MTP at 262K context needs 8 GiB
 staging if RAM permits. See [server cache behavior](../../docs/SERVER.md#hip-execution)
 for skip behavior and budget details. Stop/Exit do not drain pending writes.

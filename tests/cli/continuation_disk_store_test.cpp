@@ -515,8 +515,30 @@ void TestAutomaticStagingAndAdmissionDiagnostics() {
   ContinuationDiskStore defaults({.directory = default_directory.path()});
   Expect(defaults.capacity_bytes() == std::size_t{8} * 1024U * 1024U * 1024U &&
              defaults.staging_capacity_bytes() > kDiskHeaderBytes &&
-             defaults.staging_capacity_bytes() <= 1024U * 1024U * 1024U,
-         "defaults bound RAM staging to 1 GiB independently of disk retention");
+             defaults.staging_capacity_bytes() <= defaults.capacity_bytes(),
+         "defaults bound RAM staging by available RAM and disk retention");
+
+  // Admission reserves bytes without allocating a snapshot. Exercise the old
+  // hard-cap boundary on hosts with enough RAM, including concurrent captures.
+  constexpr std::size_t kGiB = std::size_t{1024} * 1024U * 1024U;
+  const FakeRunner large_runner("large-automatic");
+  if (gufo::server::HostSnapshotBudgetBytes() / 4 > kGiB + 1024) {
+    const std::size_t payload = kGiB + 1;
+    Expect(defaults.CanSave(large_runner, 2, payload),
+           "automatic staging admits snapshots larger than 1 GiB");
+    auto capture = defaults.ReserveCapture(large_runner, 2, payload);
+    Expect(capture != nullptr,
+           "large automatic capture reserves staging without allocation");
+    Expect(!defaults.CanSave(large_runner, 2,
+                             defaults.staging_capacity_bytes() - payload),
+           "large automatic captures still share one bounded staging budget");
+    capture.reset();
+    Expect(defaults.CanSave(large_runner, 2, payload),
+           "releasing a large automatic capture restores admission");
+  } else {
+    std::cout << "large automatic staging admission needs over 8 GiB available "
+                 "host RAM\n";
+  }
 
   TemporaryDirectory directory;
   std::vector<ContinuationDiskEvent> events;
