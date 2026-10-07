@@ -101,7 +101,7 @@
           <p class="hint">Gufo creates the folder on launch if needed. You can type a new folder path.</p>
           <div class="field-grid">
             <div><label for="cache_disk_gib">Disk limit (GiB)</label><input id="cache_disk_gib" name="cache_disk_gib" type="number" min="1" max="65536" step="1" required></div>
-            <div><label for="cache_disk_staging_gib">RAM staging limit (GiB)</label><input id="cache_disk_staging_gib" name="cache_disk_staging_gib" type="number" min="0" max="65536" step="1" required><p class="hint">0 is automatic, up to 1 GiB. This is a limit, not an upfront allocation.</p></div>
+            <div><label for="cache_disk_staging_gib">RAM staging limit (GiB)</label><input id="cache_disk_staging_gib" name="cache_disk_staging_gib" type="number" min="0" max="65536" step="1" required><p class="hint">0 is automatic: the smaller of 1/8 available RAM and the disk limit. Nothing is allocated upfront.</p></div>
           </div>
           <p class="hint">Snapshots larger than either limit are skipped. For Flash-Next/MTP at 262K context, use 8 GiB staging if RAM permits; check the process log for required snapshot sizes.</p>
         </fieldset>

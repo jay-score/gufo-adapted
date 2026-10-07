@@ -232,7 +232,7 @@ Three budgets, each able to bind first.
 | --- | --- | --- |
 | Retained snapshot bytes, RAM | `MemAvailable / 2` | not configurable |
 | Disk bytes | 8 GiB | `--cache-disk-bytes` |
-| Disk staging bytes | smallest of 1 GiB, `MemAvailable / 8`, the disk budget | `--cache-disk-staging-bytes` |
+| Disk staging bytes | smaller of `MemAvailable / 8` and the disk budget | `--cache-disk-staging-bytes` |
 
 The RAM budget is sampled **after** the model and sessions are allocated, then
 halved. It therefore shrinks as `--context` and `--sessions` grow, which is
@@ -242,9 +242,9 @@ retained **(measured)**. See #343.
 
 Snapshot size scales with retained tokens and differs sharply between models:
 roughly 0.5 GB at 5k tokens on Flash-Next, and 3.7 GB at 24k tokens on
-Qwen3.8-27B **(measured)**. The 1 GiB disk staging default is therefore below a
-single 27B checkpoint at moderate depth, which reduces `--cache-disk` to a
-no-op unless raised. See #259.
+Qwen3.8-27B **(measured)**. Automatic disk staging has no fixed 1 GiB cap:
+it follows available RAM and the disk budget, allowing larger checkpoints
+when both budgets permit. See #259.
 
 Eviction is least-recently-used in both tiers, with no awareness of
 conversation, prefix depth or rebuild cost.

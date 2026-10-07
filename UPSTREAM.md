@@ -36,6 +36,35 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-07 — Automatic disk staging without a fixed cap
+
+- Source: [gufo-org/gufo@b39c530e70e87f4340e2230a155fd16d066d19f3](https://github.com/gufo-org/gufo/commit/b39c530e70e87f4340e2230a155fd16d066d19f3)
+  (PR #473, merged; constituents
+  [4ab4b9152189e1956a7c9959c9e4ae159b2bd215](https://github.com/gufo-org/gufo/commit/4ab4b9152189e1956a7c9959c9e4ae159b2bd215)
+  and [7f6ea6e1d686d863859eb3a248ce9088fd2cd07e](https://github.com/gufo-org/gufo/commit/7f6ea6e1d686d863859eb3a248ce9088fd2cd07e)).
+- Local: commit introducing this entry.
+- Adaptation: remove the fixed 1 GiB automatic staging ceiling in this fork's
+  existing bounded disk store. Zero selects `min(disk capacity,
+  HostSnapshotBudgetBytes()/4)`; explicit limits and pending-capture accounting
+  retain their behavior. Update local CLI, server/cache docs and GUI hints.
+  No broader cache port is needed. Capture reuse, the `min_step` policy and early
+  disk admission remain separate future improvements. RAM checkpoints, images,
+  reasoning state, persistence format and cache fallback are unchanged.
+- Areas: `src/cli/serve/{continuation_disk_store.cpp,text_model_runner.hpp,serve.cpp}`,
+  disk-store/CLI tests, `docs/{SERVER,KV-CACHE}.md`, GUI template and README.
+- Validation: fresh Windows production and CPU builds; disk-store, runner and
+  CLI CTest pass, as do release CLI checks, 34 GUI tests, clang-format 21.1.8
+  and documentation checks. Allocation-free admission above 1 GiB passes here
+  and fails with the old calculation; low-memory hosts skip that branch.
+  Qwen27B auto stores a 1,111,625,411-byte checkpoint, drains on shutdown,
+  restores after restart and matches cold/live continuation answers. Old auto
+  and explicit 1 GiB reject it with correct fallback. Numerical capture has
+  27/27 identical full-logit rows and unchanged perplexity; this uses unchanged
+  model code, independently of the disk HTTP checks. See
+  [qualification and limits](docs/plans/disk-staging-pr473.md). Linux CI is
+  unrun; the Windows symlink fixture lacks privileges.
+- Status: retained.
+
 ### 2026-10-05 — Bounded inferred Qwen argument types
 
 - Sources: [gufo-org/gufo@29fb0b4eec70f49088bb5126074e6f10be17a0d1](https://github.com/gufo-org/gufo/commit/29fb0b4eec70f49088bb5126074e6f10be17a0d1)
