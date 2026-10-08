@@ -44,8 +44,9 @@ Use this entry format:
   [53912b8ffe45c9ce16fc04555718c85409bc32e1](https://github.com/gufo-org/gufo/commit/53912b8ffe45c9ce16fc04555718c85409bc32e1)
   and [9bccebc5e1d42a702820700736b2601cb1533e90](https://github.com/gufo-org/gufo/commit/9bccebc5e1d42a702820700736b2601cb1533e90).
 - Local: `6244865bb4bc9cbcc703fa540d6354e56809af04` (kernel adaptation);
-  additional mixed-Q4/Q5 capture and qualification in the commit updating this
-  entry.
+  mixed-Q4/Q5 capture and qualification in
+  `be82fcdfdd82b7a8a69d5fbf3d4fe4c90d8ff632`; full Qwen Q8 qualification
+  in the commit updating this entry.
 - Adaptation: constrain blocked Qwen K-loop unrolling and W8A8 scheduling,
   disable SLP only in the two affected Qwen prefill compilation units, and
   select paired Flash-Next Q4/Q5 cache values from fixed register slots.
@@ -66,8 +67,9 @@ Use this entry format:
   in the [qualification record](docs/plans/prefill-spills-pr459.md). Additional
   UD-Q4_K_XL/Q8-MTP validation covers 47 Q4_K layer pairs and one Q5_K pair:
   loading, replay and all 270 full-logit rows pass with identical perplexity.
-  Full-model Qwen Q8 weights remain unavailable; Linux build/CI and clang 22
-  runtime validation are unrun.
+  Full Qwen27B Q8_0 also retains 189 byte-identical logit rows and perplexity,
+  with the native target state/replay/rollback suite passing. Linux build/CI
+  and clang 22 runtime validation are unrun.
 - Status: retained.
 
 ### 2026-10-07 — Automatic disk staging without a fixed cap

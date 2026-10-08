@@ -361,9 +361,8 @@ claimed from IQ4_XS/mixed-Q4 timings or from resource counts alone.
 
 The initial full models were Qwen UD-Q4_K_XL and Flash-Next UD-IQ4_XS. Additional
 Flash-Next UD-Q4_K_XL coverage is recorded below and closes its full-model paired
-Q4/Q5 gap. Qwen Q8 still has compiled resource and independent operator coverage,
-without new full-model numerical/performance qualification. No model sweep or
-additional model download was undertaken. The separate Flash teacher-forcing
+Q4/Q5 gap. Additional full-model Qwen Q8 qualification is recorded below.
+No model sweep or additional model download was undertaken. The separate Flash teacher-forcing
 diagnostic's row limit and absence of sampled-rejection cross-build capture
 remain as described above.
 
@@ -447,6 +446,60 @@ The [model artifact](../models/qwen3.8-flash-next/artifacts/prefill-spills-pr459
 retains all model-file SHA-256 values, build identities, fixture/row hashes,
 per-process means/deviations, paired-round gains and output/draft controls.
 Production code and the initial spill-free resource contract are unchanged by
-this additional qualification. Qwen Q8 full-model checks, Linux/clang-22 checks,
-original-model parity and sampled-rejection cross-build capture remain outside
-the completed scope.
+this additional qualification. Linux/clang-22 checks, original-model parity
+and sampled-rejection cross-build capture remain outside the completed scope; the Qwen Q8 gap is addressed below.
+
+## Additional full-model Qwen27B Q8 qualification
+
+The newly supplied `Qwen3.8-27B-Q8_0.gguf` is the full `qwen35` target,
+29,047,086,048 bytes, with 866 tensors (506 Q8_0 and 360 F32).
+SHA-256: `a680f44a06920e5d689774823782006aa3acc8db95750323373b24139b67e348`.
+This is distinct from the smaller Q8 drafts and projector in the same folder.
+No model download, new implementation or production rebuild was needed.
+
+The original frozen baseline/candidate release and GPU-test binaries above are
+unchanged. The prefill capture harness source SHA-256 remains
+`317a463c5b3e3c646a424d01d5f6d5b508c7a8c38d5061ba126b643d7987c86c`.
+Three fixed histories at 8/9/64/95/96/129/2048-token prefixes, each with eight
+scalar continuations, produce **189 byte-identical full FP32 logit rows**
+(248,320 floats each; 187,729,920 bytes). All fixture and row hashes agree.
+Raw-capture SHA-256:
+`3b53f0212da9a7bfe32ecc253f82fb28c2fad4e78c10d4e01a987010ce9f84b7`.
+All 168 continuation labels retain mean NLL **0.6197359249209301** and
+perplexity **1.8584372100877764**. The candidate full native target suite passes
+verification, replay, rollback, C1-C8 isolation, wide-cache and 8K prefill checks.
+This establishes matched-build consistency, not original-model accuracy.
+
+```powershell
+& $TargetTest $Q8Model --capture-prefill-logits build/review-pr459/q8-logits.bin
+# Repeat with the retained baseline/candidate tests and distinct output paths.
+& $CandidateTargetTest $Q8Model
+& $Exe bench --model $Q8Model -p 8,16,64,2048 -n 128 -d 0 -r 3 --temperature 0 --seed 459 --verbose --speculative off
+& $Exe bench --model $Q8Model -p 8,16,64,2048 -n 128 -d 0 -r 3 --temperature 0 --seed 459 --verbose --speculative dflash2 --dflash-model $Draft --draft-policy fixed --draft-tokens 7
+```
+
+The native release benchmarks use C1/d0/capacity 4096 and the same official
+Q4_K_M DFlash2 draft. Two rounds in baseline/candidate then candidate/baseline
+order, three repetitions per process, warm each prompt shape and exclude model
+loading. All hashing and correctness work finished before these measurements.
+The first baseline measurement completed successfully; an initial log parser
+expected Flash-Next's verbose format and was corrected to read Qwen's
+`QwenBenchTrace` output. The completed measurement was retained without rerunning;
+its process wall time is unavailable, while all throughput statistics and
+completion hashes are preserved. Process wall time is not the benchmark metric.
+
+Across both rounds, AR pp16/pp64 gain **249.2% / 232.3%** and pp2048
+**68.8%**. DFlash2 gains **231.8% / 211.3% / 62.3%** respectively. pp8 and
+TG remain within measurement noise (+0.5%/+0.1% AR, +0.0%/-0.0% DFlash2).
+All **24** greedy completions retain token-output SHA-256
+`6971f2de5116be10e2da362bed7115a2148936e0b88f5f9f900d3f474ff786c7`;
+all four DFlash2 processes report acceptance 0.413 with standard deviation 0.000.
+These full-model gains close the remaining Q8 qualification gap and confirm
+that removing the compiled spills benefits the affected Q8 prefill route.
+
+[Q8 evidence](../models/qwen3.8-27b/artifacts/prefill-spills-pr459-q8.json) retains
+the file/build identities, every capture row/fixture hash, NLL/perplexity,
+all per-process throughput statistics, paired-round gains and completion hashes.
+Raw logs/logits remain under ignored `build/review-pr459/`. Linux/clang-22
+execution, original-model parity and sampled-rejection cross-build capture
+remain unrun. No push, installation or GUI settings change was performed.

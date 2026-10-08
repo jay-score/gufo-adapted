@@ -62,7 +62,13 @@ for [PR #459](../../plans/prefill-spills-pr459.md). Three fixed histories at
 mean NLL **0.61468373729780568** and perplexity **1.8490717146575339**.
 The full native target test passes verification, replay, rollback and wide-cache
 checks; focused Q8/K/IQ prefill operators cover the changed dispatch boundaries.
-Full-model Q8 and Linux validation were not rerun. This establishes execution
+The newly supplied full Q8_0 target also produces **189 byte-identical rows**
+and unchanged mean NLL **0.6197359249209301** / perplexity
+**1.8584372100877764** across the same fixtures.
+The full Q8 native target suite also passes verification, replay, rollback,
+C1-C8 isolation, wide-cache and 8K prefill consistency checks.
+[Q8 identities and row hashes](artifacts/prefill-spills-pr459-q8.json) retain
+the matched evidence. Linux validation remains unrun. This establishes execution
 consistency for the compiler adaptation, not original-model parity.
 
 ### Windows device upload
