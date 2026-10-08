@@ -18,6 +18,7 @@ Models tested and confirmed fully functional on this fork:
 Special thanks to pixmaate for creating the initial windows port https://github.com/pixmaate/gufo 
 and to the original Gufo team https://github.com/gufo-org/gufo
 
+English with optional Simplified Chinese language support by @jerrydong1988 
 
 
 All model documentation lives under [docs/models](docs/models/README.md):
