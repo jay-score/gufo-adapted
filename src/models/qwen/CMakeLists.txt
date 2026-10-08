@@ -97,4 +97,12 @@ if (ENGINE_ENABLE_HIP)
     TARGET_DIRECTORY gufo_core
     PROPERTIES COMPILE_OPTIONS
     "-mwavefrontsize64;-gline-tables-only;-Xarch_device;-mllvm=-amdgpu-sched-strategy=iterative-ilp")
+  # SLP combines K-quant scale/offset state into wide tuples that spill on
+  # clang 23. Keep this constraint local to the two blocked prefill units.
+  set_property(
+    SOURCE
+      ${PROJECT_SOURCE_DIR}/src/models/qwen/hip/kernels/prefill_quant_gemm.hip
+      ${PROJECT_SOURCE_DIR}/src/models/qwen/hip/kernels/prefill_quant_wave64.hip
+    TARGET_DIRECTORY gufo_core
+    APPEND PROPERTY COMPILE_OPTIONS -fno-slp-vectorize)
 endif()

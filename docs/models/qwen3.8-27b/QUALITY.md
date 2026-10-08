@@ -53,6 +53,18 @@ conversion errors. Flash-Next has a separate [vision limit](../qwen3.8-flash-nex
 
 ## Reproduce
 
+### Windows prefill spill regression
+
+October 7, 2026: TheRock 10.0.0/clang 23, UD-Q4_K_XL, matched baseline/candidate
+for [PR #459](../../plans/prefill-spills-pr459.md). Three fixed histories at
+8/9/64/95/96/129/2048-token prefixes plus eight scalar continuations produce
+**189 byte-identical full FP32 logit rows**. All 168 continuation labels retain
+mean NLL **0.61468373729780568** and perplexity **1.8490717146575339**.
+The full native target test passes verification, replay, rollback and wide-cache
+checks; focused Q8/K/IQ prefill operators cover the changed dispatch boundaries.
+Full-model Q8 and Linux validation were not rerun. This establishes execution
+consistency for the compiler adaptation, not original-model parity.
+
 ### Windows device upload
 
 September 28, 2026: native Windows/gfx1151 with TheRock 10.0.0, UD-Q4_K_XL,

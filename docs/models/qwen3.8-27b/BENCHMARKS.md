@@ -180,3 +180,28 @@ C1, context capacity 262144, AR. Peak memory reported by HIP.
 <!-- /bench -->
 
 ![Memory occupation](artifacts/charts/memory-q8.svg)
+
+## Windows clang 23 prefill regression check
+
+October 7, 2026: native `gufo bench`, TheRock 10.0.0, gfx1151, release
+baseline `dce753fc36aa` versus the PR #459 adaptation. UD-Q4_K_XL mixed weights,
+with the official Q4_K_M draft for DFlash2; fixed seven-proposal blocks.
+C1, depth zero, capacity 4096, temperature zero, seed 459. Two rounds in
+baseline/candidate then candidate/baseline order, three repetitions per process;
+the table averages the two process means. Loading is excluded and prompt shapes
+are warmed. This is a matched fork comparison, separate from the HTTP/reference
+tables above. [Build/model identities and all per-process statistics](artifacts/prefill-spills-pr459.json)
+and [qualification, commands and limits](../../plans/prefill-spills-pr459.md).
+
+| Mode / workload | Baseline (tok/s) | Adapted (tok/s) | Gain |
+| --- | ---: | ---: | ---: |
+| AR pp8 | 64.71 | 68.32 | +5.6% |
+| AR pp16 | 61.89 | 92.27 | +49.1% |
+| AR pp64 | 240.55 | 349.36 | +45.2% |
+| AR pp2048 | 680.88 | 678.69 | -0.3% |
+| AR tg128 | 11.78 | 11.98 | +1.7% |
+| DFlash2 pp8 | 60.11 | 62.84 | +4.5% |
+| DFlash2 pp16 | 59.33 | 86.93 | +46.5% |
+| DFlash2 pp64 | 225.74 | 321.75 | +42.5% |
+| DFlash2 pp2048 | 608.45 | 607.52 | -0.2% |
+| DFlash2 tg128-dflash2 | 18.38 | 18.41 | +0.2% |

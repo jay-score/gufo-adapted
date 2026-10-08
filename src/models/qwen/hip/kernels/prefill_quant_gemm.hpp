@@ -385,7 +385,8 @@ __launch_bounds__(WM * WN * WaveSize, 1) __global__
       fetch_stage(kb0 + BK);
     }
 
-#pragma unroll
+    // Bound cross-block operand lifetimes while retaining the BK=2 schedule.
+#pragma unroll(BK <= 2 ? BK : 1)
     for (int kb = 0; kb < BK; ++kb) {
       int32x4_t a0[kWaveRowTiles];
       int32x4_t a1[kWaveRowTiles];

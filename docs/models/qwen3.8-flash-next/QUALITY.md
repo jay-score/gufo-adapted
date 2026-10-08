@@ -44,6 +44,19 @@ embedding bytes but do not resolve this gap. [Evidence](artifacts/vision-parity.
 
 ## Reproduce
 
+### Windows prefill spill regression
+
+October 7, 2026: TheRock 10.0.0/clang 23, UD-IQ4_XS and shared Q8_0 MTP,
+matched baseline/candidate for [PR #459](../../plans/prefill-spills-pr459.md).
+Schedules `1:2,4,8:p8` retain **549 identical full raw-logit hashes** and
+perplexity **1.343238 / 1.343238 / 1.361810**, respectively. Equality is across
+builds within each schedule. The prefill/session test passes chunk boundaries,
+graph/snapshot replay and isolation through 4096 tokens. Independent paired
+Q4_K/Q5_K routed operators pass and their former 80-byte private cache is gone.
+The IQ4_XS model is a control for this paired-cache fix; full-model paired Q4/Q5
+weights were unavailable. Wider teacher-forced capture exceeds the existing
+diagnostic row limit; Linux and sampled rejection parity were not rerun.
+
 Tests live in [`tests/models/qwen38_flash_next`](../../../tests/models/qwen38_flash_next).
 Use `--batch-only`, `--sampling-only` or `--prefill-only` on the session test;
 the snapshot test covers persistent image/text state. For independent MTP checks:

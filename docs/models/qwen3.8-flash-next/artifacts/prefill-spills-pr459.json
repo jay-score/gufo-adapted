@@ -1,0 +1,652 @@
+{
+  "date": "2026-10-07",
+  "upstream_pr": "https://github.com/gufo-org/gufo/pull/459",
+  "upstream_commit": "f17e37b8bb7df5fb83ea7ce6d4dc4ef6d6677253",
+  "platform": "Windows 11 x64, Strix Halo gfx1151, 128 GB unified memory",
+  "toolchain": {
+    "rocm": "TheRock 10.0.0",
+    "clang": "23.0.0git",
+    "llvm_revision": "8f497e0992fb7513f7f78a6f6b6f1056c375e961",
+    "msvc_headers": "14.51.36231",
+    "cmake": "4.4.0",
+    "preset": "release"
+  },
+  "builds": {
+    "baseline": {
+      "revision": "dce753fc36aa8a027b4728dfcd36c33e42150c5c",
+      "version": "dce753fc36aa",
+      "sha256": "e117e2f016b78d692606197db3852d700b233b0086cc373ad23b9ea3bf5a410d"
+    },
+    "candidate": {
+      "base_revision": "dce753fc36aa8a027b4728dfcd36c33e42150c5c",
+      "version": "dce753fc36aa-dirty",
+      "sha256": "e75c7504b971aef4485f19c08c80e8f8225298f94100df86b0d5124164d7593e",
+      "source": "commit introducing this artifact"
+    }
+  },
+  "settings": {
+    "interface": "native gufo bench",
+    "concurrency": 1,
+    "context_capacity": 4096,
+    "cached_depth": 0,
+    "prefill_tokens": [
+      8,
+      16,
+      64,
+      2048
+    ],
+    "generation_tokens": 128,
+    "temperature": 0,
+    "seed": 459,
+    "repetitions_per_process": 3,
+    "rounds": 2,
+    "process_order": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "prompt": "unchanged native bench deterministic token fixtures",
+    "timing": "native prompt/generation rates; model load excluded",
+    "summary": "arithmetic mean of two process means; each process reports mean/stddev",
+    "warmup": "native benchmark warmup before timing prompt shapes"
+  },
+  "resource_guard": {
+    "required_variants": 57,
+    "baseline_failures": 17,
+    "candidate_failures": 0,
+    "policy": "zero scratch and reported VGPR/SGPR spills in four affected families"
+  },
+  "limits": [
+    "Linux build/runtime and clang 22 runtime unrun",
+    "Full-model Qwen Q8 and paired Flash Q4/Q5 artifacts unavailable",
+    "Native benchmark controls, not HTTP latency or llama.cpp comparison",
+    "Teacher forcing does not establish sampled rejection parity"
+  ],
+  "models": [
+    {
+      "name": "Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
+      "bytes": 10946624,
+      "sha256": "5ce89370720f8bf90890f439361282104c1aa1482d4013bb9a50923e758e71a4"
+    },
+    {
+      "name": "Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf",
+      "bytes": 49835229856,
+      "sha256": "577a38a2392b40ca2193cea502e1d92f60b8cd370675d308e0ec21885d9daaa7"
+    },
+    {
+      "name": "Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf",
+      "bytes": 43836407744,
+      "sha256": "d4634e6d84f0ebb0940be15c90d3790bf6464e3dea3a1cddc567dc0e83ad8833"
+    },
+    {
+      "name": "mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf",
+      "bytes": 2786568256,
+      "sha256": "5ff54097406a905cf3a724c709124ceb0e3e10235ee862298969e91c96fa96e6"
+    }
+  ],
+  "commands": {
+    "flash-ar": [
+      "$EXE",
+      "bench",
+      "--model",
+      "$MODEL",
+      "-p",
+      "8,16,64,2048",
+      "-n",
+      "128",
+      "-d",
+      "0",
+      "-r",
+      "3",
+      "--temperature",
+      "0",
+      "--seed",
+      "459",
+      "--speculative",
+      "off"
+    ],
+    "flash-mtp": [
+      "$EXE",
+      "bench",
+      "--model",
+      "$MODEL",
+      "-p",
+      "8,16,64,2048",
+      "-n",
+      "128",
+      "-d",
+      "0",
+      "-r",
+      "3",
+      "--temperature",
+      "0",
+      "--seed",
+      "459",
+      "--speculative",
+      "mtp",
+      "--mtp-model",
+      "$MTP",
+      "--draft-tokens",
+      "7"
+    ]
+  },
+  "runs": [
+    {
+      "config": "flash-ar",
+      "round": 1,
+      "build": "baseline",
+      "wall_seconds": 46.258,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 73.5,
+          "stddev_tps": 0.1
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 116.4,
+          "stddev_tps": 1.32
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 295.09,
+          "stddev_tps": 1.73
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 984.19,
+          "stddev_tps": 3.52
+        },
+        {
+          "point": "tg128",
+          "mean_tps": 27.23,
+          "stddev_tps": 0.03
+        }
+      ]
+    },
+    {
+      "config": "flash-ar",
+      "round": 1,
+      "build": "candidate",
+      "wall_seconds": 46.056,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 73.17,
+          "stddev_tps": 1.67
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 117.13,
+          "stddev_tps": 0.26
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 292.55,
+          "stddev_tps": 3.73
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 975.01,
+          "stddev_tps": 17.76
+        },
+        {
+          "point": "tg128",
+          "mean_tps": 27.11,
+          "stddev_tps": 0.14
+        }
+      ]
+    },
+    {
+      "config": "flash-ar",
+      "round": 2,
+      "build": "candidate",
+      "wall_seconds": 46.075,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 73.02,
+          "stddev_tps": 1.13
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 116.51,
+          "stddev_tps": 0.47
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 289.51,
+          "stddev_tps": 2.58
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 982.96,
+          "stddev_tps": 7.17
+        },
+        {
+          "point": "tg128",
+          "mean_tps": 27.21,
+          "stddev_tps": 0.04
+        }
+      ]
+    },
+    {
+      "config": "flash-ar",
+      "round": 2,
+      "build": "baseline",
+      "wall_seconds": 45.874,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 74.29,
+          "stddev_tps": 1.01
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 116.54,
+          "stddev_tps": 1.07
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 290.58,
+          "stddev_tps": 2.09
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 985.01,
+          "stddev_tps": 3.86
+        },
+        {
+          "point": "tg128",
+          "mean_tps": 27.12,
+          "stddev_tps": 0.2
+        }
+      ]
+    },
+    {
+      "config": "flash-mtp",
+      "round": 1,
+      "build": "baseline",
+      "wall_seconds": 41.622,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 71.14,
+          "stddev_tps": 0.4
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 104.13,
+          "stddev_tps": 3.34
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 289.19,
+          "stddev_tps": 2.8
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 980.78,
+          "stddev_tps": 2.19
+        },
+        {
+          "point": "tg128",
+          "mean_tps": 43.06,
+          "stddev_tps": 0.19
+        }
+      ]
+    },
+    {
+      "config": "flash-mtp",
+      "round": 1,
+      "build": "candidate",
+      "wall_seconds": 42.332,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 67.54,
+          "stddev_tps": 3.66
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 108.23,
+          "stddev_tps": 0.66
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 283.54,
+          "stddev_tps": 0.79
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 936.67,
+          "stddev_tps": 34.75
+        },
+        {
+          "point": "tg128",
+          "mean_tps": 42.11,
+          "stddev_tps": 0.3
+        }
+      ]
+    },
+    {
+      "config": "flash-mtp",
+      "round": 2,
+      "build": "candidate",
+      "wall_seconds": 42.062,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 72.84,
+          "stddev_tps": 0.16
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 111.5,
+          "stddev_tps": 2.24
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 291.02,
+          "stddev_tps": 3.07
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 973.26,
+          "stddev_tps": 7.59
+        },
+        {
+          "point": "tg128",
+          "mean_tps": 42.69,
+          "stddev_tps": 1.17
+        }
+      ]
+    },
+    {
+      "config": "flash-mtp",
+      "round": 2,
+      "build": "baseline",
+      "wall_seconds": 41.38,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 70.27,
+          "stddev_tps": 0.55
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 108.69,
+          "stddev_tps": 0.53
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 285.27,
+          "stddev_tps": 1.24
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 978.11,
+          "stddev_tps": 1.99
+        },
+        {
+          "point": "tg128",
+          "mean_tps": 43.3,
+          "stddev_tps": 0.43
+        }
+      ]
+    }
+  ],
+  "summary": [
+    {
+      "config": "flash-ar",
+      "point": "pp8",
+      "baseline_tps": 73.895,
+      "candidate_tps": 73.095,
+      "gain_percent": -1.083,
+      "paired_round_gain_percent": [
+        -0.449,
+        -1.71
+      ]
+    },
+    {
+      "config": "flash-ar",
+      "point": "pp16",
+      "baseline_tps": 116.47,
+      "candidate_tps": 116.82,
+      "gain_percent": 0.301,
+      "paired_round_gain_percent": [
+        0.627,
+        -0.026
+      ]
+    },
+    {
+      "config": "flash-ar",
+      "point": "pp64",
+      "baseline_tps": 292.835,
+      "candidate_tps": 291.03,
+      "gain_percent": -0.616,
+      "paired_round_gain_percent": [
+        -0.861,
+        -0.368
+      ]
+    },
+    {
+      "config": "flash-ar",
+      "point": "pp2048",
+      "baseline_tps": 984.6,
+      "candidate_tps": 978.985,
+      "gain_percent": -0.57,
+      "paired_round_gain_percent": [
+        -0.933,
+        -0.208
+      ]
+    },
+    {
+      "config": "flash-ar",
+      "point": "tg128",
+      "baseline_tps": 27.175,
+      "candidate_tps": 27.16,
+      "gain_percent": -0.055,
+      "paired_round_gain_percent": [
+        -0.441,
+        0.332
+      ]
+    },
+    {
+      "config": "flash-mtp",
+      "point": "pp8",
+      "baseline_tps": 70.705,
+      "candidate_tps": 70.19,
+      "gain_percent": -0.728,
+      "paired_round_gain_percent": [
+        -5.06,
+        3.657
+      ]
+    },
+    {
+      "config": "flash-mtp",
+      "point": "pp16",
+      "baseline_tps": 106.41,
+      "candidate_tps": 109.865,
+      "gain_percent": 3.247,
+      "paired_round_gain_percent": [
+        3.937,
+        2.585
+      ]
+    },
+    {
+      "config": "flash-mtp",
+      "point": "pp64",
+      "baseline_tps": 287.23,
+      "candidate_tps": 287.28,
+      "gain_percent": 0.017,
+      "paired_round_gain_percent": [
+        -1.954,
+        2.016
+      ]
+    },
+    {
+      "config": "flash-mtp",
+      "point": "pp2048",
+      "baseline_tps": 979.445,
+      "candidate_tps": 954.965,
+      "gain_percent": -2.499,
+      "paired_round_gain_percent": [
+        -4.497,
+        -0.496
+      ]
+    },
+    {
+      "config": "flash-mtp",
+      "point": "tg128",
+      "baseline_tps": 43.18,
+      "candidate_tps": 42.4,
+      "gain_percent": -1.806,
+      "paired_round_gain_percent": [
+        -2.206,
+        -1.409
+      ]
+    }
+  ],
+  "quality": {
+    "full_logit_hash_rows": 549,
+    "corpus": {
+      "name": "corpus.txt",
+      "bytes": 897,
+      "sha256": "7a552ae620229f69188b6018e693b726976f468a273b867e3e48f0d7a584eb39"
+    },
+    "schedules": "1:2,4,8:p8",
+    "perplexity": [
+      1.343238,
+      1.343238,
+      1.36181
+    ],
+    "log_prob_dump_sha256": [
+      "9ad01bcbf06931806c02954400e554b3eedfb487907fd315bd2ceee55baf8742",
+      "3bcdee787ba8f7e195a80f8e44106ac443c62a34d655895a09fc0da3253272e8",
+      "e070a7c1048fc099b080f838a9bc11cce4cc437c39736453bdc188a905a28317"
+    ],
+    "prefill_session_test": "pass",
+    "paired_q4_q5_operators": "pass"
+  },
+  "mtp_confirmation": {
+    "reason": "Initial noisy pp2048 and small tg128 deficit warranted focused repetition",
+    "settings": "Same binaries/models/temperature/seed/context/depth/MTP configuration; five repetitions per process",
+    "command": [
+      "$EXE",
+      "bench",
+      "--model",
+      "$MODEL",
+      "-p",
+      "2048",
+      "-n",
+      "128",
+      "-d",
+      "0",
+      "-r",
+      "5",
+      "--temperature",
+      "0",
+      "--seed",
+      "459",
+      "--speculative",
+      "mtp",
+      "--mtp-model",
+      "$MTP",
+      "--draft-tokens",
+      "7"
+    ],
+    "process_order": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "runs": [
+      {
+        "round": 1,
+        "build": "baseline",
+        "wall_seconds": 49.707,
+        "rows": [
+          {
+            "point": "pp2048",
+            "mean_tps": 975.85,
+            "stddev_tps": 10.44
+          },
+          {
+            "point": "tg128",
+            "mean_tps": 43.26,
+            "stddev_tps": 0.2
+          }
+        ]
+      },
+      {
+        "round": 1,
+        "build": "candidate",
+        "wall_seconds": 52.914,
+        "rows": [
+          {
+            "point": "pp2048",
+            "mean_tps": 970.0,
+            "stddev_tps": 13.55
+          },
+          {
+            "point": "tg128",
+            "mean_tps": 43.01,
+            "stddev_tps": 0.2
+          }
+        ]
+      },
+      {
+        "round": 2,
+        "build": "candidate",
+        "wall_seconds": 50.111,
+        "rows": [
+          {
+            "point": "pp2048",
+            "mean_tps": 973.54,
+            "stddev_tps": 13.53
+          },
+          {
+            "point": "tg128",
+            "mean_tps": 42.99,
+            "stddev_tps": 0.17
+          }
+        ]
+      },
+      {
+        "round": 2,
+        "build": "baseline",
+        "wall_seconds": 50.425,
+        "rows": [
+          {
+            "point": "pp2048",
+            "mean_tps": 959.23,
+            "stddev_tps": 21.21
+          },
+          {
+            "point": "tg128",
+            "mean_tps": 42.94,
+            "stddev_tps": 0.35
+          }
+        ]
+      }
+    ],
+    "summary": [
+      {
+        "point": "pp2048",
+        "baseline_tps": 967.54,
+        "candidate_tps": 971.77,
+        "gain_percent": 0.437
+      },
+      {
+        "point": "tg128",
+        "baseline_tps": 43.1,
+        "candidate_tps": 43.0,
+        "gain_percent": -0.232
+      }
+    ],
+    "conclusion": "Initial deficit did not persist; retain both runs without claiming a small control gain"
+  }
+}

@@ -130,3 +130,38 @@ C1, context capacity 133121, AR. Peak memory reported by HIP.
 <!-- /bench -->
 
 ![Memory occupation](artifacts/charts/memory.svg)
+
+## Windows clang 23 prefill regression check
+
+October 7, 2026: native `gufo bench`, TheRock 10.0.0, gfx1151, release
+baseline `dce753fc36aa` versus the PR #459 adaptation. UD-IQ4_XS three-shard
+weights, with shared Q8_0 MTP (maximum seven drafts). This model is a control;
+the paired Q4/Q5 cache change is qualified by operators and resource metadata.
+C1, depth zero, capacity 4096, temperature zero, seed 459. Two rounds in
+baseline/candidate then candidate/baseline order, three repetitions per process;
+the table averages the two process means. Loading is excluded and prompt shapes
+are warmed. This is a matched fork comparison, separate from the HTTP/reference
+tables above. [Build/model identities and all per-process statistics](artifacts/prefill-spills-pr459.json)
+and [qualification, commands and limits](../../plans/prefill-spills-pr459.md).
+
+| Mode / workload | Baseline (tok/s) | Adapted (tok/s) | Gain |
+| --- | ---: | ---: | ---: |
+| AR pp8 | 73.90 | 73.09 | -1.1% |
+| AR pp16 | 116.47 | 116.82 | +0.3% |
+| AR pp64 | 292.83 | 291.03 | -0.6% |
+| AR pp2048 | 984.60 | 978.99 | -0.6% |
+| AR tg128 | 27.18 | 27.16 | -0.1% |
+| MTP pp8 | 70.70 | 70.19 | -0.7% |
+| MTP pp16 | 106.41 | 109.87 | +3.2% |
+| MTP pp64 | 287.23 | 287.28 | +0.0% |
+| MTP pp2048 | 979.44 | 954.96 | -2.5% |
+| MTP tg128 | 43.18 | 42.40 | -1.8% |
+
+The initial MTP deficit did not persist in a focused confirmation with five
+repetitions per process and the same reversed order. Both sets of measurements
+remain in the artifact; small control differences are not claimed as speedups.
+
+| MTP confirmation | Baseline (tok/s) | Adapted (tok/s) | Gain |
+| --- | ---: | ---: | ---: |
+| pp2048 | 967.54 | 971.77 | +0.4% |
+| tg128 | 43.10 | 43.00 | -0.2% |

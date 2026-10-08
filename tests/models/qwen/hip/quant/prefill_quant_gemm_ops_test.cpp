@@ -585,6 +585,12 @@ int main() {
   RunCase(100, 200, 160, false);
   // Rows below one macro tile.
   RunCase(96, 64, 128, false);
+  // BK=4/BK=2 dispatch boundaries with incomplete row and K-block stages.
+  for (const std::size_t batch : {1U, 8U, 9U, 95U, 96U}) {
+    RunCase(batch, 200, 160, false);
+  }
+  // The <=8-token route also has a wider row tile for tall projections.
+  RunCase(8, 512, 128, false);
   // Dual gate/up path.
   RunCase(128, 256, 256, true);
 

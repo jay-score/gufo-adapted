@@ -36,6 +36,36 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-07 — Clang 23 prefill scratch and spills
+
+- Sources: [gufo-org/gufo@f17e37b8bb7df5fb83ea7ce6d4dc4ef6d6677253](https://github.com/gufo-org/gufo/commit/f17e37b8bb7df5fb83ea7ce6d4dc4ef6d6677253)
+  (merged [PR #459](https://github.com/gufo-org/gufo/pull/459)); constituents
+  [2f223d79a146a4ebf26a168f39b89dde8a96c050](https://github.com/gufo-org/gufo/commit/2f223d79a146a4ebf26a168f39b89dde8a96c050),
+  [53912b8ffe45c9ce16fc04555718c85409bc32e1](https://github.com/gufo-org/gufo/commit/53912b8ffe45c9ce16fc04555718c85409bc32e1)
+  and [9bccebc5e1d42a702820700736b2601cb1533e90](https://github.com/gufo-org/gufo/commit/9bccebc5e1d42a702820700736b2601cb1533e90).
+- Local: commit introducing this entry.
+- Adaptation: constrain blocked Qwen K-loop unrolling and W8A8 scheduling,
+  disable SLP only in the two affected Qwen prefill compilation units, and
+  select paired Flash-Next Q4/Q5 cache values from fixed register slots.
+  Preserve this fork's existing Flash-Next W8A8 scheduling fence. Adapt the
+  offload/metadata reader to Windows PE and Linux ELF, using the compiler's
+  bundler and a focused zero-scratch/spill contract for 57 required gfx1151
+  variants. Omit upstream's broad Linux baseline/allowance tables and comparison
+  modes: this change guards the regression's affected families directly.
+- Areas: Qwen blocked prefill kernels/CMake, Flash-Next routed GEMM,
+  `tools/ci/check-kernel-resources.py`, CTest registration, boundary/operator
+  fixtures and Qwen's full-logit capture diagnostic.
+- Validation: fresh TheRock 10.0.0/clang 23 Windows builds; baseline has 17
+  resource failures, candidate has none. Ten parser fixtures, both Qwen quant
+  operator tests, routed WMMA operators, full Qwen target checks and Flash-Next
+  prefill/session checks pass. All 189 Qwen full-logit rows and 549 Flash-Next
+  raw-logit hashes match, with unchanged teacher-forced perplexity. Matched
+  native performance results, identities, commands and diagnostic limits are
+  in the [qualification record](docs/plans/prefill-spills-pr459.md). Full-model
+  Qwen Q8 and Flash-Next paired Q4/Q5 weights were unavailable; Linux build/CI
+  and clang 22 runtime validation are unrun.
+- Status: retained.
+
 ### 2026-10-07 — Automatic disk staging without a fixed cap
 
 - Source: [gufo-org/gufo@b39c530e70e87f4340e2230a155fd16d066d19f3](https://github.com/gufo-org/gufo/commit/b39c530e70e87f4340e2230a155fd16d066d19f3)

@@ -1,0 +1,513 @@
+{
+  "date": "2026-10-07",
+  "upstream_pr": "https://github.com/gufo-org/gufo/pull/459",
+  "upstream_commit": "f17e37b8bb7df5fb83ea7ce6d4dc4ef6d6677253",
+  "platform": "Windows 11 x64, Strix Halo gfx1151, 128 GB unified memory",
+  "toolchain": {
+    "rocm": "TheRock 10.0.0",
+    "clang": "23.0.0git",
+    "llvm_revision": "8f497e0992fb7513f7f78a6f6b6f1056c375e961",
+    "msvc_headers": "14.51.36231",
+    "cmake": "4.4.0",
+    "preset": "release"
+  },
+  "builds": {
+    "baseline": {
+      "revision": "dce753fc36aa8a027b4728dfcd36c33e42150c5c",
+      "version": "dce753fc36aa",
+      "sha256": "e117e2f016b78d692606197db3852d700b233b0086cc373ad23b9ea3bf5a410d"
+    },
+    "candidate": {
+      "base_revision": "dce753fc36aa8a027b4728dfcd36c33e42150c5c",
+      "version": "dce753fc36aa-dirty",
+      "sha256": "e75c7504b971aef4485f19c08c80e8f8225298f94100df86b0d5124164d7593e",
+      "source": "commit introducing this artifact"
+    }
+  },
+  "settings": {
+    "interface": "native gufo bench",
+    "concurrency": 1,
+    "context_capacity": 4096,
+    "cached_depth": 0,
+    "prefill_tokens": [
+      8,
+      16,
+      64,
+      2048
+    ],
+    "generation_tokens": 128,
+    "temperature": 0,
+    "seed": 459,
+    "repetitions_per_process": 3,
+    "rounds": 2,
+    "process_order": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "prompt": "unchanged native bench deterministic token fixtures",
+    "timing": "native prompt/generation rates; model load excluded",
+    "summary": "arithmetic mean of two process means; each process reports mean/stddev",
+    "warmup": "native benchmark warmup before timing prompt shapes"
+  },
+  "resource_guard": {
+    "required_variants": 57,
+    "baseline_failures": 17,
+    "candidate_failures": 0,
+    "policy": "zero scratch and reported VGPR/SGPR spills in four affected families"
+  },
+  "limits": [
+    "Linux build/runtime and clang 22 runtime unrun",
+    "Full-model Qwen Q8 and paired Flash Q4/Q5 artifacts unavailable",
+    "Native benchmark controls, not HTTP latency or llama.cpp comparison",
+    "Teacher forcing does not establish sampled rejection parity"
+  ],
+  "models": [
+    {
+      "name": "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+      "bytes": 17559178144,
+      "sha256": "3f227079003add2511437e5b1e94812e363385225bf6a9b47b0054a72bc8b01e"
+    },
+    {
+      "name": "Qwen3.8-27B-official-DFlash2-Q4_K_M.gguf",
+      "bytes": 1143006816,
+      "sha256": "1a25c56858e1ebe93f2718ac1d49d1151f9323325c1bbfd6209370f4db131ebd"
+    }
+  ],
+  "commands": {
+    "qwen-ar": [
+      "$EXE",
+      "bench",
+      "--model",
+      "$MODEL",
+      "-p",
+      "8,16,64,2048",
+      "-n",
+      "128",
+      "-d",
+      "0",
+      "-r",
+      "3",
+      "--temperature",
+      "0",
+      "--seed",
+      "459",
+      "--speculative",
+      "off"
+    ],
+    "qwen-dflash2": [
+      "$EXE",
+      "bench",
+      "--model",
+      "$MODEL",
+      "-p",
+      "8,16,64,2048",
+      "-n",
+      "128",
+      "-d",
+      "0",
+      "-r",
+      "3",
+      "--temperature",
+      "0",
+      "--seed",
+      "459",
+      "--speculative",
+      "dflash2",
+      "--dflash-model",
+      "$DRAFT",
+      "--draft-policy",
+      "fixed",
+      "--draft-tokens",
+      "7"
+    ]
+  },
+  "runs": [
+    {
+      "config": "qwen-ar",
+      "round": 1,
+      "build": "baseline",
+      "wall_seconds": 69.152,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 64.37,
+          "stddev_tps": 0.19
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 61.89,
+          "stddev_tps": 0.06
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 240.59,
+          "stddev_tps": 0.18
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 686.5,
+          "stddev_tps": 11.68
+        },
+        {
+          "point": "tg128",
+          "mean_tps": 11.66,
+          "stddev_tps": 0.08
+        }
+      ]
+    },
+    {
+      "config": "qwen-ar",
+      "round": 1,
+      "build": "candidate",
+      "wall_seconds": 62.195,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 67.92,
+          "stddev_tps": 0.11
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 92.2,
+          "stddev_tps": 0.76
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 346.49,
+          "stddev_tps": 3.83
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 680.87,
+          "stddev_tps": 11.65
+        },
+        {
+          "point": "tg128",
+          "mean_tps": 11.99,
+          "stddev_tps": 0.05
+        }
+      ]
+    },
+    {
+      "config": "qwen-ar",
+      "round": 2,
+      "build": "candidate",
+      "wall_seconds": 53.443,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 68.72,
+          "stddev_tps": 0.15
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 92.34,
+          "stddev_tps": 0.62
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 352.22,
+          "stddev_tps": 0.73
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 676.51,
+          "stddev_tps": 10.52
+        },
+        {
+          "point": "tg128",
+          "mean_tps": 11.97,
+          "stddev_tps": 0.05
+        }
+      ]
+    },
+    {
+      "config": "qwen-ar",
+      "round": 2,
+      "build": "baseline",
+      "wall_seconds": 54.729,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 65.04,
+          "stddev_tps": 0.05
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 61.9,
+          "stddev_tps": 0.08
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 240.5,
+          "stddev_tps": 0.14
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 675.27,
+          "stddev_tps": 8.11
+        },
+        {
+          "point": "tg128",
+          "mean_tps": 11.89,
+          "stddev_tps": 0.03
+        }
+      ]
+    },
+    {
+      "config": "qwen-dflash2",
+      "round": 1,
+      "build": "baseline",
+      "wall_seconds": 47.86,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 59.75,
+          "stddev_tps": 0.61
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 59.01,
+          "stddev_tps": 0.46
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 225.63,
+          "stddev_tps": 0.28
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 609.64,
+          "stddev_tps": 6.97
+        },
+        {
+          "point": "tg128-dflash2",
+          "mean_tps": 18.3,
+          "stddev_tps": 0.43
+        }
+      ]
+    },
+    {
+      "config": "qwen-dflash2",
+      "round": 1,
+      "build": "candidate",
+      "wall_seconds": 46.476,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 62.15,
+          "stddev_tps": 0.45
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 86.81,
+          "stddev_tps": 0.56
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 322.11,
+          "stddev_tps": 0.98
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 605.78,
+          "stddev_tps": 12.41
+        },
+        {
+          "point": "tg128-dflash2",
+          "mean_tps": 18.44,
+          "stddev_tps": 0.17
+        }
+      ]
+    },
+    {
+      "config": "qwen-dflash2",
+      "round": 2,
+      "build": "candidate",
+      "wall_seconds": 46.253,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 63.52,
+          "stddev_tps": 0.26
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 87.05,
+          "stddev_tps": 0.58
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 321.4,
+          "stddev_tps": 1.23
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 609.27,
+          "stddev_tps": 13.03
+        },
+        {
+          "point": "tg128-dflash2",
+          "mean_tps": 18.39,
+          "stddev_tps": 0.19
+        }
+      ]
+    },
+    {
+      "config": "qwen-dflash2",
+      "round": 2,
+      "build": "baseline",
+      "wall_seconds": 47.272,
+      "rows": [
+        {
+          "point": "pp8",
+          "mean_tps": 60.48,
+          "stddev_tps": 0.36
+        },
+        {
+          "point": "pp16",
+          "mean_tps": 59.65,
+          "stddev_tps": 0.04
+        },
+        {
+          "point": "pp64",
+          "mean_tps": 225.85,
+          "stddev_tps": 0.83
+        },
+        {
+          "point": "pp2048",
+          "mean_tps": 607.27,
+          "stddev_tps": 10.04
+        },
+        {
+          "point": "tg128-dflash2",
+          "mean_tps": 18.47,
+          "stddev_tps": 0.1
+        }
+      ]
+    }
+  ],
+  "summary": [
+    {
+      "config": "qwen-ar",
+      "point": "pp8",
+      "baseline_tps": 64.705,
+      "candidate_tps": 68.32,
+      "gain_percent": 5.587,
+      "paired_round_gain_percent": [
+        5.515,
+        5.658
+      ]
+    },
+    {
+      "config": "qwen-ar",
+      "point": "pp16",
+      "baseline_tps": 61.895,
+      "candidate_tps": 92.27,
+      "gain_percent": 49.075,
+      "paired_round_gain_percent": [
+        48.974,
+        49.176
+      ]
+    },
+    {
+      "config": "qwen-ar",
+      "point": "pp64",
+      "baseline_tps": 240.545,
+      "candidate_tps": 349.355,
+      "gain_percent": 45.235,
+      "paired_round_gain_percent": [
+        44.017,
+        46.453
+      ]
+    },
+    {
+      "config": "qwen-ar",
+      "point": "pp2048",
+      "baseline_tps": 680.885,
+      "candidate_tps": 678.69,
+      "gain_percent": -0.322,
+      "paired_round_gain_percent": [
+        -0.82,
+        0.184
+      ]
+    },
+    {
+      "config": "qwen-ar",
+      "point": "tg128",
+      "baseline_tps": 11.775,
+      "candidate_tps": 11.98,
+      "gain_percent": 1.741,
+      "paired_round_gain_percent": [
+        2.83,
+        0.673
+      ]
+    },
+    {
+      "config": "qwen-dflash2",
+      "point": "pp8",
+      "baseline_tps": 60.115,
+      "candidate_tps": 62.835,
+      "gain_percent": 4.525,
+      "paired_round_gain_percent": [
+        4.017,
+        5.026
+      ]
+    },
+    {
+      "config": "qwen-dflash2",
+      "point": "pp16",
+      "baseline_tps": 59.33,
+      "candidate_tps": 86.93,
+      "gain_percent": 46.519,
+      "paired_round_gain_percent": [
+        47.111,
+        45.935
+      ]
+    },
+    {
+      "config": "qwen-dflash2",
+      "point": "pp64",
+      "baseline_tps": 225.74,
+      "candidate_tps": 321.755,
+      "gain_percent": 42.533,
+      "paired_round_gain_percent": [
+        42.76,
+        42.307
+      ]
+    },
+    {
+      "config": "qwen-dflash2",
+      "point": "pp2048",
+      "baseline_tps": 608.455,
+      "candidate_tps": 607.525,
+      "gain_percent": -0.153,
+      "paired_round_gain_percent": [
+        -0.633,
+        0.329
+      ]
+    },
+    {
+      "config": "qwen-dflash2",
+      "point": "tg128-dflash2",
+      "baseline_tps": 18.385,
+      "candidate_tps": 18.415,
+      "gain_percent": 0.163,
+      "paired_round_gain_percent": [
+        0.765,
+        -0.433
+      ]
+    }
+  ],
+  "quality": {
+    "full_logit_rows": 189,
+    "vocabulary": 248320,
+    "logit_capture_sha256": "67b3dbb19e1b7d5b06cef6e9fb2443d4f111fe23079614f8358ba11d2aa73a93",
+    "continuation_labels": 168,
+    "mean_nll": 0.6146837372978057,
+    "perplexity": 1.849071714657534,
+    "full_target_test": "pass"
+  }
+}
