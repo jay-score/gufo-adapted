@@ -427,6 +427,24 @@ if (BUILD_TESTING)
       $<TARGET_FILE:gufo>)
   set_tests_properties(serve_cli_test PROPERTIES LABELS "cpu;server;cli" TIMEOUT 30)
 
+  add_test(NAME kernel_resources_parser_test
+    COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/kernel_resources_test.py)
+  set_tests_properties(kernel_resources_parser_test PROPERTIES
+    LABELS "cpu;kernels" TIMEOUT 30)
+
+  if(ENGINE_ENABLE_HIP)
+    # Inspect the actual executable without a GPU, using its compiler's bundler.
+    get_filename_component(GUFO_HIP_BIN_DIR "${CMAKE_HIP_COMPILER}" DIRECTORY)
+    add_test(NAME kernel_resources_test
+      COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/check-kernel-resources.py
+        $<TARGET_FILE:gufo>
+        --bundler "${GUFO_HIP_BIN_DIR}/clang-offload-bundler${CMAKE_EXECUTABLE_SUFFIX}")
+    set_tests_properties(kernel_resources_test PROPERTIES
+      LABELS "cpu;kernels" TIMEOUT 120)
+  endif()
+
   add_subdirectory(tests/models/deepseek_v4_flash)
   add_subdirectory(tests/models/qwen38_flash_next)
 

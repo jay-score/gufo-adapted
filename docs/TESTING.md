@@ -149,6 +149,36 @@ see [benchmark artifact retention](BENCHMARKS.md).
 
 ## Matched-token and layer comparisons
 
+HIP builds register `kernel_resources_test`, a GPU-independent check of the
+compiled gfx1151 prefill kernels affected by clang-23 scratch regressions. It
+reads ELF or Windows PE offload payloads, requires the production template
+variants and rejects scratch or spilled registers. The focused contract covers
+Qwen blocked Q8/K-quant GEMMs (including fused Q8 and wave64) and Flash-Next's
+blocked Q8 and routed-F16 GEMMs; it is not an all-model scratch budget.
+`kernel_resources_parser_test` also runs in the bounded CPU PR suite.
+
+```sh
+ctest --test-dir build/gpu-test -R '^kernel_resources_test$' --output-on-failure --no-tests=error
+python tools/ci/check-kernel-resources.py build/release/gufo --report
+```
+
+On Windows use `gufo.exe` and pass `--bundler` with the matching compiler's
+`clang-offload-bundler.exe` when compressed bundles require external extraction.
+CTest selects that compiler-adjacent tool automatically. For Qwen27B numerical
+comparison across short and throughput prefill dispatch, the explicit
+`qwen27b_target_test MODEL --capture-prefill-logits OUTPUT` diagnostic records
+complete logits after 8/9/64/95/96/129/2048-token prefixes and their continuations.
+Compare baseline and candidate with identical artifacts and build settings.
+
+Flash-Next's `qwen38_flash_next_session_test --model FIRST.gguf --mtp-model
+MTP.gguf --capture-prefill-logits OUTPUT` similarly records complete logits in
+AR and MTP modes after 96/1023/1024/2048/4096-token prefixes of fixed prose/code
+fixtures and eight continuations. The 1024+ cases exercise paired Q4_K/Q5_K
+expert prefill when those weights are loaded. This explicit diagnostic bypasses
+the separate teacher-forcing capture's eight-row limit by recording the frontier
+after each normal prefill. Its summary reports continuation NLL/perplexity; use
+identical harness source, model artifacts, toolchain and settings for both builds.
+
 Code changes that could affect inference correctness require relevant logit
 regression checks before completion, including changes to kernels, model loading,
 tokenization, prefill/decode, sampling, caching or speculative state. Record the

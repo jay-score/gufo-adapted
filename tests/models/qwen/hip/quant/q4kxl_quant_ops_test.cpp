@@ -810,6 +810,10 @@ int main() {
   }
   for (const auto& format : kFormats) {
     TestPrefillGemm(format, 4);
+    // Cross the small/short/throughput dispatch boundaries for every format.
+    for (const std::size_t batch : {8U, 9U, 95U, 96U}) {
+      TestPrefillGemm(format, batch, 129);
+    }
     TestPrefillGemm(format, 128);
     // 128 is narrower and 288 wider than the 256-token macro tile the wide
     // route launches, so between them they cover a partially and a fully

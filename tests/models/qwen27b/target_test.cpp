@@ -549,7 +549,7 @@ void CheckWideCache(Executor& reference) {
       << "context=262144: prefill, scalar and verification logits exact\n";
 }
 
-enum class CheckMode { kAll, kPrefill, kConcurrency };
+enum class CheckMode { kAll, kPrefill, kConcurrency, kPrefillCapture };
 
 std::vector<Case> Capture(const char* path, bool check_replay,
                           CheckMode mode = CheckMode::kAll) {
@@ -558,7 +558,8 @@ std::vector<Case> Capture(const char* path, bool check_replay,
   Expect(owner != nullptr, error);
   const auto reader =
       std::shared_ptr<const gufo::core::GgufReader>(std::move(owner));
-  auto executor = Executor::CreateFromGguf(reader, &error, 128);
+  auto executor = Executor::CreateFromGguf(
+      reader, &error, mode == CheckMode::kPrefillCapture ? 4096 : 128);
   Expect(executor != nullptr, error);
   Expect(executor->GetConfig().hidden_size == 5120 &&
              executor->GetConfig().vocab_size == 248320,
@@ -566,6 +567,29 @@ std::vector<Case> Capture(const char* path, bool check_replay,
 #if defined(_WIN32)
   CheckDeviceWeights(*reader, *executor->GetSharedModel());
 #endif
+  if (mode == CheckMode::kPrefillCapture) {
+    std::vector<Case> cases;
+    for (const auto* text : kTexts) {
+      const auto unit = executor->GetTokenizer().Encode(text);
+      Expect(!unit.empty(), "prefill corpus must tokenize");
+      for (const std::size_t prefix : {8U, 9U, 64U, 95U, 96U, 129U, 2048U}) {
+        Case row{.tokens = {}, .logits = {}, .prompt_size = prefix};
+        while (row.tokens.size() < prefix + 8) {
+          row.tokens.insert(row.tokens.end(), unit.begin(), unit.end());
+        }
+        row.tokens.resize(prefix + 8);
+        executor->Reset();
+        (void)executor->ForwardPromptBatch(std::span(row.tokens).first(prefix));
+        row.logits.push_back(Logits(*executor));
+        for (std::size_t pos = prefix; pos < row.tokens.size(); ++pos) {
+          (void)executor->ForwardToken(row.tokens[pos], pos);
+          row.logits.push_back(Logits(*executor));
+        }
+        cases.push_back(std::move(row));
+      }
+    }
+    return cases;
+  }
   if (mode == CheckMode::kPrefill) {
     CheckPrefillReplay(executor->GetSharedModel());
     return {};
@@ -790,6 +814,10 @@ int main(int argc, const char* const* argv) {
     }
     if (argc == 4 && std::string_view(argv[2]) == "--capture-logits") {
       WriteCapture(Capture(model, false), argv[3]);
+      return 0;
+    }
+    if (argc == 4 && std::string_view(argv[2]) == "--capture-prefill-logits") {
+      WriteCapture(Capture(model, false, CheckMode::kPrefillCapture), argv[3]);
       return 0;
     }
     if (argc == 3 && std::string_view(argv[2]) == "--prefill-only") {

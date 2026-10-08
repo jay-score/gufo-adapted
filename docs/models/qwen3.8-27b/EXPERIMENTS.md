@@ -2,6 +2,7 @@
 
 | Experiment | Decision / qualification |
 | --- | --- |
+| Clang 23 blocked prefill register lifetimes (2026-10-07) | Retained on Windows/gfx1151: bound BK=4 unrolling, constrain Q8 scheduling and suppress SLP in two prefill units. All affected compiled variants are scratch/spill-free; independent operators, 189 exact full-logit rows, unchanged perplexity and target replay/rollback pass. Matched short/2048-token prefill and AR/DFlash2 controls are recorded in [qualification](../../plans/prefill-spills-pr459.md). Full Q8_0 now retains 189 exact rows, perplexity and the full target suite; matched AR/DFlash2 timings are in the same record. Linux remains unrun. |
 | Bounded history-edit checkpoints | Retained on Windows/gfx1151 with UD-Q4_K_XL and the official DFlash2 Q4_K_M sidecar at 8,192 context. AR/DFlash2 latest-message edits, shortened tool results and rewinds reuse 2,048 tokens; unchanged retries and uncached output controls match exactly. Q8 and very large contexts were not rerun; timing is unqualified. [Check](../../../tests/tools/cache_edits_test.py). |
 | Quantized verification row groups | Retained per shape; scalar FP32 bits, full target logits and private acceptance/RNG must match. |
 | Shared DFlash2 body/context injection | Retained across requests; independent attention, convolution, history and selector state. |

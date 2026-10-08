@@ -558,7 +558,9 @@ __launch_bounds__(256) __global__ void W8A8BlockedWmmaGEMMKernel(
       fetch_stage(kb0 + BK);
     }
 
-#pragma unroll
+    // BK=4 unrolling lets the scheduler hoist all K-block operands above
+    // the first WMMA, exceeding the register budget on clang 23.
+#pragma unroll(BK <= 2 ? BK : 1)
     for (int kb = 0; kb < BK; ++kb) {
       int32x4_t a0[kWaveRowTiles];
       int32x4_t a1[kWaveRowTiles];
@@ -603,6 +605,9 @@ __launch_bounds__(256) __global__ void W8A8BlockedWmmaGEMMKernel(
           }
         }
       }
+      // Keep the next block's LDS reads below this block's WMMAs. This
+      // constrains scheduling only; it adds no GPU memory synchronization.
+      __builtin_amdgcn_sched_barrier(0);
     }
     __syncthreads();
   }

@@ -180,3 +180,50 @@ C1, context capacity 262144, AR. Peak memory reported by HIP.
 <!-- /bench -->
 
 ![Memory occupation](artifacts/charts/memory-q8.svg)
+
+## Windows clang 23 prefill regression check
+
+October 7, 2026: native `gufo bench`, TheRock 10.0.0, gfx1151, release
+baseline `dce753fc36aa` versus the PR #459 adaptation. UD-Q4_K_XL mixed weights,
+with the official Q4_K_M draft for DFlash2; fixed seven-proposal blocks.
+C1, depth zero, capacity 4096, temperature zero, seed 459. Two rounds in
+baseline/candidate then candidate/baseline order, three repetitions per process;
+the table averages the two process means. Loading is excluded and prompt shapes
+are warmed. This is a matched fork comparison, separate from the HTTP/reference
+tables above. [Build/model identities and all per-process statistics](artifacts/prefill-spills-pr459.json)
+and [qualification, commands and limits](../../plans/prefill-spills-pr459.md).
+
+| Mode / workload | Baseline (tok/s) | Adapted (tok/s) | Gain |
+| --- | ---: | ---: | ---: |
+| AR pp8 | 64.71 | 68.32 | +5.6% |
+| AR pp16 | 61.89 | 92.27 | +49.1% |
+| AR pp64 | 240.55 | 349.36 | +45.2% |
+| AR pp2048 | 680.88 | 678.69 | -0.3% |
+| AR tg128 | 11.78 | 11.98 | +1.7% |
+| DFlash2 pp8 | 60.11 | 62.84 | +4.5% |
+| DFlash2 pp16 | 59.33 | 86.93 | +46.5% |
+| DFlash2 pp64 | 225.74 | 321.75 | +42.5% |
+| DFlash2 pp2048 | 608.45 | 607.52 | -0.2% |
+| DFlash2 tg128-dflash2 | 18.38 | 18.41 | +0.2% |
+
+### Full Q8_0 target
+
+The same frozen release builds, toolchain, settings and two-round method above
+were then exercised with the full `Qwen3.8-27B-Q8_0.gguf` target. DFlash2 keeps
+the same official Q4_K_M draft. All 24 greedy completion hashes agree; generation
+is unchanged within measurement noise. Short blocked prefill gains roughly
+3.1-3.5?, and pp2048 gains 68.8% AR / 62.3% DFlash2.
+[All Q8 model/build identities, raw statistics and numerical evidence](artifacts/prefill-spills-pr459-q8.json).
+
+| Mode / workload | Baseline (tok/s) | Adapted (tok/s) | Gain |
+| --- | ---: | ---: | ---: |
+| ar pp8 | 52.38 | 52.64 | +0.5% |
+| ar pp16 | 28.22 | 98.55 | +249.2% |
+| ar pp64 | 111.31 | 369.90 | +232.3% |
+| ar pp2048 | 332.06 | 560.45 | +68.8% |
+| ar tg128 | 7.65 | 7.67 | +0.1% |
+| dflash2 pp8 | 49.64 | 49.66 | +0.0% |
+| dflash2 pp16 | 27.73 | 91.99 | +231.8% |
+| dflash2 pp64 | 108.23 | 336.96 | +211.3% |
+| dflash2 pp2048 | 314.21 | 510.11 | +62.3% |
+| dflash2 tg128-dflash2 | 14.73 | 14.72 | -0.0% |
