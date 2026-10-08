@@ -611,6 +611,11 @@ if (BUILD_TESTING)
   set_tests_properties(prof_test PROPERTIES
     LABELS "cpu;tools;profiling")
 
+  add_executable(linux_sysfs_test tests/diagnostics/linux_sysfs_test.cpp)
+  target_link_libraries(linux_sysfs_test PRIVATE gufo_diagnostics)
+  add_test(NAME linux_sysfs_test COMMAND linux_sysfs_test)
+  set_tests_properties(linux_sysfs_test PROPERTIES LABELS "cpu;diagnostics")
+
   add_executable(bandwidth_test tests/diagnostics/bandwidth_test.cpp)
   target_compile_definitions(bandwidth_test PRIVATE TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/diagnostics")
   target_link_libraries(bandwidth_test PRIVATE gufo_diagnostics)
