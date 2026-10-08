@@ -36,6 +36,62 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-08 — Short-request prefill fairness
+
+- Source: scheduling portion of
+  [gufo-org/gufo@def2ed1e904f912e69550344aa7c13a99f535d0e](https://github.com/gufo-org/gufo/commit/def2ed1e904f912e69550344aa7c13a99f535d0e)
+  from [PR #470](https://github.com/gufo-org/gufo/pull/470), final head
+  `5c6ebb4660b6712b18c6a2c20b3ee3d3e1c3cf2a` (squash
+  `47b639159315fcdba17e6a144d67e273de9ead6e`).
+- Local: commit introducing this entry; attention prerequisite
+  `29a26847a4becc761bd692d6fd46a0f9eb4d1c8a`.
+- Adaptation: give arrivals a turn before the last-served prefill repeats,
+  preserve older waiting peers, bound work ahead of short prompts by the
+  existing decode budget, and delay a ready first token for initial batch
+  assembly only when the pending peer fits that budget. Keep wide alternating
+  long-prefill turns and hand off after the current forward. Retain the
+  2048-token engine default; omit prefetch, reader tuning, engine scratch reuse
+  and upstream's 4096-token default.
+- Areas: shared text-generation scheduler, four AR/MTP deterministic fixtures,
+  explicit standard-library HTTP check and server documentation.
+- Validation: pre-fix arrival regression reproduced; fresh Windows builds pass
+  scheduler, device-loss, runner, OpenAI and HTTP tests (5/5). Actual C2 HTTP
+  short output precedes long-prefill completion, with long progress and ongoing
+  decode. All 23 serving sampling strategies retain exact replay/budgets, and
+  the final release matches all 549 teacher-forced rows with unchanged
+  perplexity. The 57-kernel production guard and assertion-build
+  `kernel_resources_test` remain clean. See
+  [qualification and identities](docs/prefill-pr470-qualification.md) for actual
+  measurements and retained attention limitations. Linux build/CI, other
+  models/quantizations and sustained arrival-load measurements are unrun.
+- Status: retained.
+
+### 2026-10-08 — Flash-Next attention at the sparse budget
+
+- Source: [gufo-org/gufo@f5401508e0352afbfc9d769414b15486ea100cdf](https://github.com/gufo-org/gufo/commit/f5401508e0352afbfc9d769414b15486ea100cdf)
+  from [PR #470](https://github.com/gufo-org/gufo/pull/470), reviewed at final head
+  `5c6ebb4660b6712b18c6a2c20b3ee3d3e1c3cf2a` (squash
+  `47b639159315fcdba17e6a144d67e273de9ead6e`).
+- Local: `29a26847a4becc761bd692d6fd46a0f9eb4d1c8a`.
+- Adaptation: keep pre-budget queries on dense tiled attention when a retained
+  prefix makes the existing 2048-token chunk cross the sparse budget. Run the
+  sparse tail first, preserve refusal/fallback and last-only catch-up, and
+  project the combined context once. Preserve projections, ranking and other
+  arithmetic. Bump Flash-Next snapshots to version 16 to reject older state.
+  Omit upstream checkpoint machinery absent from this fork and the broader
+  prefill tuning deferred by this adaptation's scope.
+- Areas: Flash-Next executor, snapshot compatibility, existing session chunk
+  fixtures and cache documentation.
+- Validation: reproduced 4096/1024 failure before the fix; fresh pinned Windows
+  builds pass all 80 AR/MTP chunk comparisons, 270 unchanged-schedule full rows,
+  549 teacher-forced hashes and unchanged perplexity. Analytic operators,
+  snapshots, all 105 rollback prefixes, image-prefix continuation, batching and
+  23 serving sampling strategies pass. The 57-kernel resource guard stays clean.
+  [Qualification and identities](docs/prefill-pr470-qualification.md) also record
+  remaining nonaligned indexer differences and excluded instrumented attempts.
+  Linux build/CI and additional quantizations are unrun.
+- Status: retained.
+
 ### 2026-10-07 — Clang 23 prefill scratch and spills
 
 - Sources: [gufo-org/gufo@f17e37b8bb7df5fb83ea7ce6d4dc4ef6d6677253](https://github.com/gufo-org/gufo/commit/f17e37b8bb7df5fb83ea7ce6d4dc4ef6d6677253)

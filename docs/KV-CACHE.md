@@ -44,8 +44,9 @@ whole blocks; a rewind recopies the crossed partial block instead of retaining u
 Queued copies complete before capture publishes a checkpoint, including when
 cancellation interrupts capture.
 
-The version-15 persistent payload remains complete and unchanged. Native restore
-reads the blocks directly; disk export streams them in payload order without
+The persistent payload remains complete. Version 16 rejects older Flash-Next
+checkpoints computed before the prefill attention boundary correction. Native
+restore reads the blocks directly; disk export streams them in payload order without
 a contiguous temporary. `CopyTo` writes into caller-owned contiguous storage.
 Requesting the model diagnostic's `bytes()` view materializes and retains a contiguous copy lazily. First captures and captures whose preceding
 checkpoint has expired still copy the complete device state. GPU restore also

@@ -146,6 +146,12 @@ work can batch across ready requests. See the
 
 Each model chooses its prefill chunk. `--prefill-chunk` limits prompt work
 between active decode rounds without changing a lone request's kernel policy.
+For incremental runners, short waiting prompts also bound their peers' next
+prefill turn by that budget.
+Arrivals keep older waiting peers ahead of them, while getting a turn before
+the last-served prefill repeats. Ready first tokens wait for initial speculative
+batch assembly only when the pending peer can finish within the same budget.
+These handoffs occur after the current forward finishes.
 
 Prompt reuse is enabled by default; how the cache finds, retains and
 evicts that state is described in [the KV cache](KV-CACHE.md).
