@@ -53,9 +53,19 @@ perplexity **1.343238 / 1.343238 / 1.361810**, respectively. Equality is across
 builds within each schedule. The prefill/session test passes chunk boundaries,
 graph/snapshot replay and isolation through 4096 tokens. Independent paired
 Q4_K/Q5_K routed operators pass and their former 80-byte private cache is gone.
-The IQ4_XS model is a control for this paired-cache fix; full-model paired Q4/Q5
-weights were unavailable. Wider teacher-forced capture exceeds the existing
-diagnostic row limit; Linux and sampled rejection parity were not rerun.
+The IQ4_XS model is a control for this paired-cache fix. Additional UD-Q4_K_XL
+validation has 47 Q4_K gate/up layer pairs and one Q5_K pair (layer 2),
+with eligible Q5_1/Q8_0 down projections. The four-shard target and shared Q8_0
+sidecar load successfully on this Windows host. The new explicit session capture
+retains **270 byte-identical full-logit rows** in AR/MTP modes after
+96/1023/1024/2048/4096-token prefixes of three fixtures and eight continuations.
+All 240 labels retain mean NLL **0.17457870930144928** and perplexity
+**1.1907444613614468**. The model's snapshot/graph replay, execution-mode isolation
+and split-prefill checks through 4096 tokens also pass. This closes the paired
+Q4/Q5 full-model execution-consistency gap; Linux and sampled rejection parity
+remain unrun. The separate teacher-forcing diagnostic still has its eight-row
+limit; the session capture records each normal prefill's frontier instead.
+[Exact identities and captured row hashes](artifacts/prefill-spills-pr459-q4.json).
 
 Tests live in [`tests/models/qwen38_flash_next`](../../../tests/models/qwen38_flash_next).
 Use `--batch-only`, `--sampling-only` or `--prefill-only` on the session test;

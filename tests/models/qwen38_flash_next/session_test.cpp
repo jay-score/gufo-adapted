@@ -2,7 +2,9 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <future>
+#include <iomanip>
 #include <iostream>
 #include <latch>
 #include <stdexcept>
@@ -11,6 +13,7 @@
 #include <vector>
 
 #include "src/cli/serve/inference_backend.hpp"
+#include "src/core/crypto/sha256.hpp"
 #include "src/core/platform/tuning.hpp"
 #include "src/models/qwen38_flash_next/engine.hpp"
 #include "tests/models/qwen27b/sampling_cases.hpp"
@@ -300,6 +303,77 @@ void CheckPrefillChunks(const std::shared_ptr<qfn::Model>& model) {
               << " four logit rows exact\n"
               << std::flush;
   }
+}
+
+void CapturePrefillLogits(const std::shared_ptr<qfn::Model>& model,
+                          const char* path) {
+  std::ofstream output(path, std::ios::binary);
+  Require(output.good(), "cannot open prefill logit capture");
+  double nll = 0;
+  std::size_t rows = 0, labels = 0, cases = 0;
+  std::cout << std::setprecision(17);
+  for (const auto mode : {gufo::core::SessionMode::kAutoregressive,
+                          gufo::core::SessionMode::kSpeculative}) {
+    for (const auto* text :
+         {"Virtual memory maps pages to physical storage. ",
+          "def square(x): return x * x\n",
+          "A triangle has three sides. Continue red, green, blue. "}) {
+      const auto pattern = model->Tokenize(text);
+      Require(!pattern.empty(), "empty prefill capture fixture");
+      for (const unsigned prefix : {96U, 1023U, 1024U, 2048U, 4096U}) {
+        std::vector<std::int32_t> tokens(prefix + 8);
+        for (std::size_t i = 0; i < tokens.size(); ++i)
+          tokens[i] = pattern[i % pattern.size()];
+        std::string error;
+        auto session = model->CreateSession(mode, 6145, &error);
+        Require(
+            session && session->Sync(std::span(tokens).first(prefix), &error),
+            error);
+        std::cout << "capture case=" << cases << " prefix=" << prefix
+                  << " mode="
+                  << (mode == gufo::core::SessionMode::kAutoregressive ? "ar"
+                                                                       : "mtp")
+                  << " tokens_sha256="
+                  << gufo::crypto::Sha256Hex(std::span(
+                         reinterpret_cast<const std::uint8_t*>(tokens.data()),
+                         tokens.size() * sizeof(std::int32_t)))
+                  << '\n';
+        for (unsigned step = 0; step <= 8; ++step) {
+          const auto logits = session->Logits();
+          Require(
+              logits.size() == model->VocabSize() &&
+                  std::all_of(logits.begin(), logits.end(),
+                              [](float value) { return std::isfinite(value); }),
+              "invalid captured logits");
+          output.write(reinterpret_cast<const char*>(logits.data()),
+                       static_cast<std::streamsize>(logits.size_bytes()));
+          std::cout << "capture case=" << cases << " row=" << step
+                    << " vocab=" << logits.size() << " sha256="
+                    << gufo::crypto::Sha256Hex(std::span(
+                           reinterpret_cast<const std::uint8_t*>(logits.data()),
+                           logits.size_bytes()))
+                    << '\n';
+          ++rows;
+          if (step < 8) {
+            const float peak = *std::max_element(logits.begin(), logits.end());
+            double sum = 0;
+            for (const float value : logits)
+              sum += std::exp(static_cast<double>(value) - peak);
+            nll += peak + std::log(sum) - logits[tokens[prefix + step]];
+            ++labels;
+            Require(session->Evaluate(tokens[prefix + step], &error), error);
+          }
+        }
+        ++cases;
+      }
+    }
+  }
+  output.close();
+  Require(output.good() && labels != 0, "cannot write prefill logit capture");
+  std::cout << std::defaultfloat << std::setprecision(17)
+            << "capture rows=" << rows << " labels=" << labels
+            << " mean_nll=" << nll / labels
+            << " perplexity=" << std::exp(nll / labels) << '\n';
 }
 
 void CheckBatchFailureIsolation(const std::shared_ptr<qfn::Model>& model) {
@@ -723,17 +797,21 @@ void CheckServingSampling(const std::shared_ptr<qfn::Model>& model) {
 }
 
 int main(int argc, char** argv) {
+  const bool capture_prefill =
+      argc == 7 && std::string_view(argv[5]) == "--capture-prefill-logits";
   const bool batch_only =
       argc == 6 && std::string_view(argv[5]) == "--batch-only";
   const bool prefill_only =
       argc == 6 && std::string_view(argv[5]) == "--prefill-only";
   const bool sampling_only =
       argc == 6 && std::string_view(argv[5]) == "--sampling-only";
-  if ((argc != 5 && !batch_only && !prefill_only && !sampling_only) ||
+  if ((argc != 5 && !batch_only && !prefill_only && !sampling_only &&
+       !capture_prefill) ||
       std::string_view(argv[1]) != "--model" ||
       std::string_view(argv[3]) != "--mtp-model") {
     std::cerr << "Usage: session_test --model FIRST.gguf --mtp-model MTP.gguf "
-                 "[--batch-only | --prefill-only | --sampling-only]\n";
+                 "[--batch-only | --prefill-only | --sampling-only | "
+                 "--capture-prefill-logits OUTPUT]\n";
     return 77;
   }
   try {
@@ -743,6 +821,10 @@ int main(int argc, char** argv) {
         {.max_context = 6145, .mtp_model_path = argv[4], .max_draft_tokens = 7},
         &error);
     Require(model != nullptr, error);
+    if (capture_prefill) {
+      CapturePrefillLogits(model, argv[6]);
+      return 0;
+    }
     CheckSnapshotDuringGraphCapture(model);
     CheckExecutionModes(model);
     if (sampling_only) {

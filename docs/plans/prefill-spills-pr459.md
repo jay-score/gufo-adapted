@@ -1,8 +1,10 @@
 # PR #459: Windows prefill spill review and adaptation plan
 
-Review date: October 7, 2026. Status: implemented and qualified on Windows;
-shared Linux and additional full-model coverage are listed below. The source
-change is introduced by the same commit as this record.
+Review date: October 7, 2026. Status: implemented and qualified on Windows,
+including additional full-model paired Q4/Q5 coverage. Shared Linux and Qwen Q8
+coverage remain outstanding. Kernel implementation commit:
+`6244865bb4bc9cbcc703fa540d6354e56809af04`; the additional capture and evidence
+are in the commit updating this record.
 
 ## Finding and comparison
 
@@ -357,12 +359,13 @@ claimed from IQ4_XS/mixed-Q4 timings or from resource counts alone.
 
 ### Remaining coverage
 
-The available full models were Qwen UD-Q4_K_XL and Flash-Next UD-IQ4_XS; Qwen
-Q8 and paired Flash-Next Q4_K/Q5_K full-model artifacts were unavailable. Their
-affected kernels have compiled resource and independent operator coverage, not
-new full-model numerical/performance qualification. No model sweep or additional
-model download was undertaken. The Flash diagnostic's wider row limit and the
-absence of sampled-rejection cross-build capture are described above.
+The initial full models were Qwen UD-Q4_K_XL and Flash-Next UD-IQ4_XS. Additional
+Flash-Next UD-Q4_K_XL coverage is recorded below and closes its full-model paired
+Q4/Q5 gap. Qwen Q8 still has compiled resource and independent operator coverage,
+without new full-model numerical/performance qualification. No model sweep or
+additional model download was undertaken. The separate Flash teacher-forcing
+diagnostic's row limit and absence of sampled-rejection cross-build capture
+remain as described above.
 
 Linux/Nix build, Linux GPU execution and clang-22 runtime controls are unrun on
 this Windows host. Shared code retains the upstream constraints, portable ELF
@@ -373,6 +376,77 @@ settings, remote branch or running user server is replaced.
 
 Final repository checks pass: clang-format 21.1.8 checks all 485 C++ files,
 the explicit HIP formatting check passes, documentation validates 76 Markdown
-files and 432 local links/anchors, and `git diff --check` is clean. Provenance is
+files and 435 local links/anchors, and `git diff --check` is clean. Provenance is
 recorded in [UPSTREAM.md](../../UPSTREAM.md). The change is committed locally;
 no push or deployment is part of this qualification.
+
+## Additional full-model paired Q4/Q5 qualification
+
+The local four-shard `Qwen3.8-Flash-Next-UD-Q4_K_XL` target has 1,224 tensors,
+47 layers with Q4_K gate/up expert pairs and one Q5_K pair in layer 2. All pairs
+have shape `[512, 640, 2560]`. Down projections are Q5_1 in 43 layers and Q8_0
+in five, so both paired types satisfy the actual WMMA dispatch. Large prefill
+activates the paired gate/up route from 1024 tokens; 2048 is the normal chunk
+capacity. The target is 103.69 GiB; all four shards and the existing shared Q8_0
+sidecar load and complete AR/MTP short smoke tests successfully. No projector is
+needed for these text checks.
+
+The session test's explicit `--capture-prefill-logits OUTPUT` mode records the
+normal prefill frontier and eight fixed scalar continuations, avoiding the
+teacher-forcing diagnostic's eight-row limit. Three prose/code fixtures at
+96/1023/1024/2048/4096-token prefixes are captured independently in AR and MTP
+modes, at capacity 6145. The identical harness source SHA-256 is
+`05459cc9c7608c2287cbaa5af1a6abdaab26f4e45b0883cf057e708328fcae89`.
+
+For the baseline test build, the four kernel/build-control files were temporarily
+restored from `dce753fc36aa` in this isolated worktree. The shared harness and
+other sources stayed identical. The pre-fix executable was retained, then the
+committed kernel sources were restored and the same GPU-test target rebuilt.
+Both use the original toolchain/dependencies above. Baseline executable SHA-256:
+`058ae5b0d0a7b84a4104ed0116e8dcec8802be496f8f1bdb1ca1e14fc9f95c2d`;
+candidate: `f45e0f721939275e85e1dc7229af9129e043db687d642efb288a137bd5da02d0`.
+The baseline capture ran from an identical executable copy beside the release
+DLLs while candidate GPU-test compilation ran, avoiding a staging conflict.
+Production throughput measurements use the original frozen release executables,
+with all builds, hashing and correctness processes finished first.
+
+All **270 complete FP32 logit rows** match byte for byte (248,320 floats each,
+268,185,600 bytes). Raw-capture SHA-256:
+`d04cbfdbfef624fe63b4f1b0c0efb141415f494ffba2721b30df52475419ef66`.
+Token-fixture hashes, every row hash and all 240 continuation labels agree.
+Both retain mean NLL **0.17457870930144928** and perplexity
+**1.1907444613614468**. This is a matched-build consistency check on fixed
+histories, not a new original-model or quantization-quality claim.
+
+The fresh candidate's `--prefill-only` checks also pass peer snapshot bytes,
+decode graph capture/replay, independent AR/MTP execution and split-prefill
+equality through 4096 tokens (including 2048 split at 1025).
+
+```powershell
+& $SessionTest --model $Q4Model --mtp-model $MtpModel --capture-prefill-logits build/review-pr459/q4-logits.bin
+# Repeat with the baseline/candidate test executables and distinct output files.
+& $SessionTest --model $Q4Model --mtp-model $MtpModel --prefill-only
+```
+
+The matched native release measurements use two rounds with three repetitions
+per process, baseline/candidate then candidate/baseline, with warmed shapes,
+C1/d0/capacity 4096, temperature zero and seed 459. Loading is excluded.
+AR pp1024/pp2048 change **+0.8% / 0.0%**, MTP **+1.3% / +0.5%**; generation
+changes **+0.5% AR / +0.2% MTP**. There is no material regression, and these
+small changes do not establish a substantial paired-route speedup on this
+workload. All **24** greedy completions have identical token-output SHA-256
+`41b095490527a4ade5899babb446617852feaffdbaa979cea5a7ce8d3ae5a5f9`.
+All 12 MTP repetitions also retain 50 cycles, 102 drafted and 62 accepted.
+
+```powershell
+& $Exe bench --model $Q4Model -p 8,64,1024,2048 -n 128 -d 0 -r 3 --temperature 0 --seed 459 --verbose --speculative off
+& $Exe bench --model $Q4Model -p 8,64,1024,2048 -n 128 -d 0 -r 3 --temperature 0 --seed 459 --verbose --speculative mtp --mtp-model $MtpModel --draft-tokens 7
+```
+
+The [model artifact](../models/qwen3.8-flash-next/artifacts/prefill-spills-pr459-q4.json)
+retains all model-file SHA-256 values, build identities, fixture/row hashes,
+per-process means/deviations, paired-round gains and output/draft controls.
+Production code and the initial spill-free resource contract are unchanged by
+this additional qualification. Qwen Q8 full-model checks, Linux/clang-22 checks,
+original-model parity and sampled-rejection cross-build capture remain outside
+the completed scope.

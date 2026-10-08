@@ -165,3 +165,33 @@ remain in the artifact; small control differences are not claimed as speedups.
 | --- | ---: | ---: | ---: |
 | pp2048 | 967.54 | 971.77 | +0.4% |
 | tg128 | 43.10 | 43.00 | -0.2% |
+
+### Mixed Q4/Q5 full-model qualification
+
+October 7: the four-shard UD-Q4_K_XL target has 47 Q4_K expert gate/up layer
+pairs and one Q5_K pair. With the shared Q8_0 sidecar it loads successfully and
+retains exact full logits and perplexity. These measurements use the same frozen
+baseline/candidate release binaries and toolchain as above: native C1, depth
+zero, capacity 4096, greedy/seed 459, three repetitions per process and two
+reversed-order rounds. Loading is excluded; prompt shapes are warmed. The table
+averages the two process means. [Exact identities, row hashes and per-run statistics](artifacts/prefill-spills-pr459-q4.json).
+
+| Mode / workload | Baseline (tok/s) | Adapted (tok/s) | Gain |
+| --- | ---: | ---: | ---: |
+| AR pp8 | 79.06 | 78.80 | -0.3% |
+| AR pp64 | 335.44 | 336.78 | +0.4% |
+| AR pp1024 | 1401.22 | 1411.88 | +0.8% |
+| AR pp2048 | 1594.44 | 1594.35 | 0.0% |
+| AR tg128 | 27.56 | 27.70 | +0.5% |
+| MTP pp8 | 75.18 | 75.84 | +0.9% |
+| MTP pp64 | 326.40 | 327.25 | +0.3% |
+| MTP pp1024 | 1367.26 | 1384.91 | +1.3% |
+| MTP pp2048 | 1559.71 | 1567.81 | +0.5% |
+| MTP tg128 | 36.70 | 36.77 | +0.2% |
+
+No material throughput regression is observed; the small gains are not promoted
+as a substantial full-model speedup. This change removes the paired kernels'
+80-byte private scratch while retaining execution results. All 24 greedy
+completions match across builds and AR/MTP; the MTP cycle/draft/acceptance counts
+are also unchanged. These native controls do not measure HTTP latency or
+qualify sampled rejection behavior.
