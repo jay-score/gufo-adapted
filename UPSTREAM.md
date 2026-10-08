@@ -654,45 +654,7 @@ Record upstream candidates examined against this fork and deliberately not
 imported, newest first. These are decisions and their evidence, not imports;
 revisit when the blocking condition changes.
 
-### 2026-10-08 — Live-frontier guard for borrowed checkpoints
 
-- Source: [gufo-org/gufo@590f4d5cd81840142edd72df3ae243d19481feae](https://github.com/gufo-org/gufo/commit/590f4d5cd81840142edd72df3ae243d19481feae)
-  ([PR #476](https://github.com/gufo-org/gufo/pull/476), open, not merged),
-  guarding the owner-preference path added by
-  [gufo-org/gufo@82711d8c8ceb8bda9024914b6e7ac8495ba41742](https://github.com/gufo-org/gufo/commit/82711d8c8ceb8bda9024914b6e7ac8495ba41742)
-  (PR #445).
-- Local: none; review only. Compared fork `29cabeef9b106767fea74494a6399b15a742d8a9`
-  against `official/main` `50900eb717925cc8e85ed952e1a75e522958a7f6` (fetched
-  2026-10-08; merge base `d9a84f13f35d1f98da22886a12eb25dc7062e392`, PR #279).
-- Decision: not applicable, skipped. PR #445 restores a borrowed prompt
-  checkpoint into the state that already owns its rows, selected by
-  `ContinuationSnapshot::PrefersState`; #476 stops that shortcut from
-  overwriting another conversation's live frontier. This fork never imported
-  #445: `PrefersState` does not exist in `src/cli/serve`, the
-  `ContinuationSnapshot` interface in `src/cli/serve/continuation_cache.hpp`
-  has no such hook, and the acquisition loop in
-  `src/cli/serve/continuation_cache.cpp` is the plain least-recently-used free
-  state search that #476 restores. Neither hunk applies: the guarded context is
-  absent, and the test anchors live in upstream cache work this fork does not
-  carry (#358/#362/#369/#382/#386/#445/#466). The reported
-  `tool-native-schemas` failure mode cannot occur here.
-- Related deferral: PR #445 itself (2,727 lines, `src/core/hip/snapshot_transfer.hpp`,
-  Flash-Next engine and `kernels/rocm/executor.cpp`) remains a separate
-  gfx1151 backport decision needing matched-token logit and perplexity
-  baselines; if it is ever taken, land #476 with it.
-- Open fork-side question: the fork's LRU loop can still select an entry that
-  holds a live frontier (`Commit` retains `live_tokens` while setting
-  `available`, and acquisition clears `live_tokens` before restoring). Because
-  `Invalidate` clears `live_tokens` and bumps the clock, a later branch can
-  destroy a healthy frontier while a frontier-free state sits idle. Upstream
-  keeps this exposure before and after #476, so it is not a fork-only defect. A
-  future small improvement is to prefer frontier-free available states first,
-  then fall back; the benefit is unmeasured here.
-- Validation: none run; source inspection only. Upstream's green CPU
-  `continuation_cache_test` CI is not this fork's evidence, and upstream's
-  functional `tests/functional` harness, including `tool-native-schemas`, does
-  not exist in this fork.
-- Status: not imported; revisit if PR #445 is integrated.
 
 ## Model-specific provenance
 
