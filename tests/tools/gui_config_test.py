@@ -44,10 +44,31 @@ class ConfigTest(unittest.TestCase):
                        {"cache_disk": True, "cache_disk_dir": ""}, {"cache_disk_dir": "relative"},
                        {"cache_disk_gib": 0}, {"cache_disk_gib": 1.5},
                        {"cache_disk_staging_gib": -1}, {"cache_disk_staging_gib": True},
+                       {"cache_ram_gib": -1}, {"cache_ram_gib": True},
+                       {"cache_ram_gib": 1.5}, {"cache_ram_gib": 65537},
                        {"dflash_model": "relative.gguf"}, {"model": "relative.gguf"},
                        {"served_model_name": "line\nbreak"}, {"extra_args": "--anything"}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 validate_settings(change)
+
+    def test_ram_cap_is_independent_of_disk_cache_and_saved_per_preset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "launcher.json"
+            document = new_document()
+            # Older presets gain the automatic default without a write on load.
+            document["presets"][0]["settings"].pop("cache_ram_gib")
+            path.write_text(json.dumps(document), encoding="utf-8")
+            before = path.read_bytes()
+            self.assertEqual(resolved_settings(load_document(path))["cache_ram_gib"], 0)
+            self.assertEqual(path.read_bytes(), before)
+            self.assertNotIn("--cache-ram-bytes", build_command(DEFAULTS))
+            for disk_enabled in (False, True):
+                settings = DEFAULTS | {"cache_ram_gib": 2, "cache_disk": disk_enabled}
+                save_document(path, new_document(settings))
+                restored = resolved_settings(load_document(path))
+                self.assertEqual(restored, settings)
+                command = build_command(restored)
+                self.assertEqual(command[command.index("--cache-ram-bytes") + 1], str(2 * 1024**3))
 
     def test_shards_sidecars_and_paths_with_spaces(self):
         with tempfile.TemporaryDirectory(prefix="gufo files ") as directory:

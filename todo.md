@@ -1,5 +1,23 @@
 # TODO
 
+## Memory follow-up — reviewed 2026-10-08
+
+- [ ] [PR #445 — avoid Flash-Next prompt checkpoint copies](https://github.com/gufo-org/gufo/pull/445)
+  (merged; source `82711d8c8ceb8bda9024914b6e7ac8495ba41742`). Review remaining
+  in-pass checkpoint work against our existing immutable host-prefix sharing.
+  Measure peak and retained Windows commit: upstream also pools released blocks
+  and enlarges the n-gram cache, so net memory savings are unproven.
+- [ ] [PR #477 — keep disk snapshots out of the page cache](https://github.com/gufo-org/gufo/pull/477)
+  (open draft). Watch for results and a Windows-compatible approach. Current
+  implementation uses Linux `posix_fadvise`; reduced filesystem cache pressure
+  is not evidence of reduced Windows commit. Check disk-restore latency costs.
+- [ ] [PR #425 — recycle snapshot payload buffers](https://github.com/gufo-org/gufo/pull/425)
+  (open). Track capture-latency improvements, but defer for memory reduction:
+  the pool retains up to 4 GiB of spare buffers. Re-evaluate after newer upstream
+  checkpoint changes; preserve bounded retention and test pool accounting.
+
+Recheck PR status before integration. These items are tracked, not imported.
+
 ## Upstream cache follow-up
 
 Tracking the cache investigation for OpenCode and Pi on this Windows fork.

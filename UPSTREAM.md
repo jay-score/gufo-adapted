@@ -37,6 +37,35 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-08 — Configurable retained RAM snapshot cap
+
+- Source: configurable-cap outcome from
+  [gufo-org/gufo@d7cf7ee4b8e3a506ee1ec9c301e8a3efd10c6c94](https://github.com/gufo-org/gufo/commit/d7cf7ee4b8e3a506ee1ec9c301e8a3efd10c6c94)
+  ([PR #369](https://github.com/gufo-org/gufo/pull/369)); ceiling behavior reviewed in
+  [gufo-org/gufo@53c590649295edf63abcc06117231cdc890b69c7](https://github.com/gufo-org/gufo/commit/53c590649295edf63abcc06117231cdc890b69c7)
+  ([PR #384](https://github.com/gufo-org/gufo/pull/384)).
+- Local: commit introducing this entry.
+- Adaptation: independently implement `--cache-ram-bytes` through the existing
+  pool admission callback. Zero preserves the fork's automatic budget; positive
+  values lower it, clamped to the model's post-session allocation claim. Preserve
+  Windows memory accounting, six entries per session, immutable host-prefix
+  sharing and the snapshot/disk format. Omit upstream's 128-entry redesign,
+  automatic 32 GiB ceiling and ability to raise the automatic budget: these are
+  unnecessary for reducing retained memory. Add a per-preset GUI GiB control,
+  defaulting older presets in memory without writing them on load.
+- Areas: shared runner pool and inference loader, serve CLI, GUI settings/form,
+  translations and fixtures; cache/server/GUI documentation. Other memory PRs
+  are tracked separately in [todo.md](todo.md).
+- Validation: Windows release and focused CPU builds pass; six cache/runner/
+  scheduler/API suites, 35 GUI Python tests, 17 jsdom tests, formatting and docs
+  pass. All 117 matched full-logit rows are exact with unchanged perplexity.
+  Flash-Next IQ4_XS + Q8_0 MTP HTTP replay at 4096 context produces identical
+  completions under refusing (1 byte) and fitting (1 GiB) caps, with RAM restore
+  only under the fitting cap. See [validation identities and commands](docs/ram-snapshot-cap-validation.md).
+  Linux CI, other quantizations and measured long-context Windows committed-memory
+  savings remain unrun.
+- Status: retained.
+
 ### 2026-10-08 — Short-request prefill fairness
 
 - Source: scheduling portion of

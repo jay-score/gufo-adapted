@@ -834,9 +834,10 @@ void TestPersistentSnapshotRestoresAcrossPools() {
 
   {
     auto writer_stats = std::make_shared<FakeStats>();
-    auto writer = std::make_shared<PersistentSnapshotRunner>(
-        writer_stats, "artifact-A", sizeof(FakeSnapshot) - 1);
-    TextRunnerPool pool(writer, 1, disk_cache);
+    auto writer =
+        std::make_shared<PersistentSnapshotRunner>(writer_stats, "artifact-A");
+    TextRunnerPool pool(writer, 1, disk_cache,
+                        {.capacity_bytes = sizeof(FakeSnapshot) - 1});
     auto request = pool.Acquire({1, 2, 3});
     Expect(request.Prefill(3).decode_ready,
            "writer reaches persistent checkpoint");
@@ -1435,6 +1436,70 @@ void TestSnapshotBudgetRefusalDoesNotFailCompletedRequest() {
   extension.Invalidate();
 }
 
+void TestExplicitRamCapRefusesSnapshotsButKeepsLiveReuse() {
+  auto stats = std::make_shared<FakeStats>();
+  auto runner = std::make_shared<SnapshotRunner>(stats);
+  TextRunnerPool pool(runner, 1, std::nullopt,
+                      {.capacity_bytes = sizeof(FakeSnapshot) - 1});
+  auto request = pool.Acquire({1, 2, 3});
+  Expect(request.Prefill(3).decode_ready, "capped request completes prefill");
+  Expect(request.Commit().snapshot_bytes == 0 && stats->snapshot_captures == 0,
+         "explicit cap refuses the payload before allocation");
+  auto extension = pool.Acquire({1, 2, 3, 4});
+  Expect(extension.cached_prompt_tokens() == 3 &&
+             extension.cache_restore_bytes() == 0,
+         "snapshot cap preserves live-session reuse");
+  Expect(extension.Prefill(1).decode_ready,
+         "live extension prefills only its tail");
+  extension.Invalidate();
+}
+
+void TestExplicitRamCapRetainsOnlyOneSnapshot() {
+  auto stats = std::make_shared<FakeStats>();
+  auto runner = std::make_shared<SnapshotRunner>(stats);
+  TextRunnerPool pool(runner, 1, std::nullopt,
+                      {.capacity_bytes = sizeof(FakeSnapshot)});
+  for (const auto& prefix : {std::vector<TextRunnerToken>{1, 2, 3},
+                             std::vector<TextRunnerToken>{4, 5, 6}}) {
+    auto request = pool.Acquire(prefix);
+    Expect(request.Prefill(3).decode_ready, "one-snapshot cap permits prefill");
+    Expect(request.Commit().snapshot_bytes == sizeof(FakeSnapshot),
+           "one-snapshot cap admits a fitting payload");
+  }
+  auto old = pool.Acquire({1, 2, 3});
+  Expect(!old.cache_hit(),
+         "new snapshot evicts the old one under the byte cap");
+  old.Invalidate();
+  auto retained = pool.Acquire({4, 5, 6});
+  Expect(retained.cached_prompt_tokens() == 3 &&
+             retained.cache_restore_bytes() == sizeof(FakeSnapshot),
+         "remaining snapshot restores after live state is displaced");
+  retained.Invalidate();
+}
+
+void TestRamCapUsesPostAllocationModelBudget() {
+  class ChangingBudgetRunner final : public SnapshotRunner {
+  public:
+    using SnapshotRunner::SnapshotRunner;
+    TextRunnerResourceClaim ResourceClaim() const override {
+      auto claim = SnapshotRunner::ResourceClaim();
+      claim.retained_snapshot_capacity_bytes =
+          stats_->states_created == 0 ? 4096 : sizeof(FakeSnapshot) - 1;
+      return claim;
+    }
+  };
+  for (const std::size_t requested : {std::size_t{0}, std::size_t{4096}}) {
+    auto stats = std::make_shared<FakeStats>();
+    TextRunnerPool pool(std::make_shared<ChangingBudgetRunner>(stats), 1,
+                        std::nullopt, {.capacity_bytes = requested});
+    auto request = pool.Acquire({1, 2, 3});
+    Expect(request.Prefill(3).decode_ready, "model-budget fixture completes");
+    Expect(
+        request.Commit().snapshot_bytes == 0 && stats->snapshot_captures == 0,
+        "automatic and oversized caps respect the post-state model budget");
+  }
+}
+
 class FlakySnapshotRunner final : public SnapshotRunner {
 public:
   using SnapshotRunner::SnapshotRunner;
@@ -1594,6 +1659,9 @@ int main() {
   TestRequestBindsAndClearsCancellation();
   TestBatchedAdvancePreservesIndependentRequests();
   TestResourceClaimsAreValidatedBeforeAllocation();
+  TestExplicitRamCapRefusesSnapshotsButKeepsLiveReuse();
+  TestExplicitRamCapRetainsOnlyOneSnapshot();
+  TestRamCapUsesPostAllocationModelBudget();
   TestSnapshotForkAndUnsupportedCapabilities();
   TestSnapshotCacheBranchesOnePrefixIntoIndependentStates();
   std::ostringstream normal_log;

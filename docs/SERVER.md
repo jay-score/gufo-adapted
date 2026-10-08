@@ -185,6 +185,17 @@ older disk checkpoints are not reused by this version.
 
 `SIGINT` and `SIGTERM` cancel active requests and drain accepted disk writes
 before exiting. `--cache-disk DIR` defaults to 8 GiB retained on disk.
+`--cache-ram-bytes 0` (the default) preserves the automatic retained-snapshot
+budget sampled after model/session allocation. A positive value caps retention
+at the smaller of that value and the model's automatic budget. For example,
+`--cache-ram-bytes 2147483648` caps retained snapshots at 2 GiB. The startup
+`snapshot_cache_configured` event reports the effective `capacity_bytes`.
+This allocates nothing upfront and works with disk caching off. A snapshot that
+cannot fit is skipped without failing the request; live-session reuse remains
+available. Lower caps can cause more snapshot eviction and prompt reprocessing.
+Weights, live context, disk staging and temporary save buffers are separate;
+this is not a cap on total process committed memory. Restart to change the cap.
+
 `--cache-disk-staging-bytes 0` (the default) selects the smaller of one eighth
 of available host RAM after model/session loading (including cgroup limits) and
 the disk budget. This bounds queued captures/writes and each disk read

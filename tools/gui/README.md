@@ -124,6 +124,14 @@ supplied by the client; it cannot recover reasoning omitted from the request.
 Chat Completions clients may override it with
 `chat_template_kwargs.preserve_thinking`.
 
+**More options → RAM snapshot limit (GiB)** defaults to 0 (automatic). A positive
+whole number passes `--cache-ram-bytes` and lowers retained snapshot capacity
+within the engine's automatic memory budget, independently of disk caching.
+Lower limits can require more prompt reprocessing. This does not cap model
+weights, live context or disk staging. The automatic default omits the new flag
+so existing executables still launch; setting a positive limit needs a rebuilt
+engine supporting the option.
+
 **More options → Enable disk continuation cache** defaults to off. When enabled,
 the GUI passes `--cache-disk`, `--cache-disk-bytes`, and
 `--cache-disk-staging-bytes`. The suggested folder is `%LOCALAPPDATA%\Gufo\cache`

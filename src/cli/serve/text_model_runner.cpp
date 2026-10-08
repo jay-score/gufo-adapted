@@ -339,7 +339,7 @@ void EmitDiskEvent(const ContinuationDiskEvent& event) noexcept {
 }
 
 ContinuationCache::SnapshotSupport MakeSnapshotSupport(
-    ValidatedRunner* validated) {
+    ValidatedRunner* validated, TextRunnerRamCacheOptions options) {
   if (validated == nullptr || !validated->descriptor.capabilities.snapshot ||
       !validated->descriptor.capabilities.fork) {
     return {};
@@ -359,9 +359,13 @@ ContinuationCache::SnapshotSupport MakeSnapshotSupport(
             ReconcileStateBytes(validated->resources, text_state);
           },
       .capacity_bytes =
-          [validated] {
+          [validated, options] {
             const auto resources = validated->runner->ResourceClaim();
-            return resources.retained_snapshot_capacity_bytes.value_or(0);
+            const auto automatic =
+                resources.retained_snapshot_capacity_bytes.value_or(0);
+            return options.capacity_bytes == 0
+                       ? automatic
+                       : std::min(options.capacity_bytes, automatic);
           },
       .on_event = EmitSnapshotEvent,
   };
@@ -457,7 +461,8 @@ struct TextRunnerPool::Impl {
   static constexpr std::size_t kSnapshotEntriesPerSession =
       kIntermediateCheckpoints + 2;
   Impl(std::shared_ptr<TextModelRunner> model_runner, std::size_t state_count,
-       std::optional<TextRunnerDiskCacheOptions> disk_cache_options)
+       std::optional<TextRunnerDiskCacheOptions> disk_cache_options,
+       TextRunnerRamCacheOptions ram_cache_options)
       : validated(ValidateRunner(std::move(model_runner), state_count)),
         cache(
             state_count,
@@ -470,7 +475,7 @@ struct TextRunnerPool::Impl {
               ReconcileStateBytes(validated.resources, *state);
               return state;
             },
-            MakeSnapshotSupport(&validated),
+            MakeSnapshotSupport(&validated, ram_cache_options),
             state_count <= std::numeric_limits<std::size_t>::max() /
                                kSnapshotEntriesPerSession
                 ? state_count * kSnapshotEntriesPerSession
@@ -1293,9 +1298,10 @@ void TextRunnerPool::Request::Invalidate() noexcept {
 
 TextRunnerPool::TextRunnerPool(
     std::shared_ptr<TextModelRunner> runner, std::size_t state_count,
-    std::optional<TextRunnerDiskCacheOptions> disk_cache)
+    std::optional<TextRunnerDiskCacheOptions> disk_cache,
+    TextRunnerRamCacheOptions ram_cache)
     : impl_(std::make_unique<Impl>(std::move(runner), state_count,
-                                   std::move(disk_cache))) {}
+                                   std::move(disk_cache), ram_cache)) {}
 
 TextRunnerPool::~TextRunnerPool() = default;
 

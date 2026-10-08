@@ -2897,7 +2897,8 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
                             TextSchedulerPolicy scheduler_policy,
                             const TextSpeculativeConfig& speculative_config,
                             const TextDiskCacheConfig& disk_cache_config,
-                            const std::string& vision_model_path) {
+                            const std::string& vision_model_path,
+                            TextRunnerRamCacheOptions ram_cache_options) {
 #if defined(ENGINE_ENABLE_HIP)
   TextDiskCacheConfig resolved_disk_cache_config = disk_cache_config;
   std::string load_error;
@@ -2974,7 +2975,7 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
     }
     return load(std::move(model), error, max_context, session_count,
                 prefill_policy, scheduler_policy, speculative_config,
-                std::move(resolved_disk_cache_config));
+                std::move(resolved_disk_cache_config), ram_cache_options);
   }
   if (reader->GetMetadataString("general.architecture") == "qwen4exp") {
     if (speculative_config.backend != TextSpeculativeBackend::kDisabled &&
@@ -3050,7 +3051,7 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
     }
     return load(std::move(model), error, max_context, session_count,
                 prefill_policy, scheduler_policy, speculative_config,
-                std::move(resolved_disk_cache_config));
+                std::move(resolved_disk_cache_config), ram_cache_options);
   }
   std::shared_ptr<models::qwen::vision::Encoder> vision;
   try {
@@ -3082,7 +3083,7 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
   }
   return load(std::move(model), error, max_context, session_count,
               prefill_policy, scheduler_policy, speculative_config,
-              std::move(resolved_disk_cache_config));
+              std::move(resolved_disk_cache_config), ram_cache_options);
 #else
   (void)model_path;
   (void)max_context;
@@ -3092,6 +3093,7 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
   (void)speculative_config;
   (void)disk_cache_config;
   (void)vision_model_path;
+  (void)ram_cache_options;
   SetError(error, "HTTP inference requires the HIP backend");
   return false;
 #endif
@@ -3104,7 +3106,8 @@ bool InferenceBackend::load(std::shared_ptr<const hip::QwenGpuModel> model,
                             TextPrefillPolicy prefill_policy,
                             TextSchedulerPolicy scheduler_policy,
                             TextSpeculativeConfig speculative_config,
-                            TextDiskCacheConfig disk_cache_config) {
+                            TextDiskCacheConfig disk_cache_config,
+                            TextRunnerRamCacheOptions ram_cache_options) {
   if (model == nullptr) {
     SetError(error, "Qwen GPU model must not be null");
     return false;
@@ -3222,7 +3225,8 @@ bool InferenceBackend::load(std::shared_ptr<const hip::QwenGpuModel> model,
     Logger::Info("loader",
                  "event=load_phase phase=sessions " + Logger::MemoryStatus());
     auto runner_pool = std::make_shared<TextRunnerPool>(
-        std::move(runner), session_count, std::move(runner_disk_cache));
+        std::move(runner), session_count, std::move(runner_disk_cache),
+        ram_cache_options);
     new_state->scheduler = std::make_shared<TextGenerationScheduler>(
         std::move(runner_pool), prefill_policy, scheduler_policy);
     {
@@ -3241,7 +3245,8 @@ bool InferenceBackend::load(
     std::uint32_t max_context, std::size_t session_count,
     TextPrefillPolicy prefill_policy, TextSchedulerPolicy scheduler_policy,
     TextSpeculativeConfig speculative_config,
-    TextDiskCacheConfig disk_cache_config) {
+    TextDiskCacheConfig disk_cache_config,
+    TextRunnerRamCacheOptions ram_cache_options) {
   if (model == nullptr) {
     SetError(error, "DeepSeek model must not be null");
     return false;
@@ -3304,7 +3309,8 @@ bool InferenceBackend::load(
       };
     }
     auto runner_pool = std::make_shared<TextRunnerPool>(
-        std::move(runner), session_count, std::move(runner_disk_cache));
+        std::move(runner), session_count, std::move(runner_disk_cache),
+        ram_cache_options);
     new_state->scheduler = std::make_shared<TextGenerationScheduler>(
         std::move(runner_pool), prefill_policy, scheduler_policy);
     {
@@ -3323,7 +3329,8 @@ bool InferenceBackend::load(
     std::uint32_t max_context, std::size_t session_count,
     TextPrefillPolicy prefill_policy, TextSchedulerPolicy scheduler_policy,
     TextSpeculativeConfig speculative_config,
-    TextDiskCacheConfig disk_cache_config) {
+    TextDiskCacheConfig disk_cache_config,
+    TextRunnerRamCacheOptions ram_cache_options) {
   if (model == nullptr) {
     SetError(error, "Qwen3.8-Flash-Next model must not be null");
     return false;
@@ -3386,7 +3393,8 @@ bool InferenceBackend::load(
       };
     }
     auto runner_pool = std::make_shared<TextRunnerPool>(
-        std::move(runner), session_count, std::move(runner_disk_cache));
+        std::move(runner), session_count, std::move(runner_disk_cache),
+        ram_cache_options);
     new_state->scheduler = std::make_shared<TextGenerationScheduler>(
         std::move(runner_pool), prefill_policy, scheduler_policy);
     {
