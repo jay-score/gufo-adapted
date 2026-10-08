@@ -1692,11 +1692,29 @@ bool Executor::Attention(const DeviceLayer& l, Session::AttentionState& s,
                           "draft attention output initialization", error_msg)) {
     return false;
   }
-  if (MatrixRows(n_tokens) &&
-      WmmaCausalAttention(s_.q, s_.attn_gate, s.k_cache, s.v_cache, mask,
-                          mask_words_, s_.ctx, n_tokens, start_pos, c.num_heads,
-                          c.num_kv_heads, c.head_dim, c.compress_ratio, stream_,
-                          last_only)) {
+  // Pre-budget queries keep the dense key sweep and rounding even when a
+  // retained prefix makes this batch cross the sparse boundary. Launch the
+  // sparse tail first: it can refuse geometry without touching the prefix.
+  const auto attend = [&] {
+    const std::uint32_t dense_rows =
+        mask != nullptr && !last_only && start_pos < c.indexer_top_k
+            ? std::min(n_tokens, c.indexer_top_k - start_pos)
+            : 0;
+    const auto offset = std::size_t{dense_rows} * c.AttentionQDim();
+    return (dense_rows == n_tokens ||
+            WmmaCausalAttention(
+                s_.q + offset, s_.attn_gate + offset, s.k_cache, s.v_cache,
+                mask ? mask + std::size_t{dense_rows} * mask_words_ : nullptr,
+                mask_words_, s_.ctx + offset, n_tokens - dense_rows,
+                start_pos + dense_rows, c.num_heads, c.num_kv_heads, c.head_dim,
+                c.compress_ratio, stream_, last_only)) &&
+           (dense_rows == 0 ||
+            WmmaCausalAttention(s_.q, s_.attn_gate, s.k_cache, s.v_cache,
+                                nullptr, mask_words_, s_.ctx, dense_rows,
+                                start_pos, c.num_heads, c.num_kv_heads,
+                                c.head_dim, c.compress_ratio, stream_));
+  };
+  if (MatrixRows(n_tokens) && attend()) {
     return !project_output ||
            Dense(l.attn_out, s_.ctx, out, n_tokens, error_msg);
   }

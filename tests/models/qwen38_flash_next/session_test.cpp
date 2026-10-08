@@ -267,41 +267,47 @@ void CheckPrefillChunks(const std::shared_ptr<qfn::Model>& model) {
       "A train travels sixty kilometers per hour. "
       "Continue red, green, blue, red, green, blue. ");
   Require(!pattern.empty(), "empty chunk fixture");
-  for (const auto [length, boundary] :
-       {std::pair{136U, 94U}, std::pair{136U, 103U}, std::pair{136U, 104U},
-        std::pair{136U, 127U}, std::pair{136U, 128U}, std::pair{136U, 135U},
-        std::pair{2048U, 1025U}, std::pair{4096U, 2048U}}) {
-    std::vector<std::int32_t> tokens(length);
-    for (std::size_t i = 0; i < tokens.size(); ++i)
-      tokens[i] = pattern[i % pattern.size()];
-    auto bulk = model->CreateSession(
-        model->HasMtp() ? gufo::core::SessionMode::kSpeculative
-                        : gufo::core::SessionMode::kAutoregressive,
-        6145, &error);
-    auto split = model->CreateSession(
-        model->HasMtp() ? gufo::core::SessionMode::kSpeculative
-                        : gufo::core::SessionMode::kAutoregressive,
-        6145, &error);
-    Require(bulk && split, error);
-    Require(bulk->Sync(tokens, &error) &&
-                split->Sync(std::span(tokens).first(boundary), &error) &&
-                split->Sync(tokens, &error),
-            error);
-    for (unsigned step = 0; step < 4; ++step) {
-      const auto logits = bulk->Logits();
-      RequireExact(
-          logits, split->Logits(),
-          "prefill chunking changed logits: length=" + std::to_string(length) +
-              " boundary=" + std::to_string(boundary) +
-              " step=" + std::to_string(step));
-      const auto token = static_cast<std::int32_t>(
-          std::max_element(logits.begin(), logits.end()) - logits.begin());
-      Require(bulk->Evaluate(token, &error) && split->Evaluate(token, &error),
+  for (const auto mode : {gufo::core::SessionMode::kAutoregressive,
+                          gufo::core::SessionMode::kSpeculative}) {
+    if (mode == gufo::core::SessionMode::kSpeculative && !model->HasMtp())
+      continue;
+    for (const auto [length, boundary] :
+         {std::pair{136U, 94U}, std::pair{136U, 103U}, std::pair{136U, 104U},
+          std::pair{136U, 127U}, std::pair{136U, 128U}, std::pair{136U, 135U},
+          std::pair{2048U, 1025U}, std::pair{4096U, 2048U},
+          std::pair{4096U, 1024U}, std::pair{3072U, 1024U}}) {
+      std::vector<std::int32_t> tokens(length);
+      for (std::size_t i = 0; i < tokens.size(); ++i)
+        tokens[i] = pattern[i % pattern.size()];
+      auto bulk = model->CreateSession(mode, 6145, &error);
+      auto split = model->CreateSession(mode, 6145, &error);
+      Require(bulk && split, error);
+      Require(bulk->Sync(tokens, &error) &&
+                  split->Sync(std::span(tokens).first(boundary), &error) &&
+                  split->Sync(tokens, &error),
               error);
+      for (unsigned step = 0; step < 4; ++step) {
+        const auto logits = bulk->Logits();
+        RequireExact(
+            logits, split->Logits(),
+            "prefill chunking changed logits: length=" +
+                std::to_string(length) +
+                " boundary=" + std::to_string(boundary) + " mode=" +
+                (mode == gufo::core::SessionMode::kAutoregressive ? "ar"
+                                                                  : "mtp") +
+                " step=" + std::to_string(step));
+        const auto token = static_cast<std::int32_t>(
+            std::max_element(logits.begin(), logits.end()) - logits.begin());
+        Require(bulk->Evaluate(token, &error) && split->Evaluate(token, &error),
+                error);
+      }
+      std::cout << "prefill chunks: length=" << length
+                << " boundary=" << boundary << " mode="
+                << (mode == gufo::core::SessionMode::kAutoregressive ? "ar"
+                                                                     : "mtp")
+                << " four logit rows exact\n"
+                << std::flush;
     }
-    std::cout << "prefill chunks: length=" << length << " boundary=" << boundary
-              << " four logit rows exact\n"
-              << std::flush;
   }
 }
 

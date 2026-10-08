@@ -36,6 +36,32 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-08 — Flash-Next attention at the sparse budget
+
+- Source: [gufo-org/gufo@f5401508e0352afbfc9d769414b15486ea100cdf](https://github.com/gufo-org/gufo/commit/f5401508e0352afbfc9d769414b15486ea100cdf)
+  from [PR #470](https://github.com/gufo-org/gufo/pull/470), reviewed at final head
+  `5c6ebb4660b6712b18c6a2c20b3ee3d3e1c3cf2a` (squash
+  `47b639159315fcdba17e6a144d67e273de9ead6e`).
+- Local: commit introducing this entry.
+- Adaptation: keep pre-budget queries on dense tiled attention when a retained
+  prefix makes the existing 2048-token chunk cross the sparse budget. Run the
+  sparse tail first, preserve refusal/fallback and last-only catch-up, and
+  project the combined context once. Preserve projections, ranking and other
+  arithmetic. Bump Flash-Next snapshots to version 16 to reject older state.
+  Omit upstream checkpoint machinery absent from this fork and the broader
+  prefill tuning deferred by this adaptation's scope.
+- Areas: Flash-Next executor, snapshot compatibility, existing session chunk
+  fixtures and cache documentation.
+- Validation: reproduced 4096/1024 failure before the fix; fresh pinned Windows
+  builds pass all 80 AR/MTP chunk comparisons, 270 unchanged-schedule full rows,
+  549 teacher-forced hashes and unchanged perplexity. Analytic operators,
+  snapshots, all 105 rollback prefixes, image-prefix continuation, batching and
+  23 serving sampling strategies pass. The 57-kernel resource guard stays clean.
+  [Qualification and identities](docs/prefill-pr470-qualification.md) also record
+  remaining nonaligned indexer differences and excluded instrumented attempts.
+  Linux build/CI and additional quantizations are unrun.
+- Status: retained.
+
 ### 2026-10-07 — Clang 23 prefill scratch and spills
 
 - Sources: [gufo-org/gufo@f17e37b8bb7df5fb83ea7ce6d4dc4ef6d6677253](https://github.com/gufo-org/gufo/commit/f17e37b8bb7df5fb83ea7ce6d4dc4ef6d6677253)
