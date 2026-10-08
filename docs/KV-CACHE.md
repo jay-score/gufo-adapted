@@ -115,6 +115,12 @@ no restore and no device copy. This is why continuing the previous turn of a
 conversation is nearly free, and why reuse can cover generated tokens and not
 just prompt tokens.
 
+When a request needs a state for restoration or a cold start, the cache prefers
+an idle state without a live frontier. It chooses the least recently used state
+within that group, falling back to the least recently used idle state with a
+frontier when necessary. This preserves generated replies for later turns when
+spare states exist; it does not reserve a state for each conversation.
+
 A **snapshot** is an immutable retained checkpoint. Reusing one means restoring
 it into a session, which costs a copy.
 
@@ -247,7 +253,7 @@ Qwen3.8-27B **(measured)**. Automatic disk staging has no fixed 1 GiB cap:
 it follows available RAM and the disk budget, allowing larger checkpoints
 when both budgets permit. See #259.
 
-Eviction is least-recently-used in both tiers, with no awareness of
+Snapshot eviction is least-recently-used in both tiers, with no awareness of
 conversation, prefix depth or rebuild cost.
 
 ## The disk tier

@@ -395,11 +395,20 @@ ContinuationCache::Lease ContinuationCache::Acquire(
     if ((impl_->snapshot_mode() && !live_hit) || !cache_hit) {
       selected = no_entry;
       std::uint64_t oldest = std::numeric_limits<std::uint64_t>::max();
+      bool selected_has_frontier = true;
       for (std::size_t index = 0; index < impl_->entries.size(); ++index) {
         const auto& entry = *impl_->entries[index];
-        if (entry.available && entry.state_last_used < oldest) {
+        if (!entry.available)
+          continue;
+        // Preserve useful conversation state while a frontier-free slot is
+        // available. Within either group, keep the existing LRU policy.
+        const bool has_frontier = !entry.live_tokens.empty();
+        if (selected == no_entry || (selected_has_frontier && !has_frontier) ||
+            (has_frontier == selected_has_frontier &&
+             entry.state_last_used < oldest)) {
           selected = index;
           oldest = entry.state_last_used;
+          selected_has_frontier = has_frontier;
         }
       }
     }

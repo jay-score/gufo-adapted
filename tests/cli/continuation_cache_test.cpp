@@ -215,6 +215,84 @@ void TestSnapshotCanBranchIntoTwoIndependentStateSlots() {
   root_again.Invalidate();
 }
 
+void TestAvailableStateWithoutFrontierIsPreferred() {
+  using Tokens = std::vector<gufo::server::ContinuationToken>;
+  for (int request_kind = 0; request_kind < 3; ++request_kind) {
+    std::vector<std::size_t> invalidations(3);
+    std::size_t next_id = 0;
+    gufo::server::ContinuationCache cache(
+        3,
+        [&] { return std::make_unique<FakeState>(next_id++, &invalidations); },
+        {.restore =
+             [](auto& state, const auto& snapshot) {
+               dynamic_cast<FakeState&>(state).value =
+                   dynamic_cast<const FakeSnapshot&>(snapshot).value;
+             },
+         .capacity_bytes = [] { return 1024; },
+         .on_event = {}});
+
+    auto conversation = cache.Acquire(Tokens{1, 2, 3});
+    auto idle = cache.Acquire(Tokens{7});
+    auto newer_idle = cache.Acquire(Tokens{8});
+    auto* frontier = &conversation.state();
+    auto* empty_state = &idle.state();
+    dynamic_cast<FakeState&>(*frontier).value = 9;
+    Expect(conversation.TryReserveSnapshot(sizeof(std::size_t), 3),
+           "reserve the conversation prompt checkpoint");
+    conversation.Commit({1, 2, 3}, std::make_unique<FakeSnapshot>(7),
+                        {1, 2, 3, 4, 5});
+    // Invalidation makes the empty states newer than the useful frontier.
+    idle.Invalidate();
+    newer_idle.Invalidate();
+
+    const bool reuse = request_kind != 2;
+    const Tokens prompt = request_kind == 1 ? Tokens{6} : Tokens{1, 2, 3, 6};
+    auto branch = cache.Acquire(prompt, {}, {}, {}, reuse);
+    Expect(
+        &branch.state() == empty_state,
+        "restore, cold miss and bypass prefer the oldest frontier-free state");
+    Expect(branch.cache_hit() == (request_kind == 0),
+           "state selection preserves hit and bypass behavior");
+    if (branch.cache_hit()) {
+      Expect(branch.cached_tokens() == 3 &&
+                 dynamic_cast<FakeState&>(branch.state()).value == 7,
+             "the branch restores the prompt checkpoint");
+    }
+    // The branch remains active while the conversation resumes independently.
+    auto next = cache.Acquire(Tokens{1, 2, 3, 4, 5, 8});
+    Expect(next.cache_hit() && next.cached_tokens() == 5 &&
+               &next.state() == frontier &&
+               dynamic_cast<FakeState&>(next.state()).value == 9,
+           "the next turn reuses the generated reply without restoration");
+  }
+}
+
+void TestLiveFrontierEvictionFallsBackToLru() {
+  using Tokens = std::vector<gufo::server::ContinuationToken>;
+  std::vector<std::size_t> invalidations(2);
+  std::size_t next_id = 0;
+  gufo::server::ContinuationCache cache(
+      2, [&] { return std::make_unique<FakeState>(next_id++, &invalidations); },
+      {.restore = [](auto&, const auto&) {},
+       .capacity_bytes = [] { return 1024; },
+       .on_event = {}});
+  auto older = cache.Acquire(Tokens{1});
+  auto newer = cache.Acquire(Tokens{2});
+  auto* older_state = &older.state();
+  auto* newer_state = &newer.state();
+  older.Commit({}, {}, {1, 3});
+  newer.Commit({}, {}, {2, 4});
+
+  auto replacement = cache.Acquire(Tokens{9});
+  Expect(
+      !replacement.cache_hit() && &replacement.state() == older_state,
+      "all-live states fall back to the least recently used available state");
+  auto continuation = cache.Acquire(Tokens{2, 4, 5});
+  Expect(continuation.cache_hit() && continuation.cached_tokens() == 2 &&
+             &continuation.state() == newer_state,
+         "fallback eviction preserves the newer conversation frontier");
+}
+
 void TestByteCapacityEvictsBeforeSnapshotAllocation() {
   using gufo::server::SnapshotEventAction;
   using gufo::server::SnapshotEventReason;
@@ -703,6 +781,8 @@ int main() {
   TestLongestAvailablePrefixWins();
   TestWaitingAcquireCanBeCancelled();
   TestSnapshotCanBranchIntoTwoIndependentStateSlots();
+  TestAvailableStateWithoutFrontierIsPreferred();
+  TestLiveFrontierEvictionFallsBackToLru();
   TestByteCapacityEvictsBeforeSnapshotAllocation();
   TestConcurrentReservationsCannotOvercommitBudget();
   TestImpossibleReservationPreservesRetainedEntries();
