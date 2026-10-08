@@ -1,3 +1,4 @@
+import { text } from "./i18n.js";
 import { $, api, notice } from "./api.js";
 import { sameSettings } from "./settings-form.js";
 
@@ -26,9 +27,9 @@ export function createPresets(initial, form, action, onChange) {
       renderedRevision = document.revision;
     }
     $("preset-select").value = pendingId;
-    $("loaded-preset").textContent = `Loaded preset: ${selected().name}`;
+    text($("loaded-preset"), "Loaded preset: {name}", { name: selected().name });
     $("delete-preset").disabled = document.presets.length === 1;
-    $("saved-state").textContent = dirty() ? "Unsaved changes" : hasSaved ? "Preset saved" : "Not saved yet";
+    text($("saved-state"), dirty() ? "Unsaved changes" : hasSaved ? "Preset saved" : "Not saved yet");
   }
 
   async function change(request) {
@@ -62,7 +63,7 @@ export function createPresets(initial, form, action, onChange) {
       selectedId = pendingId = next;
       form.apply(savedValues());
       onChange();
-      notice(`Preset "${selected().name}" loaded for the next launch.`, true);
+      notice('Preset "{name}" loaded for the next launch.', true, { name: selected().name });
     });
   });
   $("save-button").addEventListener("click", () => action(save));
@@ -70,7 +71,7 @@ export function createPresets(initial, form, action, onChange) {
   for (const [button, operation] of [["save-as-preset", "create"], ["rename-preset", "rename"]]) {
     $(button).addEventListener("click", () => action(async () => {
       if (operation === "create" && !form.valid()) return;
-      $("preset-name-title").textContent = operation === "create" ? "Save as a new preset" : "Rename preset";
+      text($("preset-name-title"), operation === "create" ? "Save as a new preset" : "Rename preset");
       $("preset-name").value = operation === "create" ? "" : selected().name;
       if (await ask($("preset-name-dialog")) !== "save") return;
       await change({ action: operation, id: selectedId, name: $("preset-name").value,

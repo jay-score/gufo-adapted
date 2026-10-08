@@ -1,3 +1,4 @@
+import { text } from "./i18n.js";
 import { $, api } from "./api.js";
 
 export function initFilePicker(homeFolder) {
@@ -5,8 +6,8 @@ export function initFilePicker(homeFolder) {
 
   async function browse(path) {
     const version = ++browseVersion;
-    $("picker-error").textContent = "";
-    $("picker-entries").textContent = "Loading folder…";
+    text($("picker-error"), "");
+    text($("picker-entries"), "Loading folder…");
     $("select-folder").disabled = true;
     try {
       const result = await api(`browse?${new URLSearchParams({ path, kind: pickerKind })}`);
@@ -16,7 +17,7 @@ export function initFilePicker(homeFolder) {
       $("picker-filter").value = "";
       $("picker-roots").replaceChildren(...listing.roots.map((root, index) => {
         const button = document.createElement("button");
-        button.type = "button"; button.textContent = index === 0 ? "Home" : root;
+        button.type = "button"; if (index === 0) text(button, "Home"); else button.textContent = root;
         button.addEventListener("click", () => browse(root));
         return button;
       }));
@@ -25,8 +26,8 @@ export function initFilePicker(homeFolder) {
     } catch (error) {
       if (version !== browseVersion) return;
       listing = null;
-      $("picker-entries").textContent = "";
-      $("picker-error").textContent = error.message;
+      text($("picker-entries"), "");
+      text($("picker-error"), error.message);
     }
   }
 
@@ -39,29 +40,30 @@ export function initFilePicker(homeFolder) {
   function renderFiles() {
     const filter = $("picker-filter").value.toLocaleLowerCase();
     const entries = listing?.entries.filter((entry) => entry.name.toLocaleLowerCase().includes(filter)) || [];
+    delete $("picker-entries").dataset.i18n;
     $("picker-entries").replaceChildren(...entries.map((entry) => {
       const button = document.createElement("button"); button.type = "button";
       const icon = document.createElement("span"); icon.className = "file-icon";
-      icon.textContent = entry.directory ? "DIR" : pickerKind === "gguf" ? "GGUF" : "EXE";
+      text(icon, entry.directory ? "DIR" : pickerKind === "gguf" ? "GGUF" : "EXE");
       const name = document.createElement("span"); name.textContent = entry.name;
       button.append(icon, name);
       if (!entry.directory && entry.shards > 1) {
-        const shards = document.createElement("small"); shards.textContent = `${entry.shards} shards`;
+        const shards = document.createElement("small"); text(shards, "{count} shards", { count: entry.shards });
         button.append(shards);
       }
       button.addEventListener("click", () => entry.directory ? browse(entry.path) : choose(entry.path));
       return button;
     }));
-    if (!entries.length) $("picker-entries").textContent = "No matching files or folders.";
+    if (!entries.length) text($("picker-entries"), "No matching files or folders.");
   }
 
   document.querySelectorAll("[data-browse]").forEach((button) => button.addEventListener("click", () => {
     pickerTarget = button.dataset.browse; pickerKind = button.dataset.kind;
-    $("picker-title").textContent = button.getAttribute("aria-label") || (pickerKind === "folder" ? "Choose a folder" : "Choose a file");
+    text($("picker-title"), button.getAttribute("data-i18n-aria-label") || button.getAttribute("aria-label") || (pickerKind === "folder" ? "Choose a folder" : "Choose a file"));
     $("select-folder").hidden = pickerKind !== "folder";
     $("picker-roots").replaceChildren();
     const homeButton = document.createElement("button");
-    homeButton.type = "button"; homeButton.textContent = "Home";
+    homeButton.type = "button"; text(homeButton, "Home");
     homeButton.addEventListener("click", () => browse(homeFolder));
     $("picker-roots").append(homeButton);
     $("file-dialog").showModal();

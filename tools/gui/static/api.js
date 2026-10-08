@@ -1,4 +1,4 @@
-"use strict";
+import { text } from "./i18n.js";
 
 export const $ = (id) => document.getElementById(id);
 const token = document.querySelector('meta[name="gufo-token"]').content;
@@ -14,8 +14,8 @@ export async function api(path, body) {
   return result;
 }
 
-export function notice(message, success = false) {
-  $("notice").textContent = message;
+export function notice(message, success = false, values = {}) {
+  text($("notice"), message, values);
   $("notice").className = `notice${success ? " success" : ""}`;
   $("notice").hidden = !message;
 }

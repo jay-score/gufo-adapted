@@ -101,7 +101,7 @@
   --backdrop: #03080f99;
 }
 * { box-sizing: border-box; }
-body { margin: 0; color: var(--ink); background: var(--bg); font: 14px/1.55 "Segoe UI", system-ui, sans-serif; }
+body { margin: 0; color: var(--ink); background: var(--bg); font: 14px/1.55 "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
 button, input, select { font: inherit; }
 button, summary { cursor: pointer; }
 button { border: 1px solid var(--button-line); border-radius: 8px; padding: 9px 15px; background: var(--surface); color: var(--ink); font-weight: 600; white-space: nowrap; }
@@ -118,6 +118,12 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 label { display: block; margin: 14px 0 6px; font-size: 12px; font-weight: 600; }
 .topbar { height: 82px; padding: 0 max(24px, calc((100vw - 1120px) / 2)); display: flex; align-items: center; justify-content: space-between; background: var(--topbar); border-bottom: 1px solid var(--line); }
 .topbar-actions { display: flex; align-items: center; gap: 9px; }
+#language-select { width: auto; max-width: 130px; }
+.topbar-actions > * { flex-shrink: 0; }
+.i18n-text { color: inherit; font: inherit; letter-spacing: inherit; margin: 0; }
+:lang(zh-CN) h1, :lang(zh-CN) h2, :lang(zh-CN) .brand small { letter-spacing: normal; }
+:lang(zh-CN) .hint, :lang(zh-CN) label, :lang(zh-CN) .selected-file { font-size: 13px; }
+:lang(zh-CN) summary > span:not(.i18n-text) { font-size: 12px; }
 .theme-toggle { display: inline-flex; align-items: center; justify-content: center; width: 38px; padding-inline: 0; }
 .theme-toggle svg { width: 18px; height: 18px; display: block; fill: currentColor; }
 .theme-toggle .sun { display: none; }
@@ -210,3 +216,11 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
 @media (max-width: 900px) { .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { main { margin-inline: 16px; padding-top: 23px; } .columns { grid-template-columns: 1fr; } .local-label, .brand small { display: none; } h1 { font-size: 29px; } .card { padding: 19px; } .launch-bar { flex-wrap: wrap; padding: 16px; } .actions { width: 100%; } .actions .primary { flex: 1; } .advanced-grid { grid-template-columns: 1fr 1fr; } summary span { display: block; margin-left: 15px; } footer { flex-direction: column; gap: 6px; } }
 @media (prefers-reduced-motion: no-preference) { button { transition: background .12s, border-color .12s; } }
+.i18n-text[data-i18n] { display: inline; color: inherit; font: inherit; letter-spacing: inherit; margin: 0; }
+@media (max-width: 480px) {
+  .topbar { padding-inline: 16px; height: auto; min-height: 76px; gap: 12px; flex-wrap: wrap; padding-block: 12px; }
+  .topbar-actions { margin-left: auto; }
+  .topbar-actions button { padding-inline: 9px; }
+  .brand img { width: 38px; height: 38px; }
+  .brand { gap: 8px; }
+}

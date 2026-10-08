@@ -1,8 +1,11 @@
+import { text, rawText, initLanguage } from "./i18n.js";
 import { $, api, notice } from "./api.js";
 import { createSettingsForm, sameSettings } from "./settings-form.js";
 import { createPresets } from "./presets.js";
 import { initFilePicker } from "./file-picker.js";
 import { createRuntime } from "./runtime.js";
+
+initLanguage();
 
 let form, presets, busy = false, closed = false;
 let previewTimer, previewVersion = 0;
@@ -17,17 +20,17 @@ function updateControls() {
   $("exit-button").disabled = busy || closed;
   presets?.render();
   const different = active && state.running && form && !sameSettings(form.values(), state.running.settings);
-  $("next-launch-note").textContent = different
+  text($("next-launch-note"), different
     ? "These settings differ from the running server. Changes apply to the next launch."
-    : "Changes apply to the next launch.";
+    : "Changes apply to the next launch.");
 }
 
 async function preview(version) {
   try {
     const result = await api("preview", form.values());
-    if (version === previewVersion) $("command").textContent = result.command;
+    if (version === previewVersion) rawText($("command"), result.command);
   } catch (error) {
-    if (version === previewVersion) $("command").textContent = error.message;
+    if (version === previewVersion) text($("command"), error.message);
   }
 }
 
@@ -42,7 +45,7 @@ async function action(callback) {
   if (busy || closed) return;
   busy = true; updateControls(); notice("");
   try { return await callback(); }
-  catch (error) { notice(error.message); }
+  catch (error) { notice(error.message, false, error.i18nValues); }
   finally { busy = false; updateControls(); }
 }
 
@@ -72,9 +75,9 @@ updateControls();
     form = createSettingsForm(result.settings, result.families, result.modes, edited);
     presets = createPresets(result, form, action, edited);
     initFilePicker(result.home);
-    $("settings-location").textContent = `Settings · ${result.path}`;
+    text($("settings-location"), "Settings · {path}", { path: result.path });
     edited();
-    if (result.warning) notice(`${result.warning} Defaults are shown; your saved file has not been changed.`);
+    if (result.warning) notice("{detail} Defaults are shown; your saved file has not been changed.", false, { detail: result.warning });
     runtime.poll();
-  } catch (error) { notice(`Could not load settings. ${error.message}`); }
+  } catch (error) { notice("Could not load settings. {detail}", false, { detail: error.message }); }
 })();
