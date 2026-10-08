@@ -1,7 +1,9 @@
 {
  "model": "fn",
  "workload": "w1",
+ "revision": 2,
  "restart_at": 12,
+ "abrupt": false,
  "ram_budget": 9202923520,
  "staging": 2300730880,
  "actual_prefill_s": 129.61,
@@ -15,7 +17,7 @@
    "disk_write_bytes": 7049701528,
    "disk_restore_s": 1.62,
    "disk_restores": 1,
-   "ram_refusals": 28,
+   "ram_refusals": 59,
    "disk_write_s": 16.02,
    "first_after_restart": {
     "cached": 60560,
@@ -29,7 +31,7 @@
    "disk_write_bytes": 24066077778,
    "disk_restore_s": 1.62,
    "disk_restores": 1,
-   "ram_refusals": 8,
+   "ram_refusals": 11,
    "disk_write_s": 54.7,
    "first_after_restart": {
     "cached": 60560,
@@ -43,7 +45,7 @@
    "disk_write_bytes": 5732463698,
    "disk_restore_s": 1.83,
    "disk_restores": 1,
-   "ram_refusals": 8,
+   "ram_refusals": 11,
    "disk_write_s": 13.03,
    "first_after_restart": {
     "cached": 60560,
@@ -57,7 +59,7 @@
    "disk_write_bytes": 5730266898,
    "disk_restore_s": 1.83,
    "disk_restores": 1,
-   "ram_refusals": 18,
+   "ram_refusals": 20,
    "disk_write_s": 13.02,
    "first_after_restart": {
     "cached": 60560,
