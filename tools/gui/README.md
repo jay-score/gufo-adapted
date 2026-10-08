@@ -87,7 +87,19 @@ version 2 and preserves the original as `launcher.json.bak` (an existing backup
 is never replaced). Corrupt files likewise remain untouched until an explicit
 save, which preserves a backup before replacement.
 
-The button at the top right of the bar switches between the light paper palette
+The **Language** selector in the top bar switches between **English** and
+**简体中文** (Simplified Chinese). English is the default on a first visit.
+The choice is remembered in that browser's local storage (`gufo.language`),
+separately from `launcher.json` and **Save preset**. Switching languages keeps
+unsaved form edits, the selected preset and open dialogs; it does not reload
+the page, save settings or start/stop the engine. If storage is blocked, the
+choice still applies until the page is reloaded.
+
+Interface labels, launcher errors and runtime status are translated. Model and
+preset names, paths, command previews and raw engine logs remain unchanged.
+Unknown messages fall back to their English source text.
+
+The theme button in the top bar switches between the light paper palette
 and a dark navy one; cards, fields, the status pill, metrics and the file picker
 all follow it. Until you press it, the launcher follows your operating-system
 theme. The choice is remembered in that browser's local storage, not in
@@ -188,8 +200,10 @@ node --experimental-vm-modules --test tests/tools/gui_dom_test.mjs
 ```
 
 Set `GUI_TEST_PYTHON` to a Python with the GUI requirements if the launcher
-environment is elsewhere. These tests cover preset switching, sidecar restoration,
-file selection, and runtime display; they do not verify browser layout.
+environment is elsewhere. CI runs the DOM suite on Windows and Linux. These tests
+cover preset switching, sidecar restoration, file selection, runtime display,
+language persistence, translation placeholders and switching with pending edits
+or errors; they do not verify browser layout.
 
 ## Module boundaries
 
@@ -202,6 +216,10 @@ file selection, and runtime display; they do not verify browser layout.
   lightweight artifact checks. Neither launches a process.
 - Browser modules separate form editing, presets, file picking, and runtime
   display. `app.js` wires them together through direct calls and callbacks.
+  `i18n.js` translates English source strings using `static/locales/zh-CN.js`;
+  missing entries retain the English text. Use `text()` with named placeholders
+  for dynamic UI messages, and keep user data out of translation keys. Template
+  text and accessible labels use `data-i18n` and `data-i18n-aria-label` attributes.
   `theme.js` remains independent and runs before first paint.
 
 To add another text-model family, define its supported modes, reasoning levels,

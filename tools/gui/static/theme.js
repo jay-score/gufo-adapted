@@ -29,7 +29,10 @@ function applyTheme() {
   const toggle = document.getElementById("theme-toggle");
   if (!toggle) return;
   toggle.setAttribute("aria-pressed", String(theme === "dark"));
-  toggle.setAttribute("aria-label", `Switch to the ${theme === "dark" ? "light" : "dark"} theme`);
+  const label = `Switch to the ${theme === "dark" ? "light" : "dark"} theme`;
+  toggle.setAttribute("data-i18n-aria-label", label);
+  toggle.setAttribute("aria-label", document.documentElement.lang === "zh-CN"
+    ? (theme === "dark" ? "切换为浅色主题" : "切换为深色主题") : label);
 }
 
 applyTheme();

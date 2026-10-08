@@ -1,3 +1,4 @@
+import { text, rawText, locale } from "./i18n.js";
 import { $, api } from "./api.js";
 
 export function createRuntime(onChange) {
@@ -13,10 +14,10 @@ export function createRuntime(onChange) {
     ]) {
       const value = metrics?.[key];
       $(id).textContent = Number.isFinite(value) && (!nonzero || value > 0)
-        ? value.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) : "—";
+        ? value.toLocaleString(locale(), { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) : "—";
     }
     const live = Number.isFinite(metrics?.requests_processing) && Number.isFinite(metrics?.requests_deferred);
-    $("metrics-note").textContent = state.state === "ready"
+    text($("metrics-note"), state.state === "ready"
       ? !metrics ? "Performance unavailable. Retrying…"
         : !live ? "Update the Gufo executable to enable live rates and request counts."
         : metrics.prompt_tokens_total === 0 && metrics.generated_tokens_total === 0
@@ -25,10 +26,10 @@ export function createRuntime(onChange) {
           : "Live totals and request counts update about once per second."
       : ({ loading: "Performance will appear when the model is ready.",
            stopping: "Stopping Gufo…", failed: "Performance unavailable while Gufo is stopped.",
-           disconnected: "Performance unavailable. Launcher disconnected." }[state.state] || "Start Gufo to see performance.");
-    $("metrics-detail").textContent = metrics && !live
+           disconnected: "Performance unavailable. Launcher disconnected." }[state.state] || "Start Gufo to see performance."));
+    text($("metrics-detail"), metrics && !live
       ? "This executable reports totals after requests finish and includes cached prompt tokens. Completed speeds retain the latest nonzero measurement."
-      : "Live rates cover all requests between polls. Prompt totals and live prefill exclude cached tokens. Completed speeds retain the latest nonzero measurement.";
+      : "Live rates cover all requests between polls. Prompt totals and live prefill exclude cached tokens. Completed speeds retain the latest nonzero measurement.");
   }
 
   function renderStatus(state) {
@@ -36,24 +37,27 @@ export function createRuntime(onChange) {
     renderMetrics(state);
     const active = state.pid != null || ["loading", "ready", "stopping"].includes(state.state);
     const launch = state.running;
-    $("running-preset").textContent = launch
-      ? `${active ? "Running" : "Last launch"}: ${launch.preset_name}${launch.modified ? " (modified)" : ""}` : "";
+    text($("running-preset"), launch ? "{state}: {name}{modified}" : "", launch ? {
+      state: active ? "Running" : "Last launch", name: launch.preset_name,
+      modified: launch.modified ? " (modified)" : "",
+    } : {});
     const title = state.state[0].toUpperCase() + state.state.slice(1);
-    $("status").textContent = state.state === "loading" ? `${title} · ${state.elapsed_seconds}s` : title;
+    text($("status"), state.state === "loading" ? "{state} · {seconds}s" : title,
+      { state: title, seconds: state.elapsed_seconds });
     $("status").className = `status ${state.state}`;
     $("api-url").textContent = state.base_url || `http://127.0.0.1:${$("port").value || 8080}/v1`;
-    $("active-model").textContent = state.model_name ? `Model: ${state.model_name}` : "";
-    $("runtime-note").textContent = state.error || ({
+    text($("active-model"), state.model_name ? "Model: {name}" : "", { name: state.model_name });
+    text($("runtime-note"), state.error || ({
       stopped: "Start Gufo to connect your OpenAI-compatible client.",
       loading: "Loading weights. This can take a few minutes; the process log shows progress.",
-      ready: `Ready for requests · PID ${state.pid}. Closing this tab keeps Gufo running.`,
+      ready: "Ready for requests · PID {pid}. Closing this tab keeps Gufo running.",
       stopping: "Stopping Gufo and releasing its GPU memory…",
-    }[state.state] || "Check the process log.");
+    }[state.state] || "Check the process log."), { pid: state.pid });
     if (state.state === "failed") $("logs-details").open = true;
     const output = state.logs.join("\n") || "No process output yet.";
     if ($("logs").textContent !== output) {
       const atBottom = $("logs").scrollTop + $("logs").clientHeight >= $("logs").scrollHeight - 30;
-      $("logs").textContent = output;
+      if (state.logs.length) rawText($("logs"), output); else text($("logs"), output);
       if (atBottom) $("logs").scrollTop = $("logs").scrollHeight;
     }
     onChange(state);
@@ -66,10 +70,10 @@ export function createRuntime(onChange) {
       if (!closed) renderStatus(state);
     } catch (error) {
       if (closed) return;
-      $("status").textContent = "Disconnected";
+      text($("status"), "Disconnected");
       renderMetrics({ state: "disconnected" });
       $("status").className = "status failed";
-      $("runtime-note").textContent = `Cannot reach the launcher. ${error.message}`;
+      text($("runtime-note"), "Cannot reach the launcher. {detail}", { detail: error.message });
     }
     if (!closed) setTimeout(poll, 1000);
   }
@@ -81,10 +85,10 @@ export function createRuntime(onChange) {
     close() {
       closed = true;
       renderMetrics({ state: "stopped" });
-      $("status").textContent = "Launcher closed";
+      text($("status"), "Launcher closed");
       $("status").className = "status stopped";
-      $("runtime-note").textContent = "Gufo has stopped. You can close this tab.";
-      $("running-preset").textContent = "";
+      text($("runtime-note"), "Gufo has stopped. You can close this tab.");
+      text($("running-preset"), "");
     },
   };
 }

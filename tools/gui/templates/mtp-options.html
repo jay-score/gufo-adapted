@@ -1,9 +1,9 @@
-        <fieldset id="mtp-options"><legend>MTP options · Flash-Next</legend>
+        <fieldset id="mtp-options"><legend data-i18n="MTP options · Flash-Next">MTP options · Flash-Next</legend>
           <div class="field-grid advanced-grid">
-            <div><label for="draft_tokens">Max draft tokens</label><input id="draft_tokens" name="draft_tokens" type="number" min="1" max="7" step="1" required></div>
-            <div><label for="mtp_policy">Draft policy</label><select id="mtp_policy" name="mtp_policy"><option value="length">Length (default)</option><option value="survival">Survival</option></select></div>
-            <div><label for="mtp_draft_vocab">Draft vocabulary</label><select id="mtp_draft_vocab" name="mtp_draft_vocab"><option value="full">Full (default)</option><option value="latin">Latin / code</option></select></div>
+            <div><label for="draft_tokens" data-i18n="Max draft tokens">Max draft tokens</label><input id="draft_tokens" name="draft_tokens" type="number" min="1" max="7" step="1" required></div>
+            <div><label for="mtp_policy" data-i18n="Draft policy">Draft policy</label><select id="mtp_policy" name="mtp_policy"><option value="length" data-i18n="Length (default)">Length (default)</option><option value="survival" data-i18n="Survival">Survival</option></select></div>
+            <div><label for="mtp_draft_vocab" data-i18n="Draft vocabulary">Draft vocabulary</label><select id="mtp_draft_vocab" name="mtp_draft_vocab"><option value="full" data-i18n="Full (default)">Full (default)</option><option value="latin" data-i18n="Latin / code">Latin / code</option></select></div>
           </div>
-          <label class="check-label"><input id="prompt_lookup" name="prompt_lookup" type="checkbox"> Prompt lookup</label>
-          <p class="hint">Survival and prompt lookup target single-session decoding. Latin vocabulary is intended for English/code and may slow drafting in other languages.</p>
+          <label class="check-label"><input id="prompt_lookup" name="prompt_lookup" type="checkbox"> <span class="i18n-text" data-i18n="Prompt lookup">Prompt lookup</span></label>
+          <p class="hint" data-i18n="Survival and prompt lookup target single-session decoding. Latin vocabulary is intended for English/code and may slow drafting in other languages.">Survival and prompt lookup target single-session decoding. Latin vocabulary is intended for English/code and may slow drafting in other languages.</p>
         </fieldset>

@@ -1,3 +1,4 @@
+import { text, option } from "./i18n.js";
 import { $ } from "./api.js";
 
 export function sameSettings(left, right) {
@@ -10,7 +11,7 @@ export function createSettingsForm(initial, families, modes, onEdit) {
   const keys = Object.keys(initial);
   let previousModel = initial.model;
   let previousFamily = initial.model_family;
-  $("model_family").replaceChildren(...Object.entries(families).map(([id, family]) => new Option(family.label, id)));
+  $("model_family").replaceChildren(...Object.entries(families).map(([id, family]) => option(family.label, id)));
 
   function values() {
     return Object.fromEntries(keys.map((key) => {
@@ -20,7 +21,7 @@ export function createSettingsForm(initial, families, modes, onEdit) {
   }
 
   function choices(id, entries, value) {
-    $(id).replaceChildren(...entries.map(([key, label]) => new Option(label, key)));
+    $(id).replaceChildren(...entries.map(([key, label]) => option(label, key)));
     $(id).value = value;
   }
 
@@ -36,7 +37,7 @@ export function createSettingsForm(initial, families, modes, onEdit) {
     }
     $("reasoning_effort").disabled = $("think").value === "off";
     $("disk-cache-options").disabled = !$("cache_disk").checked;
-    $("family-hint").textContent = family.hint;
+    text($("family-hint"), family.hint);
     $("family-defaults").hidden = !Object.keys(family.defaults).length;
     for (const key of ["model", "mtp_model", "dflash_model", "mmproj"]) {
       $(key).title = $(key).value;
@@ -84,6 +85,13 @@ export function createSettingsForm(initial, families, modes, onEdit) {
   return { values, apply, valid() {
     if (element.checkValidity()) return true;
     const input = element.querySelector("input:invalid, select:invalid");
-    throw new Error(`${input.labels?.[0]?.textContent || input.id}: ${input.validationMessage}`);
+    const label = input.labels?.[0];
+    const field = label?.dataset.i18n || label?.querySelector("[data-i18n]")?.dataset.i18n || input.id;
+    const message = input.validity.valueMissing ? "{field}: enter a value."
+      : input.validity.rangeUnderflow || input.validity.rangeOverflow
+        ? "{field}: enter a number from {low} to {high}."
+        : "{field}: enter a valid value.";
+    // Keep the source message so an existing notice follows language changes.
+    throw Object.assign(new Error(message), { i18nValues: { field, low: input.min, high: input.max } });
   } };
 }

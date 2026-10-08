@@ -29,10 +29,11 @@ with tempfile.TemporaryDirectory() as directory:
     print(json.dumps({'html': html, 'initial': initial}))
 `], { cwd: root, encoding: "utf8" }));
 
-async function setup(t) {
+async function setup(t, language = "en") {
   const dom = new JSDOM(fixture.html, { url: "http://localhost/", runScripts: "outside-only" });
   t.after(() => dom.window.close());
   const { window } = dom;
+  if (language) window.localStorage.setItem("gufo.language", language);
   window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   window.HTMLDialogElement.prototype.close = function (value = this.returnValue) {
     this.returnValue = value; this.open = false; this.dispatchEvent(new window.Event("close"));
@@ -40,14 +41,14 @@ async function setup(t) {
   const modules = new Map();
   async function load(name) {
     if (modules.has(name)) return modules.get(name);
-    const code = await readFile(path.join(root, "tools/gui/static", name), "utf8");
-    const module = new vm.SourceTextModule(code, { context: dom.getInternalVMContext(), identifier: name });
+    const module = readFile(path.join(root, "tools/gui/static", name), "utf8").then((code) =>
+      new vm.SourceTextModule(code, { context: dom.getInternalVMContext(), identifier: name }));
     modules.set(name, module);
-    await module.link((specifier) => load(specifier.replace(/^\.\//, "")));
     return module;
   }
   async function use(name) {
     const module = await load(name);
+    if (module.status === "unlinked") await module.link((specifier) => load(specifier.replace(/^\.\//, "")));
     if (module.status !== "evaluated") await module.evaluate();
     return module.namespace;
   }
@@ -61,6 +62,180 @@ function edit(env, id, value) {
   env.$(id).dispatchEvent(new env.window.Event("change", { bubbles: true }));
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+test("English is the initial language and Chinese static UI strings have translations", async (t) => {
+  const env = await setup(t, null);
+  const { initLanguage, setLanguage, locale } = await env.use("i18n.js");
+  const { messages } = await env.use("locales/zh-CN.js");
+  for (const element of env.window.document.querySelectorAll("*")) {
+    for (const attribute of element.attributes) {
+      if (attribute.name === "data-i18n" || attribute.name.startsWith("data-i18n-")) {
+        assert.ok(Object.hasOwn(messages, attribute.value), `Untranslated string: ${attribute.value}`);
+      }
+    }
+  }
+  initLanguage();
+  assert.equal(locale(), "en");
+  assert.equal(env.window.document.documentElement.lang, "en");
+  assert.equal(env.$("language-select").value, "en");
+  setLanguage("zh-CN");
+  assert.equal(locale(), "zh-CN");
+  assert.equal(env.window.document.documentElement.lang, "zh-CN");
+  assert.equal(env.$("files-heading").textContent, "模型文件");
+  assert.equal(env.$("model").placeholder, "选择模型文件或第一个分片");
+  assert.equal(env.$("language-select").getAttribute("aria-label"), "界面语言");
+  setLanguage("en");
+  assert.equal(env.window.document.title, "Gufo · Local launcher");
+  assert.equal(env.window.localStorage.getItem("gufo.language"), "en");
+});
+
+test("saved language is restored and invalid or blocked storage falls back to English", async (t) => {
+  for (const [saved, expected] of [["zh-CN", "zh-CN"], ["en", "en"], ["invalid", "en"]]) {
+    const env = await setup(t, saved);
+    const { initLanguage, locale } = await env.use("i18n.js");
+    initLanguage();
+    assert.equal(locale(), expected);
+    assert.equal(env.$("language-select").value, expected);
+  }
+  const env = await setup(t, null);
+  Object.defineProperty(env.window, "localStorage", { get() { throw new Error("Storage blocked"); } });
+  const { initLanguage, setLanguage, locale } = await env.use("i18n.js");
+  initLanguage();
+  assert.equal(locale(), "en");
+  setLanguage("zh-CN");
+  assert.equal(env.$("files-heading").textContent, "模型文件");
+  setLanguage("unsupported");
+  assert.equal(locale(), "zh-CN");
+  setLanguage("en");
+  assert.equal(env.$("files-heading").textContent, "Model files");
+});
+
+test("translations preserve placeholders and unknown source messages", async (t) => {
+  const env = await setup(t, "zh-CN");
+  const { messages } = await env.use("locales/zh-CN.js");
+  const { t: translate } = await env.use("i18n.js");
+  for (const [source, translated] of Object.entries(messages)) {
+    assert.deepEqual((translated.match(/\{\w+\}/g) || []).sort(),
+      (source.match(/\{\w+\}/g) || []).sort(), source);
+  }
+  for (const message of ["Unknown engine error", "constructor", "toString", "__proto__"])
+    assert.equal(translate(message), message);
+});
+
+test("theme button labels follow both theme and language changes", async (t) => {
+  const env = await setup(t);
+  env.window.matchMedia = () => ({ matches: false, addEventListener() {} });
+  env.window.eval(await readFile(path.join(root, "tools/gui/static/theme.js"), "utf8"));
+  env.window.document.dispatchEvent(new env.window.Event("DOMContentLoaded"));
+  const { initLanguage, setLanguage } = await env.use("i18n.js");
+  initLanguage();
+  const toggle = env.$("theme-toggle");
+  assert.equal(toggle.getAttribute("aria-label"), "Switch to the dark theme");
+  setLanguage("zh-CN");
+  assert.equal(toggle.getAttribute("aria-label"), "切换为深色主题");
+  toggle.click();
+  assert.equal(toggle.getAttribute("aria-pressed"), "true");
+  assert.equal(toggle.getAttribute("aria-label"), "切换为浅色主题");
+  setLanguage("en");
+  assert.equal(toggle.getAttribute("aria-label"), "Switch to the light theme");
+  toggle.click();
+  assert.equal(toggle.getAttribute("aria-label"), "Switch to the dark theme");
+});
+
+test("validation notices switch languages without saving or losing invalid drafts", async (t) => {
+  const env = await setup(t, "zh-CN");
+  const requests = [];
+  env.window.fetch = async (url) => {
+    requests.push(url);
+    const response = url === "/api/settings" ? structuredClone(env.initial)
+      : url === "/api/status" ? { state: "stopped", logs: [], pid: null }
+      : url === "/api/preview" ? { command: "gufo" }
+      : assert.fail(`Unexpected request ${url}`);
+    return { ok: true, json: async () => response };
+  };
+  await env.use("app.js"); await tick();
+  const { setLanguage } = await env.use("i18n.js");
+  edit(env, "context", "");
+  env.$("save-button").click(); await tick();
+  assert.equal(env.$("notice").textContent, "上下文长度（token）：请填写此项。");
+  setLanguage("en");
+  assert.equal(env.$("notice").textContent, "Context tokens: enter a value.");
+  assert.equal(env.$("context").value, "");
+  edit(env, "context", "32768");
+  edit(env, "temperature", "3");
+  env.$("save-button").click(); await tick();
+  assert.equal(env.$("notice").textContent, "Temperature: enter a number from 0 to 2.");
+  setLanguage("zh-CN");
+  assert.equal(env.$("notice").textContent, "温度（Temperature）：请输入 0 到 2 之间的数值。");
+  assert.equal(env.$("temperature").value, "3");
+  assert.equal(env.$("saved-state").textContent, "有未保存的更改");
+  assert.ok(requests.every((url) => ["/api/settings", "/api/status", "/api/preview"].includes(url)));
+});
+
+test("language switching preserves drafts, sidecars, pending choices, and literal user names", async (t) => {
+  const env = await setup(t, "zh-CN");
+  const { initLanguage, setLanguage } = await env.use("i18n.js");
+  const { createSettingsForm } = await env.use("settings-form.js");
+  const { createPresets } = await env.use("presets.js");
+  initLanguage();
+  const name = '中文预设 <img src=x> {name}';
+  env.initial.document.presets[0].name = name;
+  env.initial.document.presets.push({ ...env.initial.document.presets[0], id: "second", name: "第二个" });
+  const form = createSettingsForm(env.initial.settings, env.initial.families, env.initial.modes, () => {});
+  form.apply({ ...env.initial.settings, model_family: "qwen38_27b", speculative: "dflash2",
+    model: "C:\\中文模型\\主模型.gguf", dflash_model: "C:\\中文模型\\草稿.gguf", temperature: 0.42 });
+  const presets = createPresets(env.initial, form, () => {}, () => {});
+  presets.render();
+  edit(env, "preset-select", "second");
+  presets.render();
+  const before = JSON.stringify(form.values());
+  setLanguage("en");
+  setLanguage("zh-CN");
+  assert.equal(JSON.stringify(form.values()), before);
+  assert.equal(presets.dirty(), true);
+  assert.equal(env.$("preset-select").value, "second");
+  assert.equal(env.$("loaded-preset").textContent, `当前预设：${name}`);
+  assert.equal(env.$("loaded-preset").querySelector("img"), null);
+  assert.equal(env.$("speculative").options[0].text, "关闭");
+});
+
+test("Chinese errors, running state, and metrics retain data across language changes", async (t) => {
+  const env = await setup(t, "zh-CN");
+  const { t: translate, initLanguage, setLanguage } = await env.use("i18n.js");
+  const { createRuntime } = await env.use("runtime.js");
+  initLanguage();
+  assert.equal(translate("context: enter a whole number from 0 to 99."), "上下文长度：请输入 0 到 99 之间的整数。");
+  assert.equal(translate("Port 8080 is already in use. Choose another port."), "端口 8080 已被占用，请选择其他端口。");
+  assert.equal(translate("Model: select an existing GGUF file."), "主模型：请选择实际存在的 GGUF 文件。");
+  assert.equal(translate("Unrecognized engine message: untouched"), "Unrecognized engine message: untouched");
+  const runtime = createRuntime(() => {});
+  runtime.render({ state: "ready", pid: 123, logs: ["raw engine log"], model_name: "中文-model",
+    running: { preset_name: "中文预设", modified: true }, metrics: {
+      prefill_tps: 100, generation_tps: 50, prompt_tokens_total: 24, generated_tokens_total: 12,
+    } });
+  assert.equal(env.$("running-preset").textContent, "运行中：中文预设（含未保存的更改）");
+  assert.equal(env.$("status").textContent, "已就绪");
+  assert.match(env.$("metrics-note").textContent, /当前引擎/);
+  setLanguage("en");
+  assert.equal(env.$("running-preset").textContent, "Running: 中文预设 (modified)");
+  assert.equal(env.$("logs").textContent, "raw engine log");
+});
+
+test("a language switch does not remove file picker entries or translate file names", async (t) => {
+  const env = await setup(t, "zh-CN");
+  const { initLanguage, setLanguage } = await env.use("i18n.js");
+  const { initFilePicker } = await env.use("file-picker.js");
+  initLanguage();
+  env.window.fetch = async () => ({ ok: true, json: async () => ({ path: "C:\\模型", parent: "C:\\",
+    roots: ["C:\\用户"], entries: [{ name: "中文模型.gguf", path: "C:\\模型\\中文模型.gguf", directory: false, shards: 4 }] }) });
+  initFilePicker("C:\\用户");
+  env.window.document.querySelector('[data-browse="model"]').click(); await tick();
+  setLanguage("en");
+  assert.match(env.$("picker-entries").textContent, /中文模型.gguf/);
+  assert.match(env.$("picker-entries").textContent, /4 shards/);
+  setLanguage("zh-CN");
+  assert.match(env.$("picker-entries").textContent, /4 个分片/);
+});
 
 test("restoring a preset keeps sidecars; changing its model clears them", async (t) => {
   const env = await setup(t);
