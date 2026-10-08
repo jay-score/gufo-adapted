@@ -1,5 +1,8 @@
 // English source strings remain the fallback. Placeholders are inserted as text.
 export const messages = {
+  "RAM snapshot limit (GiB)": "内存快照上限 (GiB)",
+  "cache_ram_gib": "内存快照上限",
+  "0 keeps automatic sizing. A positive limit caps retained RAM snapshots within the engine's memory budget. Lower limits may require more prompt processing. Model weights, live context and disk staging use separate memory. Restart Gufo to apply.": "0 保持自动设置。正值限制保留的内存快照，且不会超过引擎的内存预算。较低的上限可能需要重新处理更多提示内容。模型权重、当前上下文和磁盘暂存使用独立内存。重启 Gufo 后生效。",
   "Gufo · Local launcher": "Gufo · 本地模型管理器",
   "Gufo owl": "Gufo 猫头鹰标志",
   "LOCAL LAUNCHER": "本地模型管理器",

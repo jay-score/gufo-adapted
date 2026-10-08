@@ -471,6 +471,7 @@ void PrintServeHelp(std::string_view program_name,
         server::kDefaultMaxBufferedOutputBytes;
     std::size_t max_buffered_output_bytes_total =
         server::kDefaultMaxBufferedOutputBytesTotal;
+    std::size_t cache_ram_bytes = 0;
     std::filesystem::path cache_disk_directory;
     std::size_t cache_disk_bytes =
         server::TextRunnerDiskCacheOptions::kDefaultCapacityBytes;
@@ -581,6 +582,11 @@ void PrintServeHelp(std::string_view program_name,
         "", "--max-buffered-output-total", "N",
         "Maximum queued stream bytes across requests (default: 262144)",
         "Scheduling", &max_buffered_output_bytes_total);
+    parser.AddOption(
+        "", "--cache-ram-bytes", "N",
+        "Retained RAM snapshot cap (default: 0 = auto; positive values lower "
+        "the automatic budget)",
+        "Cache", &cache_ram_bytes);
     parser.AddOption("", "--cache-disk", "DIR",
                      "Opt-in restart-safe continuation cache directory",
                      "Cache", &cache_disk_directory);
@@ -942,6 +948,7 @@ int RunServe(std::span<const char* const> args) {
         server::kDefaultMaxBufferedOutputBytes;
     std::size_t max_buffered_output_bytes_total =
         server::kDefaultMaxBufferedOutputBytesTotal;
+    std::size_t cache_ram_bytes = 0;
     std::filesystem::path cache_disk_directory;
     std::size_t cache_disk_bytes =
         server::TextRunnerDiskCacheOptions::kDefaultCapacityBytes;
@@ -1048,6 +1055,11 @@ int RunServe(std::span<const char* const> args) {
         "", "--max-buffered-output-total", "N",
         "Maximum queued stream bytes across requests (default: 262144)",
         "Scheduling", &max_buffered_output_bytes_total);
+    llm_parser.AddOption(
+        "", "--cache-ram-bytes", "N",
+        "Retained RAM snapshot cap (default: 0 = auto; positive values lower "
+        "the automatic budget)",
+        "Cache", &cache_ram_bytes);
     llm_parser.AddOption("", "--cache-disk", "DIR",
                          "Opt-in restart-safe continuation cache directory",
                          "Cache", &cache_disk_directory);
@@ -1192,7 +1204,10 @@ int RunServe(std::span<const char* const> args) {
                            .staging_capacity_bytes = cache_disk_staging_bytes,
                            .model_artifact_fingerprint = {},
                        },
-                       vision_model_path)) {
+                       vision_model_path,
+                       server::TextRunnerRamCacheOptions{
+                           .capacity_bytes = cache_ram_bytes,
+                       })) {
       std::cerr << "Error loading model '" << model << "': " << err << "\n";
       return 1;
     }

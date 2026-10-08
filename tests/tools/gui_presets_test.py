@@ -39,7 +39,7 @@ class PresetsTest(unittest.TestCase):
             self.assertEqual(path.with_name("launcher.json.bak").read_bytes(), original)
 
     def test_cache_defaults_upgrade_in_memory_and_save_per_preset(self):
-        fields = ("preserve_thinking", "cache_disk", "cache_disk_dir", "cache_disk_gib", "cache_disk_staging_gib")
+        fields = ("preserve_thinking", "cache_ram_gib", "cache_disk", "cache_disk_dir", "cache_disk_gib", "cache_disk_staging_gib")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "launcher.json"
             legacy = new_document()
@@ -51,8 +51,9 @@ class PresetsTest(unittest.TestCase):
             values = resolved_settings(document)
             self.assertTrue(values["preserve_thinking"])
             self.assertFalse(values["cache_disk"])
+            self.assertEqual(values["cache_ram_gib"], 0)
             self.assertEqual(path.read_bytes(), original)
-            changed = values | {"preserve_thinking": False, "cache_disk": True,
+            changed = values | {"preserve_thinking": False, "cache_ram_gib": 2, "cache_disk": True,
                                 "cache_disk_dir": str(Path(directory) / "cache"),
                                 "cache_disk_gib": 16, "cache_disk_staging_gib": 8}
             document = self.change(document, action="create", name="Disk cache", settings=changed)

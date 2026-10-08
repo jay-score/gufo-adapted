@@ -31,6 +31,9 @@ The supported modalities are LLM, image, video, and audio (TTS, ASR).
 
 - `context` — maximum context capacity; memory use depends on the model and
   the number of resident sessions.
+- `cacheRamBytes` — cap on retained RAM continuation snapshots in HTTP serving.
+  Zero keeps automatic sizing; a positive value lowers the model's automatic
+  budget. This does not cap weights, live session state or disk staging.
 - `prefillChunk` — prompt tokens processed between active decode steps in
   HTTP serving. Model runtimes choose their own internal prefill batch sizes.
 - `maxTokens` — maximum number of tokens a request may generate. In practice:

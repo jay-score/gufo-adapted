@@ -94,6 +94,9 @@
         </div>
       </div>
       <details class="card advanced"><summary><span class="i18n-text" data-i18n="More options">More options</span> <span data-i18n="Disk cache, sessions, repetition penalties and MTP">Disk cache, sessions, repetition penalties and MTP</span></summary>
+        <label for="cache_ram_gib" data-i18n="RAM snapshot limit (GiB)">RAM snapshot limit (GiB)</label>
+        <input id="cache_ram_gib" name="cache_ram_gib" type="number" min="0" max="65536" step="1" required>
+        <p class="hint" data-i18n="0 keeps automatic sizing. A positive limit caps retained RAM snapshots within the engine's memory budget. Lower limits may require more prompt processing. Model weights, live context and disk staging use separate memory. Restart Gufo to apply.">0 keeps automatic sizing. A positive limit caps retained RAM snapshots within the engine's memory budget. Lower limits may require more prompt processing. Model weights, live context and disk staging use separate memory. Restart Gufo to apply.</p>
         <label class="check-label"><input id="cache_disk" name="cache_disk" type="checkbox"> <span class="i18n-text" data-i18n="Enable disk continuation cache">Enable disk continuation cache</span></label>
         <p class="hint" data-i18n="Off by default. Reuses compatible snapshots after an engine restart. RAM caching works independently. Stop and Exit do not wait for pending disk writes; already written snapshots remain reusable.">Off by default. Reuses compatible snapshots after an engine restart. RAM caching works independently. Stop and Exit do not wait for pending disk writes; already written snapshots remain reusable.</p>
         <fieldset id="disk-cache-options"><legend data-i18n="Disk cache settings">Disk cache settings</legend>

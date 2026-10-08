@@ -22,6 +22,7 @@ DEFAULTS = {
     "think": "on",
     "reasoning_effort": "auto",
     "preserve_thinking": True,
+    "cache_ram_gib": 0,
     "cache_disk": False,
     "cache_disk_dir": str(Path(os.environ["LOCALAPPDATA"]) / "Gufo" / "cache"
                           if os.environ.get("LOCALAPPDATA") else Path.home() / ".cache" / "gufo"),
@@ -50,6 +51,7 @@ INTEGER_LIMITS = {
     "port": (1, 65535), "sessions": (1, 64), "top_k": (0, 2**31 - 1),
     "seed": (-1, 2**53 - 1), "repeat_last_n": (0, 2**32 - 1),
     "draft_tokens": (1, 7),
+    "cache_ram_gib": (0, 65536),
     "cache_disk_gib": (1, 65536), "cache_disk_staging_gib": (0, 65536),
 }
 FLOAT_LIMITS = {

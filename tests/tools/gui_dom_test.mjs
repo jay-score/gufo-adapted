@@ -514,3 +514,19 @@ test("application initializes and previews edits without launching or saving", a
   assert.equal(env.$("command").textContent, "gufo --context 65536");
   assert.deepEqual([...new Set(requests)].sort(), ["/api/preview", "/api/settings", "/api/status"]);
 });
+
+
+test("RAM snapshot cap stays editable without disk caching and follows form settings", async (t) => {
+  const env = await setup(t);
+  const { createSettingsForm } = await env.use("settings-form.js");
+  const form = createSettingsForm(env.initial.settings, env.initial.families, env.initial.modes, () => {});
+  assert.equal(env.$("disk-cache-options").disabled, true);
+  assert.equal(env.$("cache_ram_gib").matches(":disabled"), false);
+  edit(env, "cache_ram_gib", "2");
+  assert.equal(form.values().cache_ram_gib, 2);
+  assert.equal(form.valid(), true);
+  form.apply({ ...env.initial.settings, cache_ram_gib: 4 });
+  assert.equal(env.$("cache_ram_gib").value, "4");
+  edit(env, "cache_ram_gib", "-1");
+  assert.throws(() => form.valid());
+});
