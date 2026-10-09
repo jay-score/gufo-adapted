@@ -516,7 +516,9 @@ User message content and `function_call_output.output` arrays accept
 alongside text parts. Image placement relative to text is preserved, including
 inside tool results. Images use the same model-owned vision pipeline and
 request-wide limits as Chat Completions: at most 16 images and 20 MiB of encoded
-image data, with PNG/JPEG data URLs or public HTTPS URLs. Omitted detail means
+image data, with PNG/JPEG/static WebP data URLs or public HTTPS URLs.
+WebP may be lossy or lossless; alpha is dropped without compositing, as for PNG.
+EXIF orientation is applied. Animated WebP is rejected. Omitted detail means
 `auto`; other detail policies, uploaded `file_id` references, and images in
 assistant/system messages are rejected. Load a compatible BF16 projector for
 Qwen image input. Clients must resend the image content in stateless history.

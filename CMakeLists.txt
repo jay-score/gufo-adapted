@@ -41,6 +41,16 @@ find_package(Threads REQUIRED)
 find_package(CURL REQUIRED)
 find_package(PNG REQUIRED)
 find_package(JPEG REQUIRED)
+find_package(WebP CONFIG QUIET)
+if(NOT TARGET WebP::webp)
+  # Some Linux distributions ship libwebp without its CMake package config.
+  find_path(WEBP_INCLUDE_DIR NAMES webp/decode.h REQUIRED)
+  find_library(WEBP_LIBRARY NAMES webp REQUIRED)
+  add_library(WebP::webp UNKNOWN IMPORTED)
+  set_target_properties(WebP::webp PROPERTIES
+    IMPORTED_LOCATION "${WEBP_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${WEBP_INCLUDE_DIR}")
+endif()
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 set(GUFO_FFMPEG_EXECUTABLE "ffmpeg" CACHE STRING
   "FFmpeg executable used for generated media")
@@ -162,7 +172,7 @@ target_compile_definitions(gufo_core PRIVATE
   GUFO_FFMPEG_EXECUTABLE="${GUFO_FFMPEG_EXECUTABLE}"
   GUFO_FFPROBE_EXECUTABLE="${GUFO_FFPROBE_EXECUTABLE}")
 target_link_libraries(gufo_core PUBLIC ICU::uc ICU::i18n Threads::Threads
-  PNG::PNG JPEG::JPEG CURL::libcurl OpenSSL::Crypto)
+  PNG::PNG JPEG::JPEG WebP::webp CURL::libcurl OpenSSL::Crypto)
 
 add_subdirectory(src/models/qwen)
 add_subdirectory(src/models/qwen_image_21)
@@ -399,6 +409,11 @@ if (BUILD_TESTING)
   target_link_libraries(json_test PRIVATE gufo_core)
   add_test(NAME json_test COMMAND json_test)
   set_tests_properties(json_test PROPERTIES LABELS "cpu;json")
+
+  add_executable(image_test tests/core/image_test.cpp)
+  target_link_libraries(image_test PRIVATE gufo_core)
+  add_test(NAME image_test COMMAND image_test)
+  set_tests_properties(image_test PROPERTIES LABELS "cpu;image")
 
   add_executable(platform_tuning_test tests/core/platform_tuning_test.cpp)
   add_test(NAME platform_tuning_test COMMAND platform_tuning_test)

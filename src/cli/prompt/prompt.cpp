@@ -59,7 +59,8 @@ static void RegisterImageOptions(ArgParser& parser, PromptOptions& opt) {
                    "Model", &opt.vision_model_path);
   parser.AddCustomOption(
       "", "--image", "PATH",
-      "PNG/JPEG attached before text in the first user turn; repeat for "
+      "PNG/JPEG/static WebP attached before text in the first user turn; "
+      "repeat for "
       "multiple images",
       "Prompt",
       [&opt](std::string_view, std::string_view value, std::string* error) {

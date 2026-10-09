@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <png.h>
 #include <sys/socket.h>
+#include <webp/decode.h>
 
 #include <algorithm>
 #include <array>
@@ -185,7 +186,26 @@ Image DecodePng(std::span<const std::uint8_t> bytes) {
   return std::move(state->image);
 }
 
-// Bounds-checked TIFF orientation; shared by JPEG APP1 and PNG eXIf.
+Image DecodeWebP(std::span<const std::uint8_t> bytes) {
+  WebPBitstreamFeatures features{};
+  if (WebPGetFeatures(bytes.data(), bytes.size(), &features) != VP8_STATUS_OK)
+    throw std::invalid_argument("invalid WebP header");
+  if (features.has_animation)
+    throw std::invalid_argument("animated WebP images are not supported");
+  const auto width = static_cast<std::uint32_t>(features.width);
+  const auto height = static_cast<std::uint32_t>(features.height);
+  ValidateDimensions(width, height);
+  Image image{width, height,
+              std::vector<std::uint8_t>(std::size_t{width} * height * 3)};
+  // Match PNG/Pillow RGB conversion: drop alpha without compositing and keep
+  // unpremultiplied colour channels. Do not apply ICC/gamma transformations.
+  if (!WebPDecodeRGBInto(bytes.data(), bytes.size(), image.pixels.data(),
+                         image.pixels.size(), features.width * 3))
+    throw std::invalid_argument("invalid or truncated WebP image");
+  return image;
+}
+
+// Bounds-checked TIFF orientation; shared by JPEG, PNG and WebP EXIF.
 unsigned TiffOrientation(std::span<const std::uint8_t> data) {
   if (data.size() < 8)
     return 1;
@@ -264,6 +284,35 @@ unsigned PngOrientation(std::span<const std::uint8_t> bytes) {
     offset += length + 12;
   }
   return 1;
+}
+
+unsigned WebPOrientation(std::span<const std::uint8_t> bytes) {
+  const auto little32 = [&](std::size_t offset) {
+    return std::uint32_t{bytes[offset]} |
+           (std::uint32_t{bytes[offset + 1]} << 8) |
+           (std::uint32_t{bytes[offset + 2]} << 16) |
+           (std::uint32_t{bytes[offset + 3]} << 24);
+  };
+  const std::uint64_t size = std::uint64_t{little32(4)} + 8;
+  if (size < 12 || size > bytes.size())
+    throw std::invalid_argument("invalid or truncated WebP container");
+  unsigned orientation = 1;
+  for (std::size_t offset = 12; offset < size;) {
+    if (size - offset < 8)
+      throw std::invalid_argument("truncated WebP chunk header");
+    const std::size_t length = little32(offset + 4);
+    const std::size_t padded = length + (length & 1);
+    if (padded > size - offset - 8)
+      throw std::invalid_argument("truncated WebP chunk");
+    if (std::memcmp(bytes.data() + offset, "EXIF", 4) == 0) {
+      auto exif = bytes.subspan(offset + 8, length);
+      if (exif.size() >= 6 && std::memcmp(exif.data(), "Exif\0\0", 6) == 0)
+        exif = exif.subspan(6);
+      orientation = TiffOrientation(exif);
+    }
+    offset += 8 + padded;
+  }
+  return orientation;
 }
 
 Image Orient(Image image, unsigned orientation) {
@@ -372,7 +421,12 @@ Image DecodeImage(std::span<const std::uint8_t> bytes) {
   if (bytes.size() >= 2 && bytes[0] == 0xff && bytes[1] == 0xd8) {
     return Orient(DecodeJpeg(bytes), JpegOrientation(bytes));
   }
-  throw std::invalid_argument("image must be PNG or JPEG");
+  if (bytes.size() >= 12 && std::memcmp(bytes.data(), "RIFF", 4) == 0 &&
+      std::memcmp(bytes.data() + 8, "WEBP", 4) == 0) {
+    const auto orientation = WebPOrientation(bytes);
+    return Orient(DecodeWebP(bytes), orientation);
+  }
+  throw std::invalid_argument("image must be PNG, JPEG or static WebP");
 }
 
 std::vector<std::uint8_t> ReadImageFile(const std::filesystem::path& path) {
@@ -437,8 +491,10 @@ std::vector<std::uint8_t> ReadImageUrl(std::string_view url,
     const auto comma = url.find(',');
     if (comma == std::string_view::npos ||
         !(url.substr(0, comma) == "data:image/png;base64" ||
-          url.substr(0, comma) == "data:image/jpeg;base64")) {
-      throw std::invalid_argument("image data URL must use base64 PNG or JPEG");
+          url.substr(0, comma) == "data:image/jpeg;base64" ||
+          url.substr(0, comma) == "data:image/webp;base64")) {
+      throw std::invalid_argument(
+          "image data URL must use base64 PNG, JPEG or WebP");
     }
     const auto encoded = url.substr(comma + 1);
     // Check the decoded size before allocating, including base64 padding.

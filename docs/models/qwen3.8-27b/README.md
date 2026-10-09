@@ -62,7 +62,7 @@ print(urllib.request.urlopen(request).read().decode())
 
 Start that server with `--served-model-name vision-test`. Ordered text/image
 parts, multiple images and later turns work with AR/DFlash2 and caches.
-PNG/JPEG data URLs and public HTTPS are supported (`detail: auto`); requests
+PNG/JPEG/static WebP data URLs and public HTTPS are supported (`detail: auto`); requests
 share a 20 MiB encoded-byte, 16-image and 15-second download budget. Each image
 is capped at 32 megapixels; private/loopback/link-local destinations are rejected.
 Official dynamic resizing allows 64–16384 merged image tokens.

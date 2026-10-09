@@ -7,6 +7,7 @@
     "curl",
     "openssl",
     "libpng",
-    "libjpeg-turbo"
+    "libjpeg-turbo",
+    { "name": "libwebp", "default-features": false }
   ]
 }
