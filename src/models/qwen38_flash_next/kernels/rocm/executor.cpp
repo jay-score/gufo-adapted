@@ -1666,10 +1666,9 @@ bool Executor::Attention(const DeviceLayer& l, Session::AttentionState& s,
     const std::uint32_t blocks =
         (max_context + c.compress_ratio - 1) / c.compress_ratio;
     const std::uint32_t max_blocks = (blocks + 31) / 32 * 32;
-    // Catch-up consumes only the final attention tile. Keep all its query
-    // masks (sparse attention packs four queries; dense tiles hold sixteen)
-    // but avoid scoring the unused prefix against the complete context.
-    const auto first_query = last_only ? (n_tokens - 1) / 16 * 16 : 0U;
+    // Catch-up consumes only the final attention tile. Cover its masks even
+    // when the dense/sparse boundary shifts the four-query sparse groups.
+    const auto first_query = last_only && n_tokens > 16 ? n_tokens - 16 : 0U;
     for (std::uint32_t t0 = first_query; t0 < n_tokens; t0 += select_chunk_) {
       const std::uint32_t n = std::min(select_chunk_, n_tokens - t0);
       SelectBlocks(s_.iq + static_cast<std::size_t>(t0) * c.indexer_heads *
@@ -1697,7 +1696,7 @@ bool Executor::Attention(const DeviceLayer& l, Session::AttentionState& s,
   // sparse tail first: it can refuse geometry without touching the prefix.
   const auto attend = [&] {
     const std::uint32_t dense_rows =
-        mask != nullptr && !last_only && start_pos < c.indexer_top_k
+        mask != nullptr && start_pos < c.indexer_top_k
             ? std::min(n_tokens, c.indexer_top_k - start_pos)
             : 0;
     const auto offset = std::size_t{dense_rows} * c.AttentionQDim();
@@ -1708,11 +1707,11 @@ bool Executor::Attention(const DeviceLayer& l, Session::AttentionState& s,
                 mask_words_, s_.ctx + offset, n_tokens - dense_rows,
                 start_pos + dense_rows, c.num_heads, c.num_kv_heads, c.head_dim,
                 c.compress_ratio, stream_, last_only)) &&
-           (dense_rows == 0 ||
-            WmmaCausalAttention(s_.q, s_.attn_gate, s.k_cache, s.v_cache,
-                                nullptr, mask_words_, s_.ctx, dense_rows,
-                                start_pos, c.num_heads, c.num_kv_heads,
-                                c.head_dim, c.compress_ratio, stream_));
+           (dense_rows == 0 || (last_only && dense_rows != n_tokens) ||
+            WmmaCausalAttention(
+                s_.q, s_.attn_gate, s.k_cache, s.v_cache, nullptr, mask_words_,
+                s_.ctx, dense_rows, start_pos, c.num_heads, c.num_kv_heads,
+                c.head_dim, c.compress_ratio, stream_, last_only));
   };
   if (MatrixRows(n_tokens) && attend()) {
     return !project_output ||

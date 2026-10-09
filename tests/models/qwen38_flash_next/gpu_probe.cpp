@@ -4,6 +4,7 @@
 // gpu_probe --model FIRST_SHARD.gguf --prompt TEXT [--reference]
 //           [--batch T] [--context N] [--dump logits.bin]
 // Independent predictor oracle: --mtp-model MTP.gguf --mtp-audit
+// Full/tail predictor comparison: --mtp-model MTP.gguf --mtp-catchup-audit
 // MTP cost calibration: --mtp-model MTP.gguf --cost-audit C (0 = all)
 //                      [--depth N] (default: 0, 4096, 32768)
 #include <algorithm>
@@ -26,6 +27,10 @@
 #include "src/models/qwen38_flash_next/weights.hpp"
 
 namespace q = gufo::models::qwen38_flash_next;
+
+void AuditMtpCatchup(q::rocm::Executor& executor,
+                     const q::rocm::DeviceModel& device,
+                     const gufo::tokenization::QwenTokenizer& tokenizer);
 
 void AuditMtp(q::rocm::Executor& executor, const q::rocm::DeviceModel& device,
               const q::ModelWeights& weights, const q::MtpWeights& mtp,
@@ -79,6 +84,7 @@ int main(int argc, char** argv) {
   std::string dump_path;
   std::string mtp_path;
   bool mtp_audit = false;
+  bool mtp_catchup_audit = false;
   bool reference = false;
   bool cost_audit = false;
   std::uint32_t cost_concurrency = 0;
@@ -96,6 +102,8 @@ int main(int argc, char** argv) {
       mtp_path = next();
     } else if (arg == "--mtp-audit") {
       mtp_audit = true;
+    } else if (arg == "--mtp-catchup-audit") {
+      mtp_catchup_audit = true;
     } else if (arg == "--cost-audit") {
       cost_audit = true;
       const auto value = next();
@@ -143,11 +151,12 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "--model is required\n");
     return 2;
   }
-  if ((mtp_audit || cost_audit) && mtp_path.empty()) {
+  if ((mtp_audit || mtp_catchup_audit || cost_audit) && mtp_path.empty()) {
     std::fprintf(stderr, "MTP audits require --mtp-model\n");
     return 2;
   }
-  if (cost_audit && (mtp_audit || reference || !dump_path.empty())) {
+  if (cost_audit &&
+      (mtp_audit || mtp_catchup_audit || reference || !dump_path.empty())) {
     std::fprintf(stderr, "--cost-audit cannot be combined with other probes\n");
     return 2;
   }
@@ -211,7 +220,7 @@ int main(int argc, char** argv) {
   q::rocm::Executor::Options options;
   options.max_batch = batch;
   options.max_logit_rows = std::min<std::uint32_t>(batch, 64);
-  if (mtp_audit || cost_audit)
+  if (mtp_audit || mtp_catchup_audit || cost_audit)
     options.max_speculative = 8;
 
   if (cost_audit) {
@@ -237,10 +246,13 @@ int main(int argc, char** argv) {
       return 1;
     }
   }
-  if (mtp_audit) {
+  if (mtp_audit || mtp_catchup_audit) {
     try {
-      AuditMtp(*executor, *device, *weights, *mtp_weights, *tokenizer,
-               model_path);
+      if (mtp_catchup_audit)
+        AuditMtpCatchup(*executor, *device, *tokenizer);
+      else
+        AuditMtp(*executor, *device, *weights, *mtp_weights, *tokenizer,
+                 model_path);
       return 0;
     } catch (const std::exception& e) {
       std::fprintf(stderr, "MTP oracle failed: %s\n", e.what());

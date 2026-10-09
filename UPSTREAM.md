@@ -37,6 +37,36 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-09 — MTP catch-up attention boundary
+
+- Source: [gufo-org/gufo@fd747a51951ccd09eda20de5c34313670dc9b9d3](https://github.com/gufo-org/gufo/commit/fd747a51951ccd09eda20de5c34313670dc9b9d3)
+  ([PR #485](https://github.com/gufo-org/gufo/pull/485), reviewed head
+  [1a2b49476d140146831b68f450ceac76cb0e8618](https://github.com/gufo-org/gufo/commit/1a2b49476d140146831b68f450ceac76cb0e8618)).
+- Local: commit introducing this entry.
+- Adaptation: extend the fork's existing dense/sparse attention split to
+  last-only MTP catch-up and score all masks consumed by its shifted final
+  sparse group. Preserve the fixed 512-query selector chunk, projections,
+  arithmetic, refusal/fallback and Windows tuning. Bump snapshots to version 17
+  to reject previously computed predictor state. Omit upstream checkpoint
+  machinery and every other optimization in the PR. Extract the existing
+  full/tail predictor comparison into an explicit test-only audit entry point
+  and extend it through all sparse query-group alignments; retain the independent
+  scalar oracle and its unchanged tolerances.
+- Areas: Flash-Next executor and snapshot compatibility, GPU probe/catch-up
+  audit, cache documentation and the
+  [qualification record](docs/mtp-boundary-pr485-validation.md).
+- Validation: the baseline reproduces a 224-row catch-up failure at position
+  2025. Fresh pinned Windows builds pass the focused full/tail oracle over
+  seven widths and 55 rounds, three GPU operator targets, the 57-kernel resource
+  guard and formatting. Isolated selector scratch also detects an old-mask-only
+  negative control at position 1806 with 257 rows. All 270 full-logit rows and
+  corpus perplexity match baseline exactly; session, snapshot, rollback and BF16
+  image-prefix suites pass. The independent scalar MTP oracle fails identically
+  before catch-up on baseline and candidate; this is not counted as a pass.
+  Details are in the qualification record. Linux CI and other quantizations
+  are unrun.
+- Status: retained; extends the PR #470 attention adaptation below.
+
 ### 2026-10-08 — Configurable retained RAM snapshot cap
 
 - Source: configurable-cap outcome from
