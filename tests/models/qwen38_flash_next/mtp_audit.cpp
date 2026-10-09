@@ -78,6 +78,10 @@ void Compare(std::span<const float> actual, std::span<const float> expected,
 }
 }  // namespace
 
+void AuditMtpCatchup(q::rocm::Executor& exec,
+                     const q::rocm::DeviceModel& device,
+                     const gufo::tokenization::QwenTokenizer& tokenizer);
+
 void AuditMtp(q::rocm::Executor& exec, const q::rocm::DeviceModel& device,
               const q::ModelWeights& weights, const q::MtpWeights& mtp,
               const gufo::tokenization::QwenTokenizer& tokenizer,
@@ -312,12 +316,38 @@ void AuditMtp(q::rocm::Executor& exec, const q::rocm::DeviceModel& device,
     }
   }
   std::puts("MTP short catch-up: ragged/full candidates and carry exact");
+  AuditMtpCatchup(exec, device, tokenizer);
+  std::puts(
+      "MTP oracle PASS: full-width norm, byte-exact split, attention, "
+      "recursive carry, full-Q8 head, image IDs and independent batches");
+}
+
+void AuditMtpCatchup(q::rocm::Executor& exec,
+                     const q::rocm::DeviceModel& device,
+                     const gufo::tokenization::QwenTokenizer& tokenizer) {
+  const auto& c = exec.config();
+  std::string error;
+  // The oracle must not leave valid query masks in catch-up's scratch.
+  // Share immutable weights, but keep selector and activation buffers private.
+  auto control =
+      q::rocm::Executor::Create(device, nullptr,
+                                {.max_batch = exec.max_batch(),
+                                 .max_logit_rows = exec.max_speculative(),
+                                 .max_speculative = exec.max_speculative()},
+                                &error);
+  Require(control != nullptr, error);
+  Arena arena;
+  std::vector<float> initial(c.HcDim());
+  for (std::size_t i = 0; i < initial.size(); ++i)
+    initial[i] = std::sin(float(i) * 0.013F) * float(1U << (i / c.hidden_size));
   // A full predictor forward is the independent execution control for
   // headless catch-up. Only its final residual is carried; all KV/indexer
   // rows must still survive. Cross the sparse-attention boundary and then
   // compare recursive proposals, not only the final argmax. Cover the minimum
   // 96-row tail tile, a two-tile tail, and aligned/ragged large chunks.
-  std::vector<unsigned> counts{224U, 257U, 2047U, 2048U};
+  // Neighboring widths shift the dense/sparse split through every sparse
+  // query-group alignment, including groups before the last dense tile.
+  std::vector<unsigned> counts{224U, 255U, 256U, 257U, 258U, 2047U, 2048U};
   for (auto& count : counts)
     count = std::min(exec.max_batch(), count);
   counts.erase(std::unique(counts.begin(), counts.end()), counts.end());
@@ -325,8 +355,8 @@ void AuditMtp(q::rocm::Executor& exec, const q::rocm::DeviceModel& device,
     Require(count > 32, "catch-up audit requires --batch greater than 32");
     const unsigned rounds = c.indexer_top_k / count + 2;
     const unsigned capacity = rounds * (count + 1) + 1;
-    auto full = exec.CreateSession(gufo::core::SessionMode::kSpeculative,
-                                   capacity, &error);
+    auto full = control->CreateSession(gufo::core::SessionMode::kSpeculative,
+                                       capacity, &error);
     auto tail = exec.CreateSession(gufo::core::SessionMode::kSpeculative,
                                    capacity, &error);
     Require(full && tail, error);
@@ -346,20 +376,20 @@ void AuditMtp(q::rocm::Executor& exec, const q::rocm::DeviceModel& device,
       const auto exact = [&](const auto& expected, const auto& actual,
                              const char* stage) {
         if (expected != actual) {
-          std::fprintf(stderr, "catch-up round=%u rows=%u stage=%s\n", round,
-                       count, stage);
+          std::fprintf(stderr, "catch-up round=%u start=%u rows=%u stage=%s\n",
+                       round, round * (count + 1), count, stage);
           Compare(actual, expected, stage, 0.0);
         }
       };
       Trace full_row(c), tail_row(c);
       q::MtpCandidateLogits expected, actual;
-      Require(
-          exec.MtpForward(*full, tokens, 0,
-                          {.candidates = &expected, .trace = &full_row.spans},
-                          &error, source) &&
-              exec.MtpForward(*tail, tokens, 0, {.trace = &tail_row.spans},
-                              &error, source),
-          error);
+      Require(control->MtpForward(
+                  *full, tokens, 0,
+                  {.candidates = &expected, .trace = &full_row.spans}, &error,
+                  source) &&
+                  exec.MtpForward(*tail, tokens, 0, {.trace = &tail_row.spans},
+                                  &error, source),
+              error);
       exact(full_row.norm, tail_row.norm, "wide hidden norm");
       exact(full_row.fused, tail_row.fused, "wide fusion");
       exact(full_row.attention, tail_row.attention, "wide attention");
@@ -375,22 +405,23 @@ void AuditMtp(q::rocm::Executor& exec, const q::rocm::DeviceModel& device,
               "headless catch-up changed full-head candidates");
       const auto next = static_cast<std::int32_t>(expected.ids[0]);
       Trace a(c), b(c);
-      Require(
-          exec.MtpForward(*full, {&next, 1}, -1, {.trace = &a.spans}, &error) &&
-              exec.MtpForward(*tail, {&next, 1}, -1, {.trace = &b.spans},
-                              &error),
-          error);
+      Require(control->MtpForward(*full, {&next, 1}, -1, {.trace = &a.spans},
+                                  &error) &&
+                  exec.MtpForward(*tail, {&next, 1}, -1, {.trace = &b.spans},
+                                  &error),
+              error);
       exact(a.norm, b.norm, "catch-up hidden norm");
       exact(a.fused, b.fused, "catch-up fusion");
       exact(a.attention, b.attention, "catch-up attention");
       exact(a.hidden, b.hidden, "catch-up recursive carry");
       exact(a.head, b.head, "catch-up head mixer");
     }
-    std::puts("MTP catch-up: full/tail candidates and recursive stages exact");
+    std::printf(
+        "MTP catch-up rows=%u rounds=%u: candidates and recursive stages "
+        "exact\n",
+        count, rounds);
   }
-  std::puts(
-      "MTP oracle PASS: full-width norm, byte-exact split, attention, "
-      "recursive carry, full-Q8 head, image IDs and independent batches");
+  std::puts("MTP catch-up oracle PASS");
 }
 
 // Model-level cost calibration. Restore identical real states for every
