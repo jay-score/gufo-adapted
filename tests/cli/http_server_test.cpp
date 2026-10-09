@@ -19,7 +19,9 @@
 #include <thread>
 
 #include "src/cli/serve/logging.hpp"
+#include "src/core/image.hpp"
 #include "src/core/platform/socket.hpp"
+#include "tests/core/image_fixtures.hpp"
 
 namespace {
 
@@ -581,15 +583,18 @@ void TestCompatibilityRequests() {
     assert(server.backend->calls == calls);
   }
   for (const bool stream : {false, true}) {
-    auto image = gufo::json::parse(R"({"input":[{"role":"user","content":[
+    auto image =
+        gufo::json::parse(R"({"input":[{"role":"user","content":[
       {"type":"input_text","text":"describe"},
-      {"type":"input_image","image_url":"data:image/png;base64,AQID"}]}]})");
+      {"type":"input_image","image_url":")" +
+                          std::string(gufo::test::kLosslessWebP) + R"("}]}]})");
     image["stream"] = stream;
     ExpectStatus(server.Post("/v1/responses", image.dump()), 200);
     const auto message = server.backend->LastCall().chat.messages.front();
     assert(message.content == "describe" && message.images.size() == 1 &&
            message.images[0].offset == 8 &&
-           *message.images[0].bytes == std::vector<std::uint8_t>({1, 2, 3}));
+           *message.images[0].bytes ==
+               gufo::core::ReadImageUrl(gufo::test::kLosslessWebP));
   }
   const int calls = server.backend->calls;
   ExpectStatus(server.Post("/v1/completions", R"({"prompt":["one","two"]})"),

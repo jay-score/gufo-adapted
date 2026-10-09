@@ -16,7 +16,9 @@
 #include <utility>
 #include <vector>
 
+#include "src/core/image.hpp"
 #include "src/core/json.hpp"
+#include "tests/core/image_fixtures.hpp"
 
 namespace {
 
@@ -1429,6 +1431,63 @@ void TestImagePartsRetainOrderAndIdentity() {
   }
 }
 
+// pi-ai represents a read_image tool result as the tool's text acknowledgement
+// followed by a user image message. Later turns replay that entire history.
+void TestHarnessWebPReplay() {
+  auto body =
+      gufo::json::parse(R"({"model":"test-model","messages":[
+    {"role":"user","content":[{"type":"text","text":"direct"},
+      {"type":"image_url","image_url":{"url":")" +
+                        std::string(gufo::test::kLossyWebP) + R"("}}]},
+    {"role":"assistant","content":null,"tool_calls":[
+      {"id":"read1","type":"function","function":{"name":"read_image","arguments":"{}"}}]},
+    {"role":"tool","tool_call_id":"read1","content":"read image"},
+    {"role":"user","content":[{"type":"text","text":"tool image"},
+      {"type":"image_url","image_url":{"url":")" +
+                        std::string(gufo::test::kLosslessWebP) + R"("}}]}]})");
+  for (const bool replay : {false, true}) {
+    if (replay) {
+      body["messages"].push_back(
+          gufo::json::parse(R"({"role":"assistant","content":"seen"})"));
+      body["messages"].push_back(
+          gufo::json::parse(R"({"role":"user","content":"continue"})"));
+    }
+    for (const bool stream : {false, true}) {
+      body["stream"] = stream;
+      FakeBackend backend;
+      backend.pieces = {"ok"};
+      auto response =
+          gufo::server::HandleOpenAiChat(Request(body.dump()), backend);
+      Expect(response.status == 200,
+             "WebP direct/tool images and history are accepted");
+      if (stream) {
+        std::string output;
+        response.streaming_body([&](std::string_view chunk) {
+          output.append(chunk);
+          return true;
+        });
+        Expect(output.ends_with("data: [DONE]\n\n"), "WebP stream completes");
+      }
+      const auto& messages = backend.last_request.messages;
+      Expect(messages.size() == (replay ? 6 : 4) &&
+                 messages[1].tool_calls[0].id == "read1" &&
+                 messages[2].tool_call_id == "read1",
+             "image history preserves tool-call identity");
+      Expect(messages[0].images.size() == 1 &&
+                 messages[0].images[0].offset == 6 &&
+                 messages[3].images.size() == 1 &&
+                 messages[3].images[0].offset == 10,
+             "image history preserves image order and offsets");
+      const auto decoded =
+          gufo::core::DecodeImage(*messages[3].images[0].bytes);
+      const auto reference =
+          gufo::core::DecodeImage(gufo::core::ReadImageUrl(gufo::test::kPng));
+      Expect(decoded.pixels == reference.pixels,
+             "replayed WebP decodes to the reference PNG pixels");
+    }
+  }
+}
+
 void TestAggregateImageLimit() {
   FakeBackend backend;
   auto body = gufo::json::Value::object();
@@ -1939,7 +1998,7 @@ std::vector<gufo::json::Value> ResponseEvents(
 
 void TestResponsesImages() {
   using gufo::json::parse;
-  const auto body = parse(R"({"input":[
+  auto body = parse(R"({"input":[
     {"role":"user","content":[{"type":"input_text","text":"left"},
       {"type":"input_image","image_url":"data:image/png;base64,AQID","detail":"auto"},
       {"type":"input_text","text":"right"},
@@ -1947,7 +2006,10 @@ void TestResponsesImages() {
     {"type":"function_call","name":"read","call_id":"read1","arguments":"{}"},
     {"type":"function_call_output","call_id":"read1","output":[
       {"type":"input_text","text":"tool"},
-      {"type":"input_image","image_url":"data:image/png;base64,BwgJ"}]}]})");
+      {"type":"input_image","image_url":")" +
+                    std::string(gufo::test::kLosslessWebP) + R"("}]}]})");
+  body["input"].push_back(parse(R"({"role":"assistant","content":"seen"})"));
+  body["input"].push_back(parse(R"({"role":"user","content":"continue"})"));
   const auto chat = ResponseChat(body);
   const auto& user = chat.messages[0];
   const auto& tool = chat.messages[2];
@@ -1959,7 +2021,8 @@ void TestResponsesImages() {
   Expect(tool.role == gufo::tokenization::ChatRole::kTool &&
              tool.name == "read" && tool.content == "tool" &&
              tool.images.size() == 1 && tool.images[0].offset == 4 &&
-             *tool.images[0].bytes == std::vector<std::uint8_t>({7, 8, 9}),
+             *tool.images[0].bytes ==
+                 gufo::core::ReadImageUrl(gufo::test::kLosslessWebP),
          "Responses function results retain image bytes and matching call "
          "identity");
   for (const bool stream : {false, true}) {
@@ -3524,6 +3587,7 @@ int main() {
   TestClientIdentityReachesBackend();
   TestStreamingOverloadIsRejectedBeforeHeaders();
   TestImagePartsRetainOrderAndIdentity();
+  TestHarnessWebPReplay();
   TestAggregateImageLimit();
   std::cout << "All OpenAI chat protocol tests passed\n";
   return 0;
