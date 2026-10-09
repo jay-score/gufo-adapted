@@ -205,16 +205,16 @@ bool ParseContent(const json::Value* content,
           return false;
         }
       }
-      const bool image_role =
-          message->role == tokenization::ChatRole::kUser ||
-          (responses && message->role == tokenization::ChatRole::kTool);
+      const bool image_role = message->role == tokenization::ChatRole::kUser ||
+                              message->role == tokenization::ChatRole::kTool;
       if (!image_role || url == nullptr || !url->is_string() ||
           message->images.size() >= 16) {
-        *error = responses ? "input_image requires a user message or function "
-                             "result and a string image_url (at most 16 images)"
-                           : "image_url requires a user message and a string "
-                             "URL (at most 16 "
-                             "images)";
+        *error = responses
+                     ? "input_image requires a user message or function "
+                       "result and a string image_url (at most 16 images)"
+                     : "image_url requires a user or tool message and a string "
+                       "URL (at most 16 "
+                       "images)";
         return false;
       }
       // Resolution is model-owned; accept only the automatic policy rather
@@ -2559,7 +2559,7 @@ bool ParseOpenAiResponseChat(const json::Value& body, ChatRequest* chat,
   }
   *error =
       "'input' must contain messages, Gufo reasoning items, function "
-      "calls or function results with text/image content";
+      "calls, custom tool calls or tool results with text/image content";
   if (input == nullptr || !input->is_array() || input->empty())
     return false;
   for (const auto& item : input->items()) {
@@ -2582,14 +2582,33 @@ bool ParseOpenAiResponseChat(const json::Value& body, ChatRequest* chat,
           return false;
         message.thought += text->str();
       }
-    } else if (type == "function_call") {
+    } else if (type == "function_call" || type == "custom_tool_call") {
       message.role = tokenization::ChatRole::kAssistant;
       tokenization::ChatMessage::ToolCall call;
       call.id = item.member_str("call_id");
-      if (call.id.empty() || !ParseHistoricalFunction(item, &call, error))
+      if (call.id.empty()) {
+        *error = "tool call items require a nonempty call_id";
+        return false;
+      }
+      json::Value custom_function;
+      const auto* function = &item;
+      if (type == "custom_tool_call") {
+        const auto* input = item.find("input");
+        if (input == nullptr || !input->is_string()) {
+          *error = "historical custom tool calls require string input";
+          return false;
+        }
+        auto arguments = json::Value::object();
+        arguments["input"] = *input;
+        custom_function = item;
+        custom_function["arguments"] = arguments.dump();
+        function = &custom_function;
+      }
+      if (!ParseHistoricalFunction(*function, &call, error))
         return false;
       message.tool_calls.push_back(std::move(call));
-    } else if (type == "function_call_output") {
+    } else if (type == "function_call_output" ||
+               type == "custom_tool_call_output") {
       message.role = tokenization::ChatRole::kTool;
       message.tool_call_id = item.member_str("call_id");
       if (message.tool_call_id.empty() ||
@@ -2603,9 +2622,11 @@ bool ParseOpenAiResponseChat(const json::Value& body, ChatRequest* chat,
         }
       }
       if (message.name.empty()) {
-        *error =
-            "function_call_output requires a matching earlier function_call in "
-            "'input'";
+        *error = type == "custom_tool_call_output"
+                     ? "custom_tool_call_output requires a matching earlier "
+                       "tool call in 'input'"
+                     : "function_call_output requires a matching earlier "
+                       "function_call in 'input'";
         return false;
       }
     } else if (type == "message") {

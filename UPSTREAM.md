@@ -37,6 +37,33 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-09 — Tool-result image parser compatibility
+
+- Source: [gufo-org/gufo@a5df2744dbd97c8ff60da25a1ab9daf90fffc639](https://github.com/gufo-org/gufo/commit/a5df2744dbd97c8ff60da25a1ab9daf90fffc639)
+  ([PR #506](https://github.com/gufo-org/gufo/pull/506)).
+- Local: commit introducing this entry.
+- Adaptation: allow Chat tool-message image parts through the existing image
+  parser; accept Responses custom-tool calls/results as stateless history,
+  decoding free-form input as one literal string argument named `input`.
+  Retain earlier-call matching, image budgets and role/detail/URL validation.
+  Reuse existing Responses function-result images and Qwen tool-image rendering,
+  including literal text and outer whitespace preservation. Omit upstream's
+  renderer replacement and functional/Pi harness additions: the renderer already
+  supports the required behavior and focused native fixtures cover the parser
+  changes. Custom-tool generation remains unsupported.
+- Areas: `src/cli/serve/openai_chat.cpp`, focused API/HTTP fixtures and
+  [server contracts](docs/SERVER.md).
+- Validation: fresh Windows CPU builds with TheRock 10.0.0 pass
+  `openai_chat_test`, `http_server_test` and `qwen_chat_template_test`, with
+  assertions enabled. Fixtures cover mixed/image-only observations, image order,
+  literal custom input, call identity, malformed/unmatched history, role/image
+  restrictions, rejection recovery and buffered/streamed forwarding. Repository
+  C++ formatting (clang-format 21.1.8), documentation and diff whitespace checks
+  pass. Real-model/GPU smoke, matched-token logits/perplexity and Linux execution
+  unrun; this adaptation changes transport parsing only, with no renderer,
+  inference arithmetic or cache changes. No performance claim.
+- Status: retained.
+
 ### 2026-10-09 — MTP catch-up attention boundary
 
 - Source: [gufo-org/gufo@fd747a51951ccd09eda20de5c34313670dc9b9d3](https://github.com/gufo-org/gufo/commit/fd747a51951ccd09eda20de5c34313670dc9b9d3)

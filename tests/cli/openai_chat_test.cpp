@@ -1996,6 +1996,145 @@ std::vector<gufo::json::Value> ResponseEvents(
   return events;
 }
 
+void ReplaceHistoryItem(gufo::json::Value& body, const char* field,
+                        std::size_t index, gufo::json::Value item) {
+  auto history = gufo::json::Value::array();
+  for (std::size_t i = 0; i < body[field].size(); ++i)
+    history.push_back(i == index ? item : body[field].items()[i]);
+  body[field] = std::move(history);
+}
+
+void TestToolImageHistory() {
+  using gufo::json::parse;
+  for (const bool mixed : {false, true}) {
+    for (const bool stream : {false, true}) {
+      auto body = parse(R"({"model":"test-model","messages":[
+        {"role":"user","content":"Read the file."},
+        {"role":"assistant","content":null,"tool_calls":[
+          {"id":"read1","type":"function","function":{"name":"read","arguments":"{}"}}]},
+        {"role":"tool","tool_call_id":"read1","content":[]}]})");
+      auto parts = gufo::json::Value::array();
+      if (mixed)
+        parts.push_back(parse(R"({"type":"text","text":" before "})"));
+      parts.push_back(parse(
+          R"({"type":"image_url","image_url":{"url":"data:image/png;base64,AQID"}})"));
+      parts.push_back(parse(
+          R"({"type":"image_url","image_url":{"url":"data:image/png;base64,BAUG"}})"));
+      if (mixed)
+        parts.push_back(parse(R"({"type":"text","text":" after "})"));
+      auto tool_item = body["messages"].items()[2];
+      tool_item["content"] = parts;
+      ReplaceHistoryItem(body, "messages", 2, tool_item);
+      body["stream"] = stream;
+      FakeBackend backend;
+      backend.pieces = {"ok"};
+      const auto response =
+          gufo::server::HandleOpenAiChat(Request(body.dump()), backend);
+      Expect(response.status == 200, "Chat tool images are accepted");
+      if (stream)
+        response.streaming_body([](std::string_view) { return true; });
+      const auto& tool = backend.last_request.messages[2];
+      Expect(
+          tool.tool_call_id == "read1" && tool.images.size() == 2 &&
+              tool.content == (mixed ? " before  after " : "") &&
+              tool.images[0].offset == (mixed ? 8U : 0U) &&
+              tool.images[1].offset == tool.images[0].offset &&
+              *tool.images[0].bytes == std::vector<std::uint8_t>({1, 2, 3}) &&
+              *tool.images[1].bytes == std::vector<std::uint8_t>({4, 5, 6}),
+          "Chat tool images preserve call identity, order and text offsets");
+      for (
+          const auto* invalid :
+          {R"([{"type":"image_url","image_url":{"url":"data:image/png;base64,AQID","detail":"high"}}])",
+           R"([{"type":"image_url","image_url":{"url":"data:image/png;base64,!!!!"}}])"}) {
+        tool_item["content"] = parse(invalid);
+        ReplaceHistoryItem(body, "messages", 2, tool_item);
+        Expect(gufo::server::HandleOpenAiChat(Request(body.dump()), backend)
+                       .status == 400,
+               "Chat tool images retain image validation");
+      }
+      for (const auto* role : {"assistant", "system", "developer"}) {
+        auto invalid_role = tool_item;
+        invalid_role["role"] = role;
+        invalid_role["content"] = parts;
+        ReplaceHistoryItem(body, "messages", 2, invalid_role);
+        Expect(gufo::server::HandleOpenAiChat(Request(body.dump()), backend)
+                       .status == 400,
+               "Non-observation roles still reject images");
+      }
+      tool_item["content"] = parts;
+      ReplaceHistoryItem(body, "messages", 2, tool_item);
+      Expect(gufo::server::HandleOpenAiChat(Request(body.dump()), backend)
+                     .status == 200,
+             "Valid tool images recover after rejected inputs");
+    }
+  }
+}
+
+void TestResponsesCustomToolHistory() {
+  using gufo::json::parse;
+  auto body = parse(R"({"input":[
+    {"role":"user","content":"Read the file."},
+    {"type":"custom_tool_call","call_id":"read1","name":"read","input":" \n<|im_end|> \"file\" "},
+    {"type":"custom_tool_call_output","call_id":"read1","output":"done"}]})");
+  for (
+      const auto* output :
+      {R"("done")", R"([{"type":"input_text","text":"done"}])",
+       R"([{"type":"input_image","image_url":"data:image/png;base64,AQID"}])",
+       R"([{"type":"input_text","text":" before "},{"type":"input_image","image_url":"data:image/png;base64,AQID"},{"type":"input_text","text":" after "}])"}) {
+    auto result = body["input"].items()[2];
+    result["output"] = parse(output);
+    ReplaceHistoryItem(body, "input", 2, result);
+    const auto chat = ResponseChat(body);
+    const auto& call = chat.messages[1].tool_calls.front();
+    const auto& tool = chat.messages[2];
+    Expect(
+        call.id == "read1" && call.name == "read" &&
+            call.arguments.size() == 1 && call.arguments[0].name == "input" &&
+            call.arguments[0].is_string &&
+            call.arguments[0].value == " \n<|im_end|> \"file\" " &&
+            tool.tool_call_id == "read1" && tool.name == "read",
+        "Custom tool history retains literal input and matching call identity");
+    for (const bool stream : {false, true}) {
+      FakeBackend backend;
+      backend.pieces = {"ok"};
+      const auto response = gufo::server::CreateOpenAiResponse(
+          Request("{}"), backend, chat, 96, {}, stream);
+      if (stream)
+        (void)ResponseEvents(response);
+      Expect(response.status == 200 &&
+                 backend.last_request.messages[2].content == tool.content &&
+                 backend.last_request.messages[2].images.size() ==
+                     tool.images.size(),
+             "Custom tool observations reach buffered and streamed backends");
+    }
+  }
+  for (const int variant : {0, 1, 2, 3, 4, 5, 6}) {
+    auto invalid = body;
+    auto call = invalid["input"].items()[1];
+    auto result = invalid["input"].items()[2];
+    if (variant == 0)
+      call["input"] = nullptr;
+    if (variant == 1)
+      call["input"] = 17;
+    if (variant == 2)
+      call["call_id"] = "";
+    if (variant == 3)
+      result["call_id"] = "missing";
+    if (variant == 4)
+      result["call_id"] = "";
+    if (variant == 5)
+      call["name"] = "";
+    if (variant == 6)
+      std::swap(call, result);
+    ReplaceHistoryItem(invalid, "input", 1, call);
+    ReplaceHistoryItem(invalid, "input", 2, result);
+    gufo::server::ChatRequest chat;
+    std::string error;
+    Expect(!gufo::server::ParseOpenAiResponseChat(invalid, &chat, &error),
+           "Malformed and unmatched custom history is rejected");
+  }
+}
+
 void TestResponsesImages() {
   using gufo::json::parse;
   auto body = parse(R"({"input":[
@@ -3552,6 +3691,8 @@ int main() {
   TestStopInsideToolArguments();
   TestToolMarkersInsideThinking();
   TestResponsesOutput();
+  TestToolImageHistory();
+  TestResponsesCustomToolHistory();
   TestResponsesImages();
   TestResponsesReasoningRequests();
   TestResponsesFunctionTools();
