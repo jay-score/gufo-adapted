@@ -596,6 +596,43 @@ void TestCompatibilityRequests() {
            *message.images[0].bytes ==
                gufo::core::ReadImageUrl(gufo::test::kLosslessWebP));
   }
+  for (const bool responses : {false, true}) {
+    for (const bool stream : {false, true}) {
+      auto body = gufo::json::parse(responses ? R"({"input":[
+        {"role":"user","content":"Read the file."},
+        {"type":"custom_tool_call","call_id":"read1","name":"read","input":"file.png"},
+        {"type":"custom_tool_call_output","call_id":"read1","output":[
+          {"type":"input_text","text":" before "},
+          {"type":"input_image","image_url":"data:image/png;base64,AQID"},
+          {"type":"input_text","text":" after "}]}]})"
+                                              : R"({"messages":[
+        {"role":"user","content":"Read the file."},
+        {"role":"assistant","content":null,"tool_calls":[
+          {"id":"read1","type":"function","function":{"name":"read","arguments":"{}"}}]},
+        {"role":"tool","tool_call_id":"read1","content":[
+          {"type":"text","text":" before "},
+          {"type":"image_url","image_url":{"url":"data:image/png;base64,AQID"}},
+          {"type":"text","text":" after "}]}]})");
+      body["model"] = "test";
+      body["stream"] = stream;
+      ExpectStatus(
+          server.Post(responses ? "/v1/responses" : "/v1/chat/completions",
+                      body.dump()),
+          200);
+      const auto chat = server.backend->LastCall().chat;
+      const auto& tool = chat.messages[2];
+      assert(tool.tool_call_id == "read1" &&
+             tool.content == " before  after " && tool.images.size() == 1 &&
+             tool.images[0].offset == 8 &&
+             *tool.images[0].bytes == std::vector<std::uint8_t>({1, 2, 3}));
+      if (responses) {
+        const auto& call = chat.messages[1].tool_calls.front();
+        assert(call.id == "read1" && call.name == "read" &&
+               call.arguments.front().value == "file.png" &&
+               tool.name == "read");
+      }
+    }
+  }
   const int calls = server.backend->calls;
   ExpectStatus(server.Post("/v1/completions", R"({"prompt":["one","two"]})"),
                400);

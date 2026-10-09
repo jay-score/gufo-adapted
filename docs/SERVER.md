@@ -511,7 +511,8 @@ when retaining reasoning. `store` and `background` must be false
 when present. Built-in tools, structured output, server-side conversations
 and `previous_response_id` are rejected on this route.
 
-User message content and `function_call_output.output` arrays accept
+User message content, `function_call_output.output`, and
+`custom_tool_call_output.output` arrays accept
 `{"type":"input_image","image_url":"data:image/png;base64,...","detail":"auto"}`
 alongside text parts. Image placement relative to text is preserved, including
 inside tool results. Images use the same model-owned vision pipeline and
@@ -522,6 +523,13 @@ EXIF orientation is applied. Animated WebP is rejected. Omitted detail means
 `auto`; other detail policies, uploaded `file_id` references, and images in
 assistant/system messages are rejected. Load a compatible BF16 projector for
 Qwen image input. Clients must resend the image content in stateless history.
+
+Responses also accepts historical `custom_tool_call` items with a string `input`
+and `custom_tool_call_output` items with string or text/image array `output`.
+Results must match an earlier call by `call_id`; custom input is replayed as a
+literal string argument named `input`. This does not enable custom-tool generation.
+Chat tool messages accept `image_url` parts inside their `content` arrays, keeping
+each image inside its owning tool result under the same image limits.
 
 Function tools accept the flat Responses definition (`type`, `name`,
 `description`, `parameters`) or the nested Chat Completions definition.
