@@ -4,7 +4,9 @@ Stage one, the transport/host increments, and persistence foundations in the
 [integration plan](plans/windows-compatibility.md) build the current official
 engine's **CPU CLI and selected host/server checks** natively on Windows x64.
 This is an integration milestone, not a supported Windows inference release.
-Native HIP inference and the GUI remain pending. Windows CPU CI is implemented,
+Native HIP builds and an initial Flash-Next live smoke check now pass; WDDM
+memory admission and wider runtime qualification remain pending, as does the GUI.
+Windows CPU CI is implemented,
 with its first hosted run pending. Disk checkpoint persistence is deferred from
 the initial port. GGUF digest caching and private content tracing are enabled.
 
@@ -36,6 +38,18 @@ builds the CLI, its `gufo-server.exe` copy, and the selected host/server tests.
 Use this bounded preset on Windows; other test targets include Linux-specific
 harnesses which have not yet been ported. The existing Linux presets remain
 unchanged.
+
+For the native HIP development build with TheRock 10.0.0:
+
+```powershell
+./tools/windows/build.ps1 -Preset windows-gpu -Vcpkg C:\vcpkg
+./build/windows-gpu/gufo.exe probe
+```
+
+The script stages TheRock runtime DLLs and the BLAS kernel libraries beside the
+executables. Windows kernel-bench profiler markers are disabled when TheRock
+does not provide rocprofiler-sdk; Linux still requires that dependency. This
+build remains a development milestone pending the qualification below.
 
 The script imports the MSVC headers and libraries, invokes CMake, and stages
 runtime DLLs beside the executables. CMake retains the official
@@ -309,3 +323,34 @@ adding native restart/reclamation/corruption/failure tests. A weaker Windows
 power-loss contract has not been selected or implemented. No Linux build,
 live GPU/model cache behavior, numerical quality, or speed qualification is
 claimed by these CPU checks.
+
+## Initial native HIP live inference
+
+On 2026-10-12, the native `windows-gpu` build based on `3137e712` plus the HIP
+build-wiring changes passed a bounded live smoke check on the Radeon 8060S
+(`gfx1151`). The compiler is TheRock 10.0.0; `probe` reports runtime
+`7.15.26333` and 107.87 GiB device memory. The preset uses RelWithDebInfo with
+assertions enabled. This evidence covers one model on this host.
+
+Artifacts supplied locally were the four-part
+`Qwen3.8-Flash-Next-UD-Q4_K_XL` GGUF, `mmproj-BF16.gguf`, and
+`mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf`. With one session, a 4096-token context,
+thinking off, and disk cache off:
+
+- AR loaded in 23.839 seconds and MTP in 35.166 seconds. Health and model
+  discovery succeeded, advertising text and image inputs.
+- Both modes returned the expected buffered answer `42`, streamed answer `10`
+  with a terminal SSE marker, and conversation follow-up `50`.
+- Both follow-ups reported a RAM cache hit, 28 reused prompt tokens, and only
+  29 new prefill tokens. AR reported zero drafts. Each MTP request actually ran
+  one draft round, proposing three tokens and accepting one.
+- An AR image request correctly identified a generated solid-red PNG as `Red`.
+
+Requests, responses, per-request timings, server logs, and smoke scripts are
+retained locally under `build/windows-gpu/live-flash-20261012-184954`. The test
+servers were stopped after use. These short checks establish live execution,
+streaming, a RAM restore, and one vision example; they do not establish numerical
+quality, a speed comparison, long-context/cancellation behavior, allocation
+pressure, or support for other models. WDDM admission, pinned-memory contracts,
+broader model-owned checks, and the final Linux/Windows qualification remain
+required. Disk checkpoint persistence remains excluded from the initial port.

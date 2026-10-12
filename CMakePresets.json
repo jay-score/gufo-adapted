@@ -71,6 +71,16 @@
         "lhs": "${hostSystemName}",
         "rhs": "Windows"
       }
+    },
+    {
+      "name": "windows-gpu",
+      "displayName": "Windows gfx1151 GPU build",
+      "inherits": "gpu-test",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
     }
   ],
   "buildPresets": [
@@ -99,6 +109,13 @@
       "configurePreset": "cpu-test",
       "targets": [
         "check-pr"
+      ]
+    },
+    {
+      "name": "windows-gpu",
+      "configurePreset": "windows-gpu",
+      "targets": [
+        "gufo-server"
       ]
     },
     {

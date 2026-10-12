@@ -3,8 +3,19 @@
 if (NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR NOT CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
   message(FATAL_ERROR "Windows builds require clang targeting the MSVC ABI; use tools/windows/build.ps1")
 endif()
-if (ENGINE_ENABLE_HIP OR NOT DEFINED ENGINE_ENABLE_HIP)
-  message(FATAL_ERROR "Windows HIP support is a later integration stage; configure ENGINE_ENABLE_HIP=OFF")
+# HIP is enabled by default (ENGINE_ENABLE_HIP is declared after this module).
+# The HIP compiler probe runs in the root file, so the MSVC <cmath> workaround
+# in compat/win32/hip_include must be on the HIP flags before that probe.
+if (NOT DEFINED ENGINE_ENABLE_HIP OR ENGINE_ENABLE_HIP)
+  if (NOT CMAKE_HIP_FLAGS MATCHES "compat/win32/hip_include")
+    set(CMAKE_HIP_FLAGS
+      "${CMAKE_HIP_FLAGS} -I\"${PROJECT_SOURCE_DIR}/compat/win32/hip_include\""
+      CACHE STRING "HIP flags" FORCE)
+  endif()
+  if (DEFINED ENV{HIP_PATH})
+    file(TO_CMAKE_PATH "$ENV{HIP_PATH}" GUFO_HIP_PATH)
+    list(APPEND CMAKE_PREFIX_PATH "${GUFO_HIP_PATH}")
+  endif()
 endif()
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_library(gufo_posix_compat STATIC
@@ -59,6 +70,9 @@ if (BUILD_TESTING)
     ${PROJECT_SOURCE_DIR}/src/cli/serve/continuation_cache.cpp
     ${PROJECT_SOURCE_DIR}/src/cli/serve/continuation_disk_store.cpp
     ${PROJECT_SOURCE_DIR}/src/cli/serve/text_model_runner.cpp)
+  # Created before enable_language(HIP) in the root file, so the global
+  # CMAKE_HIP_ARCHITECTURES initializer has not run for this target yet.
+  set_target_properties(win32_host_test PROPERTIES HIP_ARCHITECTURES gfx1151)
   target_compile_options(win32_host_test PRIVATE -UNDEBUG)
   target_link_libraries(win32_host_test PRIVATE gufo_diagnostics gufo_logging gufo_core)
   add_test(NAME win32_host_test COMMAND win32_host_test)

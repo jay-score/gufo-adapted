@@ -236,6 +236,13 @@ keep the existing `windows-port` branch available throughout qualification.
    model-owned checks. A milestone for one model is not a claim that all model
    families are qualified.
 
+   The native HIP build and initial Flash-Next AR/MTP smoke check are implemented.
+   Buffered/streamed generation, one RAM continuation restore in each mode, actual
+   MTP drafts, and one AR image request pass on the local 8060S. WDDM admission,
+   pinned-memory qualification, long-context/cancellation, other model paths,
+   numerical checks, and matched speed measurements remain pending. See
+   [the validation record](../WINDOWS.md#initial-native-hip-live-inference).
+
 4. **Qualification and maintenance handoff.** Run the official Linux hosted
    checks and formatting checks, Windows CPU checks, affected numerical-quality
    tests, and the standard speed benchmark. Use
