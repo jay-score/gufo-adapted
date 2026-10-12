@@ -1,8 +1,9 @@
-# Stage-one native CPU build. CMake owns targets and compiler flags.
+# Native CPU build. CMake owns targets and compiler flags.
 param(
   [string]$Preset = "windows-cpu",
   [string]$Target = "",
   [string]$Rocm = "C:\TheRock\build",
+  [string]$CompilerBin = "",
   [string]$Vcpkg = "C:\vcpkg",
   [string]$Ninja = "ninja",
   [int]$Jobs = 4,
@@ -10,7 +11,8 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
-& "$PSScriptRoot\check.ps1" -Rocm $Rocm -Vcpkg $Vcpkg -Ninja $Ninja
+if (-not $CompilerBin) { $CompilerBin = "$Rocm/lib/llvm/bin" }
+& "$PSScriptRoot\check.ps1" -CompilerBin $CompilerBin -Vcpkg $Vcpkg -Ninja $Ninja
 
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -21,8 +23,16 @@ if ($LASTEXITCODE -ne 0) { throw "MSVC environment setup failed" }
 $environment | ForEach-Object {
   if ($_ -match "^([^=]+)=(.*)$") { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
 }
+Write-Host "MSVC $env:VCToolsVersion, Windows SDK $env:WindowsSDKVersion"
 $ninjaPath = (Get-Command $Ninja -CommandType Application | Select-Object -First 1).Source.Replace('\', '/')
-$compilerDir = "$Rocm/lib/llvm/bin".Replace('\', '/')
+$compilerDir = (Resolve-Path -LiteralPath $CompilerBin).Path.Replace('\', '/')
+# Standalone LLVM ships its own OpenMP import library/runtime. Keep that pair
+# together; TheRock builds can still use the matching VS developer runtime.
+$llvmOpenmp = [IO.Path]::GetFullPath("$compilerDir/../lib/libomp.lib").Replace('\', '/')
+$openmpArgs = @()
+if ((Test-Path -LiteralPath $llvmOpenmp) -and (Test-Path -LiteralPath "$compilerDir/libomp.dll")) {
+  $openmpArgs = @("-DOpenMP_libomp_LIBRARY:FILEPATH=$llvmOpenmp")
+}
 $revision = & git -C $root rev-parse --short=12 HEAD
 if ($LASTEXITCODE -ne 0) { throw "cannot identify the source revision" }
 $dirty = & git -C $root status --porcelain
@@ -40,7 +50,7 @@ $dependencies = "$root/build/vcpkg_installed".Replace('\', '/')
   "-DVCPKG_MANIFEST_DIR=$($root.Replace('\', '/'))" `
   "-DVCPKG_INSTALLED_DIR=$dependencies" `
   "-DCMAKE_LINKER_TYPE=LLD" `
-  "-DGUFO_RELEASE_VERSION=$release" "-DGUFO_REVISION=$revision" @CMakeArgs
+  "-DGUFO_RELEASE_VERSION=$release" "-DGUFO_REVISION=$revision" @openmpArgs @CMakeArgs
 if ($LASTEXITCODE -ne 0) { throw "configure failed" }
 $buildArgs = @("--build", "--preset", $Preset, "--parallel", $Jobs)
 if ($Target) { $buildArgs += @("--target", $Target) }
@@ -62,5 +72,7 @@ if ($openmp -and $openmp.Matches[0].Groups[1].Value -match '^(.*)/VC/Tools/MSVC/
   $runtime = Get-ChildItem "$($Matches[1])/VC/Redist/MSVC/$($Matches[2])/debug_nonredist/x64/Microsoft.VC*.OpenMP.LLVM/libomp140.x86_64.dll" -ErrorAction SilentlyContinue
   if (-not $runtime) { throw "Cannot find this build's local OpenMP runtime" }
   $runtime | Copy-Item -Destination $build -Force
+} elseif ($openmp -and $openmp.Matches[0].Groups[1].Value -eq $llvmOpenmp) {
+  Copy-Item -LiteralPath "$compilerDir/libomp.dll" -Destination $build -Force
 }
 Write-Host "Built $build (CPU only)"

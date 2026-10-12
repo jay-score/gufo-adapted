@@ -1,13 +1,14 @@
 # Minimal native Windows integration
 
 Status: stage one and the transport/host increments of stage two implemented;
-persistence foundations qualified, checkpoint-store port still pending
+persistence foundations qualified, checkpoint-store port deferred
 on `feat/windows-cpu-compat`. The native Windows CPU CLI builds; the bounded
 preset includes host, HTTP, audio WebSocket, and console-shutdown checks. See
 [Windows status](../WINDOWS.md) for commands, provenance, validation, and
-remaining limitations. Checkpoint persistence, Windows CI, stages
-three/four, and the GUI remain pending. No GPU/model or persistent-cache runtime
-qualification is claimed yet.
+remaining limitations. Windows CPU CI is implemented; its first hosted run is
+pending. Stages three/four and the GUI remain pending. Disk checkpoint
+persistence is outside the initial port's scope. No GPU/model or persistent-cache
+runtime qualification is claimed yet.
 
 ## Objective and baseline
 
@@ -91,8 +92,9 @@ Useful provenance starts with the original compatibility commit above,
 Use the current fork files, not just the original commits, to retain subsequent
 fixes. Apply source hunks against current official code deliberately.
 
-Defer the GUI, guided installers, double-click launchers, updater, fork release
-workflow, custom upstream-sync tools, `GUFO_PLATFORM_TUNING`, and fork-only
+Defer disk checkpoint persistence, the GUI, guided installers, double-click
+launchers, updater, fork release workflow, custom upstream-sync tools,
+`GUFO_PLATFORM_TUNING`, and fork-only
 MTP/sampling options. Windows performance optimizations can be evaluated later
 only if the official implementation exposes a measured problem. They are not
 a prerequisite for the initial compatibility port.
@@ -124,6 +126,11 @@ The existing shim also synthesizes POSIX ownership/mode fields and makes
 `chmod`/`fchmod` no-ops. Review the older identity and continuation-cache checks
 that depend on those fields. Where they enforce privacy, Windows needs an
 equivalent access-control check or a documented, explicit limitation.
+
+The user selected deferral rather than weakening upstream durability. Both
+checkpoint-store Windows guards remain in place; enabling them is a separate
+follow-up, not a prerequisite for native HIP or the GUI. RAM continuation reuse,
+GGUF digest caching, and private tracing remain in scope.
 
 The cache is compiled into the engine even when runtime disk caching is off.
 Turning disk caching off does not remove this build dependency.
@@ -184,12 +191,12 @@ keep the existing `windows-port` branch available throughout qualification.
 
 2. **Server and cache semantics.** Adapt sockets, signals/shutdown, diagnostics,
    aligned allocation, and host-memory reporting against the official sources.
-   Complete cache publication/recovery and Windows test harnesses. Keep the
+   Qualify private filesystem operations and Windows test harnesses. Keep the
    Linux suite intact; add a separate bounded Windows CPU CI job. Verify HTTP,
    streaming/disconnects, WebSockets, cancellation, shutdown, file locking,
-   large offsets, Unicode/spaced paths, no-replace publication, restart,
-   corruption handling, and publication failures. Update the cache dependency
-   boundary check with the reviewed CPU shim.
+   large offsets, Unicode/spaced paths, operation-level no-replace publication,
+   and filesystem failures. Checkpoint-store recovery is deferred. Update the
+   cache dependency boundary check with the reviewed CPU shim.
 
    Deliver this stage in separate commits:
 
@@ -201,7 +208,7 @@ keep the existing `windows-port` branch available throughout qualification.
      host-memory reporting/admission, and Unicode Windows cache-directory
      selection. Unqueried GPU/driver/memory-type fields remain unavailable.
      Aligned allocation was completed in stage one.
-   - **Persistence:** ACLs, stable directory identity, publication/recovery,
+   - **Persistence foundations (implemented):** ACLs, stable directory identity,
      and native subprocess/failure-injection tests. Retain the Windows guards
      until each store's guarantees are demonstrated. The dependency boundary
      and isolated locking/offset/no-replace operations were covered in stage one.
@@ -210,10 +217,13 @@ keep the existing `windows-port` branch available throughout qualification.
      and GGUF identity caching. Both checkpoint stores remain guarded. Native
      directory flush succeeds with write access, but this process cannot flush
      `C:\Users` or the volume root required by the new store's ancestor walk.
-     Resolve that Windows durability contract before enabling stores; a weaker
+     Both stores are deferred to keep the initial port small. Any later enabling
+     change must resolve durability and qualify store-level recovery; a weaker
      power-loss guarantee has not been selected. See the validation record.
-   - **Windows CPU CI:** automate the qualified bounded suite, preserving the
-     existing Linux checks.
+   - **Windows CPU CI (implemented):** a separate workflow automates the
+     qualified bounded suite with pinned standalone LLVM and the manifest's
+     vcpkg baseline, preserving the existing Linux checks. Local validation
+     precedes the first hosted run.
 
 3. **Native HIP runtime.** Enable the production Windows build with the fork's
    pinned TheRock 10.0.0 as the initial reference toolchain. Verify its
@@ -221,26 +231,30 @@ keep the existing `windows-port` branch available throughout qualification.
    Stage runtime libraries, adapt WDDM memory admission, and check pinned
    backing and transfers. First exercise Flash-Next AR/MTP and Qwen27B
    AR/DFlash2 with actual local models, images, RAM reuse, long-context
-   continuation, disk restart, and cancellation. Then qualify the other
-   supported model paths with focused model-owned checks. A milestone for one
-   model is not a claim that all model families are qualified.
+   continuation, and cancellation. Disk restart is excluded from this initial
+   Windows scope. Then qualify the other supported model paths with focused
+   model-owned checks. A milestone for one model is not a claim that all model
+   families are qualified.
 
 4. **Qualification and maintenance handoff.** Run the official Linux hosted
    checks and formatting checks, Windows CPU checks, affected numerical-quality
    tests, and the standard speed benchmark. Use
    [`tests/functional/`](../../tests/functional/README.md) for selected live
    suites; shared compatibility behavior calls for all four text profiles,
-   including `long-context` and `cache`, without running unrelated full model
-   sweeps or video generation. Replay `pi_agent.py` if an affected coding-agent
-   workflow is reported. Retain every result and toolchain/model/cache identity.
+   including `long-context` and RAM continuation/cache scenarios, without running
+   unrelated full model sweeps or video generation. Replay `pi_agent.py` if an
+   affected coding-agent workflow is reported. Retain every result and
+   toolchain/model/cache identity.
    Observe the repository's strict per-request timing rules; a missing model
    skip or inconclusive timing is not a qualification pass. Document the
    supported Windows configuration and any remaining limitations in
    `docs/WINDOWS.md`, and make narrowly scoped platform-documentation updates.
+   The existing `cache` suite also tests disk restart; record those Windows
+   cases as excluded by scope rather than passed. Keep Linux disk checks intact.
 
 Stages 1-3 are incremental development milestones. The port is complete only
-when the intended runtime paths and cache guarantees are covered, Linux checks
-pass, and documented support claims match actual evidence.
+when the intended runtime paths and RAM cache guarantees are covered, Linux
+checks pass, and documented support claims match actual evidence.
 
 The existing build script copies an OpenMP runtime from Visual Studio's
 `debug_nonredist` directory for developer use. Do not turn that into a public

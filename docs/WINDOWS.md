@@ -4,15 +4,17 @@ Stage one, the transport/host increments, and persistence foundations in the
 [integration plan](plans/windows-compatibility.md) build the current official
 engine's **CPU CLI and selected host/server checks** natively on Windows x64.
 This is an integration milestone, not a supported Windows inference release.
-Native HIP inference, checkpoint-cache guarantees, Windows CPU CI, and the GUI
-remain pending. GGUF digest caching and private content tracing are enabled.
+Native HIP inference and the GUI remain pending. Windows CPU CI is implemented,
+with its first hosted run pending. Disk checkpoint persistence is deferred from
+the initial port. GGUF digest caching and private content tracing are enabled.
 
 ## Prerequisites and build
 
 Use Windows 11 x64, Visual Studio C++ Build Tools with the Windows SDK, CMake 3.21
 or newer, Ninja, Python, Git, and a bootstrapped vcpkg checkout. The initial
-compiler is the clang distributed with TheRock 10.0.0, extracted under
-`C:\TheRock\build`. Stage one uses that compiler without enabling HIP or needing
+compiler for the HIP integration is the clang distributed with TheRock 10.0.0,
+extracted under `C:\TheRock\build`. CPU builds can also use standalone LLVM
+23.1.2 through `-CompilerBin`; neither CPU build needs ROCm runtime libraries or
 a GPU. The pinned dependencies in the root `vcpkg.json` are installed into this
 worktree's `build/vcpkg_installed`; the build does not reuse the fork's binaries.
 
@@ -26,7 +28,8 @@ ctest --preset windows-cpu
 ./build/windows-cpu/gufo.exe --help
 ```
 
-Override `-Rocm`, `-Vcpkg`, or `-Ninja` for your local installation. `-Jobs`
+Override `-Rocm`, `-CompilerBin`, `-Vcpkg`, or `-Ninja` for your local installation.
+The default compiler directory remains `-Rocm` plus `lib/llvm/bin`. `-Jobs`
 controls build parallelism and defaults to four. For focused iteration, supply
 `-Target gguf_reader_test`, for example. The default `windows-cpu` build preset
 builds the CLI, its `gufo-server.exe` copy, and the selected host/server tests.
@@ -40,7 +43,56 @@ runtime DLLs beside the executables. CMake retains the official
 copy without requiring symlink privileges. Run the executable from the build
 directory distribution; installation/redistributable packaging is not yet
 qualified. The locally copied VS LLVM OpenMP DLL comes from `debug_nonredist`
-and is for developer use only, not public binary redistribution.
+and is for developer use only, not public binary redistribution. Standalone
+LLVM builds instead use the OpenMP library and DLL shipped with that compiler.
+
+## Windows CPU CI
+
+The separate [Windows workflow](../.github/workflows/windows-cpu.yml) runs the
+bounded `windows-cpu` build and all 14 checks on `windows-2025`, on pull requests
+and pushes to `main` or `feat/windows-cpu-compat`, and through manual dispatch.
+It retains build/configuration logs and CTest results; it does not publish
+executables. The existing Linux CI workflow is unchanged.
+
+[setup-ci.ps1](../tools/windows/setup-ci.ps1) downloads the official
+[LLVM 23.1.2 release](https://github.com/llvm/llvm-project/releases/tag/llvmorg-23.1.2)
+and verifies the Windows MSVC archive's SHA-256 before extraction. It bootstraps
+an isolated vcpkg checkout at the root manifest's `builtin-baseline`. The job
+caches the pinned compiler and vcpkg binary archives, leaving CMake build trees
+and installed dependencies fresh. vcpkg's ABI keys account for toolchain changes;
+the logs record compiler/build-tool and hosted-image versions. Visual Studio
+headers/libraries and the Windows SDK come from the hosted image.
+
+To reproduce that setup locally with the prerequisites above:
+
+```powershell
+$tools = & ./tools/windows/setup-ci.ps1
+& ./tools/windows/build.ps1 -CompilerBin $tools.CompilerBin -Vcpkg $tools.Vcpkg
+ctest --preset windows-cpu --no-tests=error
+```
+
+The helper's downloads and checkout stay under ignored `build/windows-ci`.
+When changing compilers in an existing build, use `-CMakeArgs @('--fresh')`
+with CMake 3.24 or newer to reset the compiler probes and preset variables.
+This is a CPU contract gate; GPU/model correctness, numerical quality, and
+performance require the later native HIP qualification.
+
+Locally validated on 2026-10-12, building on `9d897f15`, with LLVM 23.1.2,
+MSVC 14.51.36231, Windows SDK 10.0.26100.0, CMake 4.4.0, Python 3.14.6, and
+PowerShell 7.6.6:
+
+- Verified download, selective compiler extraction, isolated vcpkg bootstrap
+  at the manifest baseline, and subsequent reuse of the extracted compiler.
+- Successful native CPU build and all 14 checks passing in 17.26 seconds.
+  The retained JUnit report records zero failures, disabled tests, or skips;
+  the staged OpenMP DLL matches the compiler's runtime.
+- actionlint 1.7.12, PowerShell syntax checks, and shared documentation and
+  dependency checks pass.
+
+These results use the local host's VS/SDK and existing manifest dependencies.
+The first hosted run, including fresh dependency installation and the runner
+image's VS/SDK, remains pending. Linux, GPU/model, and performance qualification
+are not claimed by this increment.
 
 ## Scope and boundaries
 
@@ -63,8 +115,11 @@ touching their cache directories. Private GGUF digest caching and content
 tracing are now qualified by the focused CPU checks below. The filesystem shim
 creates protected ACLs, verifies ownership/privacy, and uses native handles for
 child-file operations. Unsupported flushes fail explicitly. Checkpoint layout
-durability, store-level recovery, and their native fault harnesses remain
-pending; the isolated filesystem checks do not establish those guarantees.
+durability, store-level recovery, and their native fault harnesses are deferred;
+the isolated filesystem checks do not establish those guarantees. The initial
+Windows port will run without disk checkpoint persistence: RAM continuation
+reuse remains in scope, but restarting the engine requires prompt recomputation.
+Conversation history kept by a client or GUI is independent of these stores.
 
 HIP configuration on Windows currently stops with an explicit stage-three
 message. Keep using the existing `windows-port` checkout for its qualified
@@ -246,7 +301,9 @@ to `C:\Users` or `C:\`, although it can flush its own directories. A successful
 rename or a process-crash test cannot establish the missing ancestor durability.
 
 The selected contract preserves upstream guarantees: both checkpoint
-guards stay intact. Finishing their port requires resolving the Windows
+guards stay intact. The user deferred disk checkpoint persistence to reduce
+maintenance when merging upstream updates. It does not block native HIP or GUI
+integration. A future port requires resolving the Windows
 durability contract, qualifying the store algorithms and privacy checks, and
 adding native restart/reclamation/corruption/failure tests. A weaker Windows
 power-loss contract has not been selected or implemented. No Linux build,

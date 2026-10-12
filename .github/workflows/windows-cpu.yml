@@ -1,0 +1,78 @@
+name: Windows CPU
+
+on:
+  push:
+    branches: [main, feat/windows-cpu-compat]
+  pull_request:
+    branches: [main, feat/windows-cpu-compat]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-cpu-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-cpu:
+    name: Native CPU contracts
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/build/vcpkg-archives,readwrite
+      VCPKG_DISABLE_METRICS: '1'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Restore pinned compiler
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/windows-ci/clang+llvm-*-x86_64-pc-windows-msvc
+          key: windows-cpu-llvm-${{ runner.arch }}-${{ hashFiles('tools/windows/setup-ci.ps1') }}
+
+      - name: Restore dependency archives
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/vcpkg-archives
+          key: windows-cpu-vcpkg-${{ runner.arch }}-${{ hashFiles('vcpkg.json', 'tools/windows/setup-ci.ps1') }}-${{ github.sha }}
+          restore-keys: |
+            windows-cpu-vcpkg-${{ runner.arch }}-${{ hashFiles('vcpkg.json', 'tools/windows/setup-ci.ps1') }}-
+
+      - name: Configure and build bounded CPU targets
+        run: |
+          New-Item -ItemType Directory -Force build/windows-ci/logs, build/vcpkg-archives | Out-Null
+          Start-Transcript -Path build/windows-ci/logs/build.txt
+          try {
+            $tools = & ./tools/windows/setup-ci.ps1
+            Write-Host "Runner image: $env:ImageOS $env:ImageVersion"
+            & "$($tools.CompilerBin)/clang.exe" --version
+            cmake --version
+            ninja --version
+            python --version
+            & "$($tools.Vcpkg)/vcpkg.exe" version
+            & ./tools/windows/build.ps1 -CompilerBin $tools.CompilerBin -Vcpkg $tools.Vcpkg -Jobs 4
+          } finally { Stop-Transcript }
+
+      - name: Run bounded native checks
+        run: |
+          ctest --preset windows-cpu --no-tests=error --output-junit "$PWD/build/windows-ci/logs/tests.xml" 2>&1 |
+            Tee-Object -FilePath build/windows-ci/logs/tests.txt
+          if ($LASTEXITCODE -ne 0) { throw "Windows CPU checks failed" }
+
+      - name: Upload validation logs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: windows-cpu-logs
+          path: |
+            build/windows-ci/logs/
+            build/windows-cpu/CMakeCache.txt
+            build/windows-cpu/CMakeFiles/CMakeConfigureLog.yaml
+            build/windows-cpu/Testing/Temporary/
+          if-no-files-found: warn
+          retention-days: 14

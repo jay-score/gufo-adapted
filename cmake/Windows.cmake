@@ -1,4 +1,4 @@
-# Native Windows source builds use TheRock's clang with the MSVC STL/SDK.
+# Native Windows source builds use clang with the MSVC STL/SDK.
 # Keep the POSIX headers and libraries confined to Gufo-owned targets.
 if (NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR NOT CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
   message(FATAL_ERROR "Windows builds require clang targeting the MSVC ABI; use tools/windows/build.ps1")
