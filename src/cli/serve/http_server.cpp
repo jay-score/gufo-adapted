@@ -656,9 +656,17 @@ HttpResponse OpenAiCompletions(const HttpRequest& req,
                "invalid_request_error", "missing_prompt");
   }
 
+  bool cache_prompt = true;
+  if (const auto* value = body.find("cache_prompt");
+      value != nullptr && !value->is_null()) {
+    if (!value->is_bool())
+      return InvalidCompatibilityRequest("'cache_prompt' must be a boolean");
+    cache_prompt = value->as_bool();
+  }
+
   const auto res =
       b.complete(prompt, max_tokens, sampling_config, req.is_cancelled, {},
-                 req.client_id, stop_sequences);
+                 req.client_id, stop_sequences, cache_prompt);
 
   json::Value resp = json::Value::object();
   resp["id"] = "cmpl-" + RandomId();
@@ -901,9 +909,17 @@ HttpResponse LlamaCompletion(const HttpRequest& req,
           body.find("stop"), StopSequenceFormat::kOpenAi, &stop_sequences))
     return InvalidCompatibilityRequest(*error);
 
+  bool cache_prompt = true;
+  if (const auto* value = body.find("cache_prompt");
+      value != nullptr && !value->is_null()) {
+    if (!value->is_bool())
+      return InvalidCompatibilityRequest("'cache_prompt' must be a boolean");
+    cache_prompt = value->as_bool();
+  }
+
   const auto res =
       b.complete(prompt, max_tokens, sampling_config, req.is_cancelled, {},
-                 req.client_id, stop_sequences);
+                 req.client_id, stop_sequences, cache_prompt);
 
   json::Value resp = json::Value::object();
   resp["content"] = core::Utf8Decoder{}.Push(res.text, true);
