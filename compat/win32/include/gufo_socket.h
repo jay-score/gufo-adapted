@@ -1,5 +1,5 @@
-/* BSD socket names on Winsock. Sockets stay `int` in Gufo: Win32 kernel
- * handles are guaranteed to fit in 32 bits. Call sites still differ in three
+/* BSD socket names on Winsock. Gufo preserves native SOCKET handles.
+ * Call sites still differ in three
  * ways Winsock cannot hide: sockets close with closesocket(), errors come from
  * WSAGetLastError() rather than errno, and SO_RCVTIMEO/SO_SNDTIMEO take a DWORD
  * of milliseconds. src/core/platform/socket.hpp wraps those. */

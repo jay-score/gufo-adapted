@@ -111,7 +111,9 @@
         "gguf_identity_test",
         "win32_compat_test",
         "json_test",
-        "json_constraint_test"
+        "json_constraint_test",
+        "http_server_test",
+        "audio_websocket_test"
       ]
     }
   ],
@@ -192,7 +194,7 @@
       },
       "filter": {
         "include": {
-          "name": "^(gufo_version|gufo_help|arg_parser_test|gguf_reader_test|gguf_identity_test|win32_compat_test|json_test|json_constraint_test|cache_boundary_test)$"
+          "name": "^(gufo_version|gufo_help|arg_parser_test|gguf_reader_test|gguf_identity_test|win32_compat_test|json_test|json_constraint_test|cache_boundary_test|http_server_test|audio_websocket_test|win32_server_shutdown_test)$"
         }
       }
     }

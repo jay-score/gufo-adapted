@@ -39,9 +39,14 @@ endfunction()
 cmake_language(DEFER CALL gufo_windows_targets "${PROJECT_SOURCE_DIR}")
 
 if (BUILD_TESTING)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_executable(win32_compat_test ${PROJECT_SOURCE_DIR}/tests/platform/win32_compat_test.cpp)
   target_compile_options(win32_compat_test PRIVATE -UNDEBUG)
   target_link_libraries(win32_compat_test PRIVATE gufo_cache)
   add_test(NAME win32_compat_test COMMAND win32_compat_test)
   set_tests_properties(win32_compat_test PROPERTIES LABELS "cpu;windows" TIMEOUT 30)
+  add_test(NAME win32_server_shutdown_test
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/platform/win32_server_shutdown_test.py
+      $<TARGET_FILE:http_server_test>)
+  set_tests_properties(win32_server_shutdown_test PROPERTIES LABELS "cpu;windows;server" TIMEOUT 30)
 endif()

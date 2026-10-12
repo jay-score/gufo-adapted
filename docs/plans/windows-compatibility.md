@@ -1,10 +1,12 @@
 # Minimal native Windows integration
 
-Status: stage one implemented on `feat/windows-cpu-compat`; the native Windows
-CPU CLI builds and all nine bounded host checks pass. See
+Status: stage one and the server-transport increment of stage two implemented
+on `feat/windows-cpu-compat`. The native Windows CPU CLI builds; the bounded
+preset includes host, HTTP, audio WebSocket, and console-shutdown checks. See
 [Windows status](../WINDOWS.md) for commands, provenance, validation, and
-remaining limitations. Stages two through four and the GUI remain pending;
-no GPU or server/cache runtime qualification is claimed yet.
+remaining limitations. Host integration, persistent caches, Windows CI, stages
+three/four, and the GUI remain pending. No GPU/model or persistent-cache runtime
+qualification is claimed yet.
 
 ## Objective and baseline
 
@@ -187,6 +189,21 @@ keep the existing `windows-port` branch available throughout qualification.
    large offsets, Unicode/spaced paths, no-replace publication, restart,
    corruption handling, and publication failures. Update the cache dependency
    boundary check with the reviewed CPU shim.
+
+   Deliver this stage in separate commits:
+
+   - **Transport and shutdown (implemented):** native socket handles and I/O,
+     nonblocking accept with blocking workers, disconnect/cancellation,
+     WebSocket idle/close semantics, and actual console-event subprocess tests.
+     Content tracing fails explicitly until Windows ACL privacy is qualified.
+   - **Host integration:** diagnostics, host-memory reporting, and Windows
+     cache-directory selection. Aligned allocation was completed in stage one.
+   - **Persistence:** ACLs, stable directory identity, publication/recovery,
+     and native subprocess/failure-injection tests. Retain the Windows guards
+     until each store's guarantees are demonstrated. The dependency boundary
+     and isolated locking/offset/no-replace operations were covered in stage one.
+   - **Windows CPU CI:** automate the qualified bounded suite, preserving the
+     existing Linux checks.
 
 3. **Native HIP runtime.** Enable the production Windows build with the fork's
    pinned TheRock 10.0.0 as the initial reference toolchain. Verify its

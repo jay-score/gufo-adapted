@@ -66,6 +66,15 @@ void RequestShutdown(int signal) noexcept {
   shutdown_signal.store(signal, std::memory_order_relaxed);
 }
 
+#ifdef _WIN32
+BOOL WINAPI RequestConsoleShutdown(DWORD event) noexcept {
+  if (event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT)
+    return FALSE;
+  RequestShutdown(event == CTRL_C_EVENT ? SIGINT : SIGBREAK);
+  return TRUE;
+}
+#endif
+
 class ShutdownSignals {
 public:
   ShutdownSignals() {
@@ -82,8 +91,20 @@ public:
       throw std::system_error(error, std::generic_category(),
                               "install SIGTERM handler");
     }
+#ifdef _WIN32
+    if (!::SetConsoleCtrlHandler(RequestConsoleShutdown, TRUE)) {
+      const auto error = ::GetLastError();
+      (void)::sigaction(SIGTERM, &previous_terminate_, nullptr);
+      (void)::sigaction(SIGINT, &previous_interrupt_, nullptr);
+      throw std::system_error(error, std::system_category(),
+                              "install console shutdown handler");
+    }
+#endif
   }
   ~ShutdownSignals() {
+#ifdef _WIN32
+    (void)::SetConsoleCtrlHandler(RequestConsoleShutdown, FALSE);
+#endif
     (void)::sigaction(SIGTERM, &previous_terminate_, nullptr);
     (void)::sigaction(SIGINT, &previous_interrupt_, nullptr);
   }
@@ -99,10 +120,13 @@ private:
 // Socket I/O helpers
 // ---------------------------------------------------------------------------
 
-bool ReadUntil(std::string& out, int fd, std::string_view delim) {
+bool ReadUntil(std::string& out, platform::SocketHandle fd,
+               std::string_view delim) {
   char buf[4096];
   while (out.find(delim) == std::string::npos) {
-    const ssize_t n = ::read(fd, buf, sizeof(buf));
+    const ssize_t n = platform::SocketRead(fd, buf, sizeof(buf));
+    if (n < 0 && errno == EINTR)
+      continue;
     if (n <= 0)
       return false;
     out.append(buf, static_cast<std::size_t>(n));
@@ -112,13 +136,15 @@ bool ReadUntil(std::string& out, int fd, std::string_view delim) {
   return true;
 }
 
-bool ReadN(std::string& out, int fd, std::size_t n) {
+bool ReadN(std::string& out, platform::SocketHandle fd, std::size_t n) {
   out.reserve(n);
   std::size_t got = 0;
   char buf[4096];
   while (got < n) {
     const std::size_t want = std::min(sizeof(buf), n - got);
-    const ssize_t r = ::read(fd, buf, want);
+    const ssize_t r = platform::SocketRead(fd, buf, want);
+    if (r < 0 && errno == EINTR)
+      continue;
     if (r <= 0)
       return false;
     out.append(buf, static_cast<std::size_t>(r));
@@ -127,7 +153,7 @@ bool ReadN(std::string& out, int fd, std::size_t n) {
   return true;
 }
 
-bool SendAll(int fd, std::string_view data) {
+bool SendAll(platform::SocketHandle fd, std::string_view data) {
   std::size_t sent = 0;
   while (sent < data.size()) {
 #ifdef MSG_NOSIGNAL
@@ -135,7 +161,10 @@ bool SendAll(int fd, std::string_view data) {
 #else
     const int flags = 0;
 #endif
-    const ssize_t n = ::send(fd, data.data() + sent, data.size() - sent, flags);
+    const ssize_t n =
+        platform::SocketSend(fd, data.data() + sent, data.size() - sent, flags);
+    if (n < 0 && errno == EINTR)
+      continue;
     if (n <= 0)
       return false;
     sent += static_cast<std::size_t>(n);
@@ -143,7 +172,8 @@ bool SendAll(int fd, std::string_view data) {
   return true;
 }
 
-bool SendChunk(int fd, std::string_view data, std::string_view prefix = {}) {
+bool SendChunk(platform::SocketHandle fd, std::string_view data,
+               std::string_view prefix = {}) {
   if (data.empty())
     return prefix.empty() || SendAll(fd, prefix);
   char header[2 * sizeof(std::size_t) + 2];
@@ -166,7 +196,7 @@ bool SendChunk(int fd, std::string_view data, std::string_view prefix = {}) {
          SendAll(fd, data) && SendAll(fd, "\r\n");
 }
 
-bool IsPeerDisconnected(int fd) noexcept {
+bool IsPeerDisconnected(platform::SocketHandle fd) noexcept {
   pollfd descriptor{
       .fd = static_cast<decltype(pollfd::fd)>(fd),
       .events = POLLIN | POLLERR | POLLHUP,
@@ -187,7 +217,8 @@ bool IsPeerDisconnected(int fd) noexcept {
   if ((descriptor.revents & POLLIN) == 0)
     return false;
   char byte;
-  const auto count = ::recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT);
+  const auto count =
+      platform::SocketRecv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT);
   return count == 0 || (count < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
                         errno != EINTR);
 }
@@ -1778,7 +1809,8 @@ std::string HttpRequest::query_param(const std::string& key) const {
 // ---------------------------------------------------------------------------
 
 struct HttpServer::ConnectionWorker {
-  int fd{-1};  // Protected by workers_mutex_, including shutdown and close.
+  // Protected by workers_mutex_, including shutdown and close.
+  platform::SocketHandle fd{platform::kInvalidSocket};
   std::atomic<bool> done{false};
   std::jthread thread;
 };
@@ -1809,8 +1841,8 @@ HttpServer::HttpServer(std::string host, int port,
 
 HttpServer::~HttpServer() {
   stop();
-  if (listen_fd_ >= 0) {
-    ::close(listen_fd_);
+  if (listen_fd_ != platform::kInvalidSocket) {
+    platform::CloseSocket(listen_fd_);
   }
 }
 
@@ -1852,7 +1884,8 @@ void HttpServer::register_routes() {
 }
 
 bool HttpServer::start(std::string* error) {
-  if (listen_fd_ >= 0 || stopped_.load(std::memory_order_acquire)) {
+  if (listen_fd_ != platform::kInvalidSocket ||
+      stopped_.load(std::memory_order_acquire)) {
     if (error != nullptr) {
       *error = "HTTP server has already been started or stopped";
     }
@@ -1869,15 +1902,22 @@ bool HttpServer::start(std::string* error) {
     }
     return false;
   }
+#ifndef _WIN32
   (void)::signal(SIGPIPE, SIG_IGN);
+#endif
   listen_fd_ = ::socket(addr.ss_family, SOCK_STREAM, 0);
-  if (listen_fd_ < 0) {
+  if (listen_fd_ == platform::kInvalidSocket) {
     if (error != nullptr)
       *error = "socket() failed";
     return false;
   }
   const int yes = 1;
+#ifdef _WIN32
+  // Winsock SO_REUSEADDR permits a second server to take an occupied port.
+  platform::SetSocketOption(listen_fd_, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, yes);
+#else
   platform::SetSocketOption(listen_fd_, SOL_SOCKET, SO_REUSEADDR, yes);
+#endif
   // `::` serves IPv4 clients too. Set it explicitly: the kernel default
   // follows net.ipv6.bindv6only, which differs between hosts.
   const int no = 0;
@@ -1887,7 +1927,7 @@ bool HttpServer::start(std::string* error) {
     if (error != nullptr)
       *error = "setsockopt(IPV6_V6ONLY) failed";
     platform::CloseSocket(listen_fd_);
-    listen_fd_ = -1;
+    listen_fd_ = platform::kInvalidSocket;
     return false;
   }
 
@@ -1895,15 +1935,15 @@ bool HttpServer::start(std::string* error) {
     if (error != nullptr) {
       *error = "bind() failed on " + host_ + ":" + std::to_string(port_);
     }
-    ::close(listen_fd_);
-    listen_fd_ = -1;
+    platform::CloseSocket(listen_fd_);
+    listen_fd_ = platform::kInvalidSocket;
     return false;
   }
   if (::listen(listen_fd_, 16) < 0) {
     if (error != nullptr)
       *error = "listen() failed";
-    ::close(listen_fd_);
-    listen_fd_ = -1;
+    platform::CloseSocket(listen_fd_);
+    listen_fd_ = platform::kInvalidSocket;
     return false;
   }
   if (port_ == 0) {
@@ -1914,8 +1954,8 @@ bool HttpServer::start(std::string* error) {
       if (error != nullptr) {
         *error = "getsockname() failed";
       }
-      ::close(listen_fd_);
-      listen_fd_ = -1;
+      platform::CloseSocket(listen_fd_);
+      listen_fd_ = platform::kInvalidSocket;
       return false;
     }
     port_ = ntohs(bound.ss_family == AF_INET6
@@ -1933,8 +1973,7 @@ void HttpServer::run(bool handle_signals) {
   // Poll even without signal handling so device loss is observed while a
   // request worker is blocked writing to a slow client. Nonblocking accept
   // also keeps a vanished connection from wedging this observation loop.
-  const int flags = ::fcntl(listen_fd_, F_GETFL, 0);
-  if (flags < 0 || ::fcntl(listen_fd_, F_SETFL, flags | O_NONBLOCK) != 0)
+  if (platform::SetSocketBlocking(listen_fd_, false) != 0)
     throw std::system_error(errno, std::generic_category(),
                             "configure HTTP listener");
   Logger::Info(
@@ -1960,22 +1999,32 @@ void HttpServer::run(bool handle_signals) {
                       .events = POLLIN,
                       .revents = 0};
     const int ready = ::poll(&descriptor, 1, 100);
+    if (stopped_.load(std::memory_order_acquire))
+      break;
     if (ready < 0 && errno != EINTR)
       throw std::system_error(errno, std::generic_category(),
                               "poll HTTP listener");
     if (ready <= 0)
       continue;
-    const int client_fd = ::accept(listen_fd_, nullptr, nullptr);
-    if (client_fd < 0) {
+    const auto client_fd = ::accept(listen_fd_, nullptr, nullptr);
+    if (client_fd == platform::kInvalidSocket) {
       if (stopped_.load(std::memory_order_acquire)) {
         break;
       }
       continue;
     }
     if (stopped_.load(std::memory_order_acquire)) {
-      ::close(client_fd);
+      platform::CloseSocket(client_fd);
       break;
     }
+#ifdef _WIN32
+    // Winsock accept inherits the listener's nonblocking mode. Request
+    // workers use blocking I/O with receive/send timeouts.
+    if (platform::SetSocketBlocking(client_fd, true) != 0) {
+      platform::CloseSocket(client_fd);
+      continue;
+    }
+#endif
 
     reap_workers();
     auto worker = std::make_unique<ConnectionWorker>();
@@ -1989,11 +2038,15 @@ void HttpServer::run(bool handle_signals) {
         worker_ptr->fd = client_fd;
         worker_ptr->thread = std::jthread([this, worker_ptr, client_fd] {
           handle_connection(client_fd);
+          platform::SocketHandle finished_fd;
           {
             const std::lock_guard<std::mutex> lock(workers_mutex_);
-            ::close(worker_ptr->fd);
-            worker_ptr->fd = -1;
+            finished_fd =
+                std::exchange(worker_ptr->fd, platform::kInvalidSocket);
           }
+          // A Windows orderly close may drain briefly. Keep that wait out of
+          // the worker lock so other connections can be stopped or admitted.
+          platform::CloseConnection(finished_fd);
           worker_ptr->done.store(true, std::memory_order_release);
         });
         workers_.push_back(std::move(worker));
@@ -2005,7 +2058,7 @@ void HttpServer::run(bool handle_signals) {
               "server_error", "overloaded");
       response.headers.emplace_back("Retry-After", "1");
       (void)SendAll(client_fd, BuildResponse(response));
-      ::close(client_fd);
+      platform::CloseConnection(client_fd);
     }
   }
   reap_workers();
@@ -2013,7 +2066,10 @@ void HttpServer::run(bool handle_signals) {
 
 void HttpServer::stop() {
   const bool was_stopped = stopped_.exchange(true, std::memory_order_acq_rel);
-  if (!was_stopped && listen_fd_ >= 0) {
+  // WSAPoll does not wake on a local shutdown. WebSocket readers observe this
+  // token between bounded waits, without resetting the receive half on close.
+  websocket_stop_.request_stop();
+  if (!was_stopped && listen_fd_ != platform::kInvalidSocket) {
     // Keep the descriptor owned until destruction: run() may still be inside
     // accept(). Closing here allows it to observe a reused descriptor.
     (void)::shutdown(listen_fd_, SHUT_RDWR);
@@ -2024,8 +2080,8 @@ void HttpServer::stop() {
     const std::lock_guard<std::mutex> lock(workers_mutex_);
     workers = std::move(workers_);
     for (const auto& worker : workers) {
-      if (worker->fd >= 0) {
-        (void)::shutdown(worker->fd, SHUT_RDWR);
+      if (worker->fd != platform::kInvalidSocket) {
+        platform::ShutdownSocket(worker->fd);
       }
     }
   }
@@ -2166,7 +2222,7 @@ bool HttpServer::device_lost() {
   return true;
 }
 
-void HttpServer::handle_connection(int client_fd) {
+void HttpServer::handle_connection(platform::SocketHandle client_fd) {
   platform::SetSocketTimeout(client_fd, SO_RCVTIMEO, std::chrono::seconds{120});
   platform::SetSocketTimeout(client_fd, SO_SNDTIMEO, std::chrono::seconds{120});
 
@@ -2300,8 +2356,9 @@ void HttpServer::handle_connection(int client_fd) {
         }
         if (ok) {
           req.body = std::move(body);
-          req.is_cancelled = [client_fd] {
-            return IsPeerDisconnected(client_fd);
+          req.is_cancelled = [this, client_fd] {
+            return stopped_.load(std::memory_order_acquire) ||
+                   IsPeerDisconnected(client_fd);
           };
         }
       }
@@ -2353,7 +2410,8 @@ void HttpServer::handle_connection(int client_fd) {
       response_started = true;
       connected = SendAll(client_fd, BuildResponseHead(resp, std::nullopt));
       if (connected) {
-        WebSocket socket(client_fd, std::move(req.body));
+        WebSocket socket(client_fd, std::move(req.body),
+                         websocket_stop_.get_token());
         resp.websocket(socket);
       }
     } else if (resp.streaming_body) {

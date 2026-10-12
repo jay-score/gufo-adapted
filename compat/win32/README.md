@@ -18,3 +18,9 @@ fork revision. The new CMake module and build/check scripts adapt those ideas
 to the current official engine; no fork model changes, GUI, release workflow,
 or tuning options were imported. See [Windows status](../../docs/WINDOWS.md)
 for reproducible commands and validated scope.
+
+The stage-two transport increment adapts the socket helper for native handle
+width and real listener nonblocking mode, uses it throughout HTTP/WebSocket
+I/O, and cancels pending I/O during local shutdown. The original POSIX file
+shim remains separate; its no-op `fcntl(F_SETFL)` does not configure sockets.
+Content tracing also remains disabled until ACL privacy is qualified.

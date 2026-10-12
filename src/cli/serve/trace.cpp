@@ -72,6 +72,13 @@ std::string CurrentTimestamp() {
 }  // namespace
 
 std::optional<std::string> Trace::Open(const std::string& path) {
+#ifdef _WIN32
+  // Traces contain prompts and replies. The POSIX shim's mode bits do not
+  // create a private Windows ACL; reject before opening or creating a file.
+  (void)path;
+  return "Windows content tracing is unavailable pending access-control "
+         "qualification";
+#else
   const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
                         S_IRUSR | S_IWUSR);
   if (fd < 0) {
@@ -84,6 +91,7 @@ std::optional<std::string> Trace::Open(const std::string& path) {
   TraceFd() = fd;
   TraceEnabled().store(true, std::memory_order_release);
   return std::nullopt;
+#endif
 }
 
 void Trace::Close() {

@@ -84,8 +84,9 @@ HttpResponse UpgradeWebSocket(const HttpRequest& request,
   return response;
 }
 
-WebSocket::WebSocket(int fd, std::string buffered)
-    : fd_(fd), buffered_(std::move(buffered)) {
+WebSocket::WebSocket(platform::SocketHandle fd, std::string buffered,
+                     std::stop_token stop)
+    : fd_(fd), stop_(stop), buffered_(std::move(buffered)) {
   // Frame headers and audio payloads are separate writes; do not wait for a
   // delayed TCP acknowledgement before sending the payload.
   const int no_delay = 1;
@@ -114,13 +115,22 @@ WebSocket::~WebSocket() {
   Close();
   // Cancellation can wake the consumer before the reader finishes its close
   // reply. Let that writer complete before shutting down the send half.
-  (void)::shutdown(fd_, SHUT_RD);
+  platform::StopSocketReads(fd_);
   reader_.join();
+#ifdef _WIN32
+  // The HTTP worker drains input before closing. SD_RECEIVE here would
+  // discard a queued close reply when the peer sent more than we consumed.
+  (void)::shutdown(fd_, SHUT_WR);
+#else
   (void)::shutdown(fd_, SHUT_RDWR);
+#endif
 }
 
 bool WebSocket::Read(char* data, std::size_t size) {
-  while (size != 0 && !closed_.load()) {
+#ifdef _WIN32
+  auto last_receive = std::chrono::steady_clock::now();
+#endif
+  while (size != 0 && !closed_.load() && !stop_.stop_requested()) {
     if (offset_ < buffered_.size()) {
       const auto count = std::min(size, buffered_.size() - offset_);
       std::memcpy(data, buffered_.data() + offset_, count);
@@ -129,7 +139,23 @@ bool WebSocket::Read(char* data, std::size_t size) {
       size -= count;
       continue;
     }
-    const auto count = ::recv(fd_, data, size, 0);
+#ifdef _WIN32
+    // Poll in short slices to observe Close() and server stop. SD_RECEIVE
+    // would reset the connection if more input arrives before the close reply
+    // is consumed. Poll slices must still enforce the inherited idle timeout.
+    if (!platform::WaitReadable(fd_, std::chrono::milliseconds(50))) {
+      const auto now = std::chrono::steady_clock::now();
+      const std::chrono::steady_clock::duration since_send(
+          now.time_since_epoch().count() - last_send_.load());
+      if (idle_ > std::chrono::steady_clock::duration::zero() &&
+          now - last_receive >= idle_ && since_send >= idle_) {
+        Close(1001);
+        return false;
+      }
+      continue;
+    }
+#endif
+    const auto count = platform::SocketRecv(fd_, data, size, 0);
     if (count < 0 && errno == EINTR)
       continue;
     if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
@@ -144,6 +170,9 @@ bool WebSocket::Read(char* data, std::size_t size) {
     }
     if (count <= 0)
       return false;
+#ifdef _WIN32
+    last_receive = std::chrono::steady_clock::now();
+#endif
     data += count;
     size -= static_cast<std::size_t>(count);
   }
@@ -166,12 +195,13 @@ bool WebSocket::Send(std::uint8_t opcode, std::string_view bytes) {
   }
   for (auto part : {std::string_view(header), bytes}) {
     while (!part.empty()) {
-      const auto count = ::send(fd_, part.data(), part.size(), MSG_NOSIGNAL);
+      const auto count =
+          platform::SocketSend(fd_, part.data(), part.size(), MSG_NOSIGNAL);
       if (count < 0 && errno == EINTR)
         continue;
       if (count <= 0) {
         MarkClosed();
-        (void)::shutdown(fd_, SHUT_RDWR);
+        platform::ShutdownSocket(fd_);
         return false;
       }
       part.remove_prefix(static_cast<std::size_t>(count));
@@ -194,7 +224,7 @@ void WebSocket::Close(std::uint16_t code) {
   const std::array<char, 2> payload{static_cast<char>(code >> 8),
                                     static_cast<char>(code & 255)};
   (void)Send(8, std::string_view(payload.data(), payload.size()));
-  (void)::shutdown(fd_, SHUT_RD);
+  platform::StopSocketReads(fd_);
 }
 
 bool WebSocket::MarkClosed() {

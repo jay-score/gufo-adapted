@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -16,6 +17,7 @@
 
 #include "src/cli/serve/generation_metrics.hpp"
 #include "src/cli/serve/text_generation_backend.hpp"
+#include "src/core/platform/socket.hpp"
 
 namespace gufo::server {
 
@@ -128,6 +130,7 @@ public:
 
   /// Blocking accept loop. The CLI handles SIGINT/SIGTERM; embedded callers
   /// retain their own process signal handlers and call stop() explicitly.
+  /// On Windows the CLI also handles Ctrl+C and Ctrl+Break console events.
   void run(bool handle_signals = false);
 
   void stop();
@@ -139,7 +142,7 @@ private:
 
   HttpResponse handle_request(const HttpRequest& req);
   bool device_lost();
-  void handle_connection(int client_fd);
+  void handle_connection(platform::SocketHandle client_fd);
   void reap_workers();
   void register_routes();
 
@@ -152,8 +155,9 @@ private:
   std::shared_ptr<ImageService> images_;
   HttpServerOptions options_;
   std::string api_key_hash_;
-  int listen_fd_ = -1;
+  platform::SocketHandle listen_fd_ = platform::kInvalidSocket;
   std::atomic<bool> stopped_{false};
+  std::stop_source websocket_stop_;
   std::atomic<bool> device_lost_reported_{false};
   std::mutex workers_mutex_;
   std::vector<std::unique_ptr<ConnectionWorker>> workers_;

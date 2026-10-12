@@ -2,8 +2,7 @@
 #define GUFO_CORE_PLATFORM_SOCKET_HPP_
 
 // The few socket operations whose POSIX spelling does not work on Winsock.
-// Sockets stay `int` descriptors everywhere else; on Windows the value is the
-// SOCKET handle, which always fits in 32 bits.
+// Preserve native socket handles; a Winsock SOCKET is not a CRT descriptor.
 
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -14,12 +13,21 @@
 #include <cstddef>
 
 #ifndef _WIN32
+#include <fcntl.h>
 #include <poll.h>
 #include <sys/time.h>
 #include <unistd.h>
 #endif
 
 namespace gufo::platform {
+
+#ifdef _WIN32
+using SocketHandle = SOCKET;
+inline constexpr SocketHandle kInvalidSocket = INVALID_SOCKET;
+#else
+using SocketHandle = int;
+inline constexpr SocketHandle kInvalidSocket = -1;
+#endif
 
 #ifdef _WIN32
 namespace detail {
@@ -61,7 +69,7 @@ inline int ClampLength(std::size_t size) noexcept {
 }  // namespace detail
 #endif
 
-inline int CloseSocket(int fd) noexcept {
+inline int CloseSocket(SocketHandle fd) noexcept {
 #ifdef _WIN32
   return ::closesocket(static_cast<SOCKET>(fd));
 #else
@@ -69,11 +77,20 @@ inline int CloseSocket(int fd) noexcept {
 #endif
 }
 
+/// Stop both halves and cancel I/O already blocked on another thread. Winsock
+/// shutdown alone leaves a synchronous recv/send pending until the peer acts.
+inline void ShutdownSocket(SocketHandle fd) noexcept {
+  (void)::shutdown(fd, SHUT_RDWR);
+#ifdef _WIN32
+  (void)::CancelIoEx(reinterpret_cast<HANDLE>(fd), nullptr);
+#endif
+}
+
 /// Closes an accepted connection. Closing with unread input sends a TCP
 /// reset on both platforms, but Linux still lets the peer read what arrived
 /// before it while Windows discards it, losing a final response or close
 /// frame. On Windows, finish sending, drain briefly, then close.
-inline int CloseConnection(int fd) noexcept {
+inline int CloseConnection(SocketHandle fd) noexcept {
 #ifdef _WIN32
   const auto socket = static_cast<SOCKET>(fd);
   (void)::shutdown(socket, SD_SEND);
@@ -103,14 +120,15 @@ inline int CloseConnection(int fd) noexcept {
 /// the connection when data arrives after SD_RECEIVE, which would discard
 /// frames the peer has not read yet; Windows readers instead wait in short
 /// WaitReadable slices and re-check their own stop flag, so this is a no-op.
-inline void StopSocketReads([[maybe_unused]] int fd) noexcept {
+inline void StopSocketReads([[maybe_unused]] SocketHandle fd) noexcept {
 #ifndef _WIN32
   (void)::shutdown(fd, SHUT_RD);
 #endif
 }
 
 /// Waits up to `timeout` for `fd` to become readable (or closed/errored).
-inline bool WaitReadable(int fd, std::chrono::milliseconds timeout) noexcept {
+inline bool WaitReadable(SocketHandle fd,
+                         std::chrono::milliseconds timeout) noexcept {
 #ifdef _WIN32
   WSAPOLLFD readable{static_cast<SOCKET>(fd), POLLRDNORM, 0};
   return ::WSAPoll(&readable, 1, static_cast<INT>(timeout.count())) != 0;
@@ -121,7 +139,8 @@ inline bool WaitReadable(int fd, std::chrono::milliseconds timeout) noexcept {
 }
 
 /// read(2) on a connected socket.
-inline ssize_t SocketRead(int fd, void* buffer, std::size_t size) noexcept {
+inline ssize_t SocketRead(SocketHandle fd, void* buffer,
+                          std::size_t size) noexcept {
 #ifdef _WIN32
   const int n = ::recv(static_cast<SOCKET>(fd), static_cast<char*>(buffer),
                        detail::ClampLength(size), 0);
@@ -133,7 +152,7 @@ inline ssize_t SocketRead(int fd, void* buffer, std::size_t size) noexcept {
 #endif
 }
 
-inline ssize_t SocketRecv(int fd, void* buffer, std::size_t size,
+inline ssize_t SocketRecv(SocketHandle fd, void* buffer, std::size_t size,
                           int flags) noexcept {
 #ifdef _WIN32
   const int n = ::recv(static_cast<SOCKET>(fd), static_cast<char*>(buffer),
@@ -146,7 +165,7 @@ inline ssize_t SocketRecv(int fd, void* buffer, std::size_t size,
 #endif
 }
 
-inline ssize_t SocketSend(int fd, const void* data, std::size_t size,
+inline ssize_t SocketSend(SocketHandle fd, const void* data, std::size_t size,
                           int flags) noexcept {
 #ifdef _WIN32
   const int n = ::send(static_cast<SOCKET>(fd), static_cast<const char*>(data),
@@ -160,7 +179,8 @@ inline ssize_t SocketSend(int fd, const void* data, std::size_t size,
 }
 
 template<typename T>
-int SetSocketOption(int fd, int level, int name, const T& value) noexcept {
+int SetSocketOption(SocketHandle fd, int level, int name,
+                    const T& value) noexcept {
 #ifdef _WIN32
   return ::setsockopt(static_cast<SOCKET>(fd), level, name,
                       reinterpret_cast<const char*>(&value),
@@ -173,7 +193,7 @@ int SetSocketOption(int fd, int level, int name, const T& value) noexcept {
 /// SO_RCVTIMEO / SO_SNDTIMEO. Winsock takes a DWORD of milliseconds where
 /// Linux takes a timeval; passing a timeval on Windows silently sets
 /// tv_sec milliseconds.
-inline int SetSocketTimeout(int fd, int name,
+inline int SetSocketTimeout(SocketHandle fd, int name,
                             std::chrono::milliseconds timeout) noexcept {
 #ifdef _WIN32
   const DWORD ms = static_cast<DWORD>(timeout.count());
@@ -187,6 +207,22 @@ inline int SetSocketTimeout(int fd, int name,
                            timeout - seconds)
                            .count())};
   return SetSocketOption(fd, SOL_SOCKET, name, tv);
+#endif
+}
+
+inline int SetSocketBlocking(SocketHandle fd, bool blocking) noexcept {
+#ifdef _WIN32
+  u_long non_blocking = blocking ? 0 : 1;
+  const int result = ::ioctlsocket(fd, FIONBIO, &non_blocking);
+  if (result != 0)
+    detail::SetErrnoFromSocketError();
+  return result;
+#else
+  const int flags = ::fcntl(fd, F_GETFL, 0);
+  return flags < 0
+             ? -1
+             : ::fcntl(fd, F_SETFL,
+                       blocking ? flags & ~O_NONBLOCK : flags | O_NONBLOCK);
 #endif
 }
 

@@ -8,10 +8,12 @@
 
 #include <atomic>
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -28,6 +30,8 @@
 
 #include "src/cli/serve/logging.hpp"
 #include "src/cli/serve/trace.hpp"
+#include "src/cli/serve/websocket.hpp"
+#include "src/core/platform/socket.hpp"
 
 namespace {
 
@@ -329,7 +333,7 @@ public:
     worker.join();
   }
 
-  int Connect(const std::string& peer = "127.0.0.1") {
+  gufo::platform::SocketHandle Connect(const std::string& peer = "127.0.0.1") {
     sockaddr_storage address{};
     socklen_t length = 0;
     auto* ipv4 = reinterpret_cast<sockaddr_in*>(&address);
@@ -344,21 +348,21 @@ public:
       ipv6->sin6_port = htons(server.port());
       length = sizeof(*ipv6);
     }
-    const int fd = ::socket(address.ss_family, SOCK_STREAM, 0);
-    assert(fd >= 0);
-    const timeval timeout{3, 0};
-    assert(::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
-                        sizeof(timeout)) == 0);
+    const auto fd = ::socket(address.ss_family, SOCK_STREAM, 0);
+    assert(fd != gufo::platform::kInvalidSocket);
+    assert(gufo::platform::SetSocketTimeout(fd, SO_RCVTIMEO,
+                                            std::chrono::seconds(3)) == 0);
     assert(::connect(fd, reinterpret_cast<const sockaddr*>(&address), length) ==
            0);
+
     return fd;
   }
   std::string Send(std::string_view request, bool half_close = false,
                    const std::string& peer = "127.0.0.1") {
-    const int fd = Connect(peer);
+    const auto fd = Connect(peer);
     while (!request.empty()) {
-      const auto count =
-          ::send(fd, request.data(), request.size(), MSG_NOSIGNAL);
+      const auto count = gufo::platform::SocketSend(
+          fd, request.data(), request.size(), MSG_NOSIGNAL);
       assert(count > 0);
       request.remove_prefix(static_cast<std::size_t>(count));
     }
@@ -369,14 +373,14 @@ public:
     std::string response;
     char buffer[4096];
     for (;;) {
-      const auto count = ::read(fd, buffer, sizeof(buffer));
+      const auto count = gufo::platform::SocketRead(fd, buffer, sizeof(buffer));
       assert(count >= 0);
       if (count == 0) {
         break;
       }
       response.append(buffer, static_cast<std::size_t>(count));
     }
-    ::close(fd);
+    gufo::platform::CloseSocket(fd);
     return response;
   }
 
@@ -513,6 +517,7 @@ void TestRequestLogging() {
   assert(debug.text.find("event=options") == std::string::npos);
 }
 
+#ifndef _WIN32
 std::string ResponseRequestId(const std::string& response) {
   const auto header = response.find("X-Request-ID: ");
   assert(header != std::string::npos);
@@ -541,6 +546,8 @@ std::string ChunkedBody(const std::string& response) {
 
 // `--trace` keeps what a text request carried in and out under the id the
 // logs name. Polls, other routes and unauthenticated requests stay out.
+#endif
+
 void TestContentTrace() {
   namespace fs = std::filesystem;
   using gufo::server::Trace;
@@ -548,6 +555,13 @@ void TestContentTrace() {
       fs::temp_directory_path() /
       ("gufo-trace-test-" + std::to_string(::getpid()) + ".jsonl");
   fs::remove(path);
+#ifdef _WIN32
+  const auto error = Trace::Open(path.string());
+  assert(error &&
+         error->find("access-control qualification") != std::string::npos);
+  assert(!Trace::Enabled());
+  assert(!fs::exists(path));
+#else
   assert(!Trace::Open(path.string()).has_value());
   std::string plain_id;
   std::string stream_id;
@@ -646,6 +660,7 @@ void TestContentTrace() {
 
   assert(record("request", invalid_id).member_str("body") == "{");
   assert(record("response", invalid_id).member_size("status") == 400);
+#endif
 }
 
 // The threshold covers the lifecycle lines too: `--log-level=warn|error` boots
@@ -2355,12 +2370,13 @@ void TestDeviceLossWhileWriterBlocked() {
           write_finished = true;
         }};
   });
-  const int fd = server.Connect();
+  const auto fd = server.Connect();
   const int receive_buffer = 1024;
-  assert(::setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &receive_buffer,
-                      sizeof(receive_buffer)) == 0);
+  assert(gufo::platform::SetSocketOption(fd, SOL_SOCKET, SO_RCVBUF,
+                                         receive_buffer) == 0);
   const std::string request = "POST /blocked HTTP/1.1\r\n\r\n";
-  assert(::send(fd, request.data(), request.size(), MSG_NOSIGNAL) ==
+  assert(gufo::platform::SocketSend(fd, request.data(), request.size(),
+                                    MSG_NOSIGNAL) ==
          static_cast<ssize_t>(request.size()));
   assert(writing.try_acquire_for(std::chrono::seconds(2)));
   // The peer never drains the response. No health request or completed write
@@ -2368,8 +2384,13 @@ void TestDeviceLossWhileWriterBlocked() {
   server.backend->lost = true;
   assert(hook_called.try_acquire_for(std::chrono::seconds(2)));
   assert(hook_calls == 1 && !write_finished);
+  // Local shutdown must interrupt the pending write without any peer action.
+  const auto start = std::chrono::steady_clock::now();
+  server.server.stop();
+  assert(write_finished);
+  assert(std::chrono::steady_clock::now() - start < std::chrono::seconds(2));
   ::shutdown(fd, SHUT_RDWR);
-  ::close(fd);
+  gufo::platform::CloseSocket(fd);
 }
 
 void TestInvalidBindSettings() {
@@ -2383,6 +2404,10 @@ void TestInvalidBindSettings() {
   std::string error;
   assert(!invalid.start(&error));
   assert(!error.empty());
+  // A second server cannot take an occupied port, even on Winsock.
+  RunningServer first;
+  HttpServer duplicate("127.0.0.1", first.server.port(), nullptr);
+  assert(!duplicate.start(&error));
 }
 
 // Some CI containers have no IPv6 loopback; listener checks skip there.
@@ -2631,21 +2656,156 @@ void TestQueryParameters() {
 }
 
 void TestPeerDisconnect() {
-  RunningServer server;
-  server.backend->wait_for_disconnect = true;
-  const int fd = server.Connect();
-  const std::string body = R"({"prompt":"hi","max_tokens":128})";
-  const std::string request =
-      "POST /v1/completions HTTP/1.1\r\nHost: localhost\r\n"
-      "Content-Type: application/json\r\nContent-Length: " +
-      std::to_string(body.size()) + "\r\n\r\n" + body;
-  assert(::send(fd, request.data(), request.size(), MSG_NOSIGNAL) ==
-         static_cast<ssize_t>(request.size()));
-  assert(server.backend->entered.try_acquire_for(std::chrono::seconds(2)));
-  ::close(fd);
-  assert(server.backend->finished.try_acquire_for(std::chrono::seconds(2)));
-  assert(server.backend->disconnected);
+  for (const bool streaming : {false, true}) {
+    for (const bool reset : {false, true}) {
+      RunningServer server;
+      server.backend->wait_for_disconnect = true;
+      server.backend->admit = streaming;
+      const auto fd = server.Connect();
+      const std::string body = streaming
+                                   ? R"({"prompt":"hi","stream":true})"
+                                   : R"({"prompt":"hi","max_tokens":128})";
+      const std::string request =
+          "POST /v1/completions HTTP/1.1\r\nHost: localhost\r\n"
+          "Content-Type: application/json\r\nContent-Length: " +
+          std::to_string(body.size()) + "\r\n\r\n" + body;
+      assert(gufo::platform::SocketSend(fd, request.data(), request.size(),
+                                        MSG_NOSIGNAL) ==
+             static_cast<ssize_t>(request.size()));
+      assert(server.backend->entered.try_acquire_for(std::chrono::seconds(2)));
+      if (reset) {
+        const linger abortive{1, 0};
+        assert(gufo::platform::SetSocketOption(fd, SOL_SOCKET, SO_LINGER,
+                                               abortive) == 0);
+      }
+      gufo::platform::CloseSocket(fd);
+      assert(server.backend->finished.try_acquire_for(std::chrono::seconds(2)));
+      assert(server.backend->disconnected);
+    }
+  }
 }
+
+void TestPartialRequestAndStop() {
+  // Accept() must leave request workers in blocking mode. Split both the
+  // request head and body across writes, then stop separate incomplete ones.
+  RunningServer server;
+  const auto fd = server.Connect();
+  for (const auto part :
+       {"POST /echo HTTP/1.1\r\nContent-Length: 5\r\n", "\r\nhe", "llo"}) {
+    assert(gufo::platform::SocketSend(fd, part, std::strlen(part),
+                                      MSG_NOSIGNAL) > 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  std::string response;
+  char buffer[1024];
+  for (;;) {
+    const auto count = gufo::platform::SocketRead(fd, buffer, sizeof(buffer));
+    assert(count >= 0);
+    if (count == 0)
+      break;
+    response.append(buffer, static_cast<std::size_t>(count));
+  }
+  gufo::platform::CloseSocket(fd);
+  ExpectStatus(response, 200);
+  assert(response.ends_with("hello"));
+
+  for (const auto incomplete :
+       {"GET /ready HTTP/1.1\r\n",
+        "POST /echo HTTP/1.1\r\nContent-Length: 5\r\n\r\nh"}) {
+    RunningServer stopping;
+    const auto client = stopping.Connect();
+    assert(gufo::platform::SocketSend(
+               client, incomplete, std::strlen(incomplete), MSG_NOSIGNAL) > 0);
+    // Allow the worker to enter its blocking read. CTest bounds a regression
+    // even if stop() cannot interrupt it.
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    const auto start = std::chrono::steady_clock::now();
+    stopping.server.stop();
+    assert(std::chrono::steady_clock::now() - start < std::chrono::seconds(2));
+    gufo::platform::CloseSocket(client);
+  }
+  RunningServer active;
+  active.backend->wait_for_disconnect = true;
+  const auto client = active.Connect();
+  const std::string request =
+      "POST /v1/completions HTTP/1.1\r\nContent-Length: 15\r\n\r\n"
+      R"({"prompt":"hi"})";
+  assert(gufo::platform::SocketSend(client, request.data(), request.size(),
+                                    MSG_NOSIGNAL) > 0);
+  assert(active.backend->entered.try_acquire_for(std::chrono::seconds(2)));
+  active.server.stop();
+  assert(active.backend->disconnected);
+  gufo::platform::CloseSocket(client);
+}
+
+#ifdef _WIN32
+void TestWinsockErrors() {
+  char byte;
+  errno = 0;
+  assert(gufo::platform::SocketRecv(gufo::platform::kInvalidSocket, &byte, 1,
+                                    0) == -1);
+  assert(errno == EBADF);
+  RunningServer server;
+  const auto fd = server.Connect();
+  assert(gufo::platform::SetSocketBlocking(fd, false) == 0);
+  errno = EIO;
+  assert(gufo::platform::SocketRecv(fd, &byte, 1, 0) == -1);
+  assert(errno == EAGAIN);
+  assert(gufo::platform::SetSocketBlocking(fd, true) == 0);
+  assert(gufo::platform::SetSocketTimeout(fd, SO_RCVTIMEO,
+                                          std::chrono::milliseconds(100)) == 0);
+  const auto start = std::chrono::steady_clock::now();
+  errno = EIO;
+  assert(gufo::platform::SocketRecv(fd, &byte, 1, 0) == -1);
+  assert(errno == EAGAIN);
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  assert(elapsed >= std::chrono::milliseconds(50) &&
+         elapsed < std::chrono::seconds(2));
+  // Winsock leaves a timed-out connection in an indeterminate state. Test
+  // local shutdown on a fresh connection instead of using that socket again.
+  gufo::platform::CloseSocket(fd);
+  const auto stopped = server.Connect();
+  // Leave the send half open so the server keeps waiting for a request and
+  // cannot race this check with a response or peer-side close.
+  assert(::shutdown(stopped, SHUT_RD) == 0);
+  errno = EIO;
+  assert(gufo::platform::SocketRecv(stopped, &byte, 1, 0) == -1);
+  assert(errno == EPIPE);
+  gufo::platform::CloseSocket(stopped);
+}
+
+// Launched by the Windows subprocess harness in a private console. An
+// accepted echo proves that run() installed its handlers before readiness.
+int WindowsShutdownChild(std::string_view mode) {
+  RunningServer server({}, true);
+  ExpectStatus(server.Post("/echo", "ready"), 200);
+  auto fd = gufo::platform::kInvalidSocket;
+  if (mode == "active") {
+    server.backend->wait_for_disconnect = true;
+    fd = server.Connect();
+    const std::string request =
+        "POST /v1/completions HTTP/1.1\r\nContent-Length: 15\r\n\r\n"
+        R"({"prompt":"hi"})";
+    assert(gufo::platform::SocketSend(fd, request.data(), request.size(),
+                                      MSG_NOSIGNAL) > 0);
+    assert(server.backend->entered.try_acquire_for(std::chrono::seconds(2)));
+  } else if (mode == "partial") {
+    fd = server.Connect();
+    const std::string request = "POST /echo HTTP/1.1\r\n";
+    assert(gufo::platform::SocketSend(fd, request.data(), request.size(),
+                                      MSG_NOSIGNAL) > 0);
+  } else {
+    assert(mode == "idle");
+  }
+  std::cout << "READY\n" << std::flush;
+  assert(server.run_finished.try_acquire_for(std::chrono::seconds(5)));
+  if (mode == "active")
+    assert(server.backend->disconnected);
+  if (fd != gufo::platform::kInvalidSocket)
+    gufo::platform::CloseSocket(fd);
+  return 0;
+}
+#endif
 
 void TestCompatibilityStopSequences() {
   RunningServer server;
@@ -2969,6 +3129,7 @@ void TestSseHeartbeatShutdown() {
   }
 }
 
+#ifndef _WIN32
 void TestSignalShutdown() {
   // Process signals must never terminate the test runner itself. Prove that
   // both idle listeners and active generation return through normal cleanup.
@@ -2990,7 +3151,8 @@ void TestSignalShutdown() {
             const std::string request =
                 "POST /v1/completions HTTP/1.1\r\nContent-Length: " +
                 std::to_string(body.size()) + "\r\n\r\n" + body;
-            assert(::send(fd, request.data(), request.size(), MSG_NOSIGNAL) ==
+            assert(gufo::platform::SocketSend(fd, request.data(),
+                                              request.size(), MSG_NOSIGNAL) ==
                    static_cast<ssize_t>(request.size()));
             assert(server.backend->entered.try_acquire_for(
                 std::chrono::seconds(2)));
@@ -2999,7 +3161,7 @@ void TestSignalShutdown() {
           assert(server.run_finished.try_acquire_for(std::chrono::seconds(2)));
           if (active) {
             assert(server.backend->disconnected);
-            ::close(fd);
+            gufo::platform::CloseSocket(fd);
           }
         }
         ::_exit(0);
@@ -3010,6 +3172,8 @@ void TestSignalShutdown() {
     }
   }
 }
+
+#endif
 
 }  // namespace
 
@@ -3077,7 +3241,14 @@ void TestRawCompletionPromptProgress() {
                400);
 }
 
-int main() {
+int main(int argc, char** argv) {
+#ifdef _WIN32
+  if (argc == 3 && std::string_view(argv[1]) == "--windows-shutdown-child")
+    return WindowsShutdownChild(argv[2]);
+#else
+  (void)argc;
+  (void)argv;
+#endif
   // The log assertions below match "[LEVEL] [component]" text written to a
   // redirected stderr sink, so the real stderr's TTY state must not add ANSI
   // tint around the level tag.
@@ -3112,11 +3283,17 @@ int main() {
   TestResponseSamplingDefaults();
   TestCompatibilityUtf8();
   TestPeerDisconnect();
+  TestPartialRequestAndStop();
+#ifdef _WIN32
+  TestWinsockErrors();
+#endif
   TestStreamingFraming();
   TestSseHeartbeat();
   TestSseHeartbeatShutdown();
   TestDeferredStreamHeaders();
   TestAdmittedStreamHeaders();
+#ifndef _WIN32
   TestSignalShutdown();
+#endif
   std::cout << "HTTP transport checks passed.\n";
 }
