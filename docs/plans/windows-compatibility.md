@@ -1,0 +1,245 @@
+# Minimal native Windows integration
+
+Status: stage one implemented on `feat/windows-cpu-compat`; the native Windows
+CPU CLI builds and all nine bounded host checks pass. See
+[Windows status](../WINDOWS.md) for commands, provenance, validation, and
+remaining limitations. Stages two through four and the GUI remain pending;
+no GPU or server/cache runtime qualification is claimed yet.
+
+## Objective and baseline
+
+Build and run the current official Gufo engine natively on Windows 11 x64,
+on AMD Strix Halo (`gfx1151`), while keeping future official updates easy to
+merge. Windows compatibility is the priority; the GUI is deferred.
+
+Inspected on 2026-10-12:
+
+- Official source: `gufo-org/gufo` at
+  `8d4e1a2b74c94752b9b16b1dda153cbf52638443`, this worktree's HEAD.
+- Fork reference: `thomas9120/gufo-adapted`, `windows-port` at
+  `ab4d98189a6d8103fce29d2537e4113da3da2420`.
+- Both SHAs match their remote branch heads at inspection time.
+- Common ancestor: `d9a84f13f35d1f98da22886a12eb25dc7062e392`.
+  Git reports 155 official-side and 187 fork-side commits after that ancestor.
+  Some official fixes were adapted into the fork, so these are ancestry counts,
+  not counts of missing features.
+
+The complete tip-to-tip diff spans 575 files. Much of that difference is
+official development, including the new common cache package. It is not the
+size of the required Windows port. The initial Windows compatibility commit,
+`edb2f8b0629005f2852d4543a3c24786b56979a5`, touched 52 files and added roughly
+3,300 lines, predominantly in a separate compatibility directory.
+
+**Recommendation:** implement Windows support on top of this official baseline.
+Use the fork as a source for specific adaptations rather than merging its
+complete branch or replacing official source files with fork versions.
+
+## Keep the maintained difference small
+
+Use these boundaries:
+
+- `compat/win32/`: Windows implementations of the POSIX operations Gufo uses.
+  Reuse the existing shadow headers, `posix.cpp`, and `spawn.cpp` at the pinned
+  fork revision. Extend only operations required by the current official tree.
+- `cmake/Windows.cmake`: collect Windows build wiring in one module, included
+  from the root CMake file only on Windows. Keep unavoidable early compiler
+  probe configuration before `enable_language(HIP)`.
+- `tools/windows/`: a prerequisite check, build script, and pinned Windows
+  dependency manifest. These prepare the environment and invoke CMake; CMake
+  continues to own targets, flags, dependencies, and installation.
+- `src/core/platform/`: retain the fork's small socket and device-memory
+  helpers where POSIX emulation cannot preserve the required behavior.
+  Keep CPU compatibility separate from HIP/DXGI dependencies.
+- Existing engine files: change specific calls or add short Windows branches
+  where necessary. Preserve their current upstream implementations.
+
+Avoid a new generic operating-system framework, a duplicate Windows engine,
+whole-model refactors, or a generated patch applicator. Initially reuse the
+fork's compatibility surface intact rather than spending time rewriting or
+aggressively pruning it. Keep its include paths, definitions, and libraries
+scoped to Gufo-owned Windows targets wherever practical.
+
+Preserve Linux/Nix settings, official release/version handling, model framing,
+cache layouts, and public CLI/API behavior. Prefer standard portable code for
+an isolated issue such as aligned allocation when it avoids extra platform
+branches without changing the algorithm.
+
+## Reuse, adapt, and defer
+
+Reuse the latest fork versions of the following, with their source SHA recorded
+in the implementation change:
+
+- POSIX compatibility files and the HIP `<cmath>` workaround.
+- Socket helpers: Winsock errors, timeout units, socket closure, listener
+  shutdown, and WebSocket cancellation.
+- WDDM/DXGI device-memory reporting, matched to the active HIP adapter.
+- Windows diagnostics, memory reporting, cache-directory selection, and
+  process-spawning adaptations.
+- `tools/windows/build.ps1`, simplified to build this engine and stage its
+  required runtime DLLs and kernel libraries.
+- The pinned vcpkg dependencies. Keep Linux's existing dependency discovery;
+  add Windows-specific WebP CMake discovery rather than replacing Linux's
+  `PkgConfig::WEBP` path.
+
+Useful provenance starts with the original compatibility commit above,
+`9bc346fa50a945232f2e41bc6bfca7ff4b1477f2` (build scripts),
+`0e58ece75648bd56965c1fd77fbdf9d4915fde4a` (vcpkg manifest), and
+`8f826b1e92d7e5e96544f1ce1b33a1ecade8e168` (Windows diagnostics fix).
+Use the current fork files, not just the original commits, to retain subsequent
+fixes. Apply source hunks against current official code deliberately.
+
+Defer the GUI, guided installers, double-click launchers, updater, fork release
+workflow, custom upstream-sync tools, `GUFO_PLATFORM_TUNING`, and fork-only
+MTP/sampling options. Windows performance optimizations can be evaluated later
+only if the official implementation exposes a measured problem. They are not
+a prerequisite for the initial compatibility port.
+
+## Gaps that copying the old port will not solve
+
+### Current disk cache
+
+[`src/cache/disk.cpp`](../../src/cache/disk.cpp) is new relative to the fork.
+It uses `mkdirat`, `fdopendir`/`readdir`, and
+`syscall(SYS_renameat2, ..., RENAME_NOREPLACE)` in addition to file locks,
+descriptor-relative operations, and file/directory synchronization.
+
+The fork has no directory-enumeration shim or `mkdirat` implementation, and its
+generic `syscall` returns `ENOSYS`. Its `renameat` implementation replaces an
+existing destination, which does not satisfy this cache's no-replace operation.
+Its `fsync` accepts some directory/read-only flush failures as success; that
+cannot establish the new cache's publication and reclamation durability.
+
+Keep the cache algorithm and on-disk format. Extend the shim for ordinary
+missing POSIX operations. For Linux-specific publication, use one narrow
+operation with Linux and Windows implementations if that is clearer than
+emulating a general syscall. Preserve atomic no-replace behavior, stable
+directory-handle identity, exclusive ownership, reparse-point rejection, and
+crash recovery. Identify and test the Windows durability contract explicitly;
+do not claim directory durability on the strength of a successful no-op.
+
+The existing shim also synthesizes POSIX ownership/mode fields and makes
+`chmod`/`fchmod` no-ops. Review the older identity and continuation-cache checks
+that depend on those fields. Where they enforce privacy, Windows needs an
+equivalent access-control check or a documented, explicit limitation.
+
+The cache is compiled into the engine even when runtime disk caching is off.
+Turning disk caching off does not remove this build dependency.
+
+### New GPU/cache paths
+
+[`executor.cpp`](../../src/models/qwen38_flash_next/kernels/rocm/executor.cpp)
+now checks `hipMemGetInfo` when admitting snapshot backing. This call site was
+not covered by the old port's device-memory replacements. Audit every current
+memory-admission call and apply the Windows budget helper where needed; retain
+the Linux pass-through.
+
+Validate the current
+[`committed_backing.cpp`](../../src/core/hip/committed_backing.cpp),
+[`staging.cpp`](../../src/core/hip/staging.cpp), and snapshot transfers on
+TheRock. They use coherent pinned memory and allocation/transfer contracts
+that the fork's older cache cannot qualify for us.
+
+The official server also automatically plans GPU queues from Linux KFD sysfs.
+On Windows, missing sysfs is not evidence that no other process has queues.
+Keep that measured Linux policy on Linux; preserve explicit operator settings
+on Windows and use the runtime default until Windows measurements justify a
+policy. Report unavailable Linux diagnostics honestly.
+
+### Tests and build targets
+
+[`tests/cache/CMakeLists.txt`](../../tests/cache/CMakeLists.txt) uses ELF linker
+`--wrap`, and some cache tests use `fork` and `/proc/self/fd`. Functional fault
+libraries use `dlsym`/`LD_PRELOAD`. These need platform-specific wiring, not just
+new headers.
+
+Keep the Linux test paths. For Windows, use subprocess-based crash/death checks
+and focused test-only failure injection around the compatibility operations.
+Do not add a fake `fork` implementation or count omitted fault cases as passes.
+Maintain an explicit list of Linux-only harnesses and their Windows coverage.
+
+[`tests/cache/boundary_test.py`](../../tests/cache/boundary_test.py) currently
+allows only `Threads::Threads` as a cache link dependency. If the CPU Windows
+shim is linked there, update that reviewed dependency rule narrowly and verify
+its transitive dependencies. Do not admit the HIP/DXGI helper or broad engine
+targets into the common cache.
+
+## Implementation sequence
+
+Each increment should have its own Conventional Commit and validation record.
+Begin implementation on a new branch descended from the pinned official HEAD;
+keep the existing `windows-port` branch available throughout qualification.
+
+1. **Windows build and CPU compatibility.** Add the compatibility directory,
+   Windows CMake module, dependency manifest, and minimal build/check scripts.
+   Allow Windows x64 while retaining `gfx1151` as the production GPU target.
+   Retain the official version/revision definitions in the script. Handle DLL
+   placement and the `gufo-server.exe` copy without requiring Windows symlinks.
+   Adapt cache filesystem operations needed for the CPU CLI to link. Keep the
+   existing presets usable; add Windows overrides only where necessary.
+   Verify configuration, CPU build, `--version`, `--help`, GGUF/parser checks,
+   and focused compatibility tests.
+
+2. **Server and cache semantics.** Adapt sockets, signals/shutdown, diagnostics,
+   aligned allocation, and host-memory reporting against the official sources.
+   Complete cache publication/recovery and Windows test harnesses. Keep the
+   Linux suite intact; add a separate bounded Windows CPU CI job. Verify HTTP,
+   streaming/disconnects, WebSockets, cancellation, shutdown, file locking,
+   large offsets, Unicode/spaced paths, no-replace publication, restart,
+   corruption handling, and publication failures. Update the cache dependency
+   boundary check with the reviewed CPU shim.
+
+3. **Native HIP runtime.** Enable the production Windows build with the fork's
+   pinned TheRock 10.0.0 as the initial reference toolchain. Verify its
+   compatibility with the current official kernels rather than assuming it.
+   Stage runtime libraries, adapt WDDM memory admission, and check pinned
+   backing and transfers. First exercise Flash-Next AR/MTP and Qwen27B
+   AR/DFlash2 with actual local models, images, RAM reuse, long-context
+   continuation, disk restart, and cancellation. Then qualify the other
+   supported model paths with focused model-owned checks. A milestone for one
+   model is not a claim that all model families are qualified.
+
+4. **Qualification and maintenance handoff.** Run the official Linux hosted
+   checks and formatting checks, Windows CPU checks, affected numerical-quality
+   tests, and the standard speed benchmark. Use
+   [`tests/functional/`](../../tests/functional/README.md) for selected live
+   suites; shared compatibility behavior calls for all four text profiles,
+   including `long-context` and `cache`, without running unrelated full model
+   sweeps or video generation. Replay `pi_agent.py` if an affected coding-agent
+   workflow is reported. Retain every result and toolchain/model/cache identity.
+   Observe the repository's strict per-request timing rules; a missing model
+   skip or inconclusive timing is not a qualification pass. Document the
+   supported Windows configuration and any remaining limitations in
+   `docs/WINDOWS.md`, and make narrowly scoped platform-documentation updates.
+
+Stages 1-3 are incremental development milestones. The port is complete only
+when the intended runtime paths and cache guarantees are covered, Linux checks
+pass, and documented support claims match actual evidence.
+
+The existing build script copies an OpenMP runtime from Visual Studio's
+`debug_nonredist` directory for developer use. Do not turn that into a public
+binary release. Source builds are the initial deliverable; redistributable
+packaging is a separate follow-up if requested.
+
+## Future official updates
+
+Keep this integration branch descended from official history. Update it through
+ordinary merges from `official/main`, whose URL is
+`https://github.com/gufo-org/gufo.git`; this repository's remote named `upstream`
+points to a different fork. Retain complete official updates rather than
+continuing the old branch's selective fix-import workflow. Use an isolated
+candidate branch for each update, run the bounded Windows/Linux gates, then
+merge the verified candidate into the maintained branch. Do not routinely
+rebase a shared branch or rewrite its published history.
+
+Record the official base SHA, imported compatibility source SHAs, and the small
+set of modified upstream call sites. At each update, inspect
+`git diff --stat official/main..HEAD` and the actual changed shared files to
+keep the maintained difference visible. Resolve conflicts locally at the OS
+boundary. If a fix is portable and useful upstream, propose that isolated fix
+upstream when authorized so it can eventually disappear from the maintained
+difference.
+
+The GUI can later remain an independent launcher of `gufo serve`, using the
+engine's CLI and HTTP endpoints. Its current fork implementation is already
+separate from the engine; bringing it back should not require kernel or cache
+changes. Its command options would need reconciliation with the official CLI.

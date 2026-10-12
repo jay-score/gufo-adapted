@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <future>
 #include <memory>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -56,6 +57,11 @@ std::string FileStamp(int fd, std::size_t size) {
 }
 
 int OpenCacheDirectory() {
+#ifdef _WIN32
+  // The inherited POSIX shim does not establish private Windows ACLs yet.
+  // Hash the artifact directly until persistent identity caching is qualified.
+  return -1;
+#endif
   const char* base = std::getenv("XDG_CACHE_HOME");
   std::filesystem::path path;
   if (base && *base)
@@ -135,9 +141,13 @@ void HashFile(crypto::Sha256Hasher& hash, int fd, std::size_t size) {
       size >= kChunk ? open(("/proc/self/fd/" + std::to_string(fd)).c_str(),
                             O_RDONLY | O_CLOEXEC | O_DIRECT)
                      : -1);
+  struct AlignedDelete {
+    void operator()(std::uint8_t* buffer) const noexcept {
+      ::operator delete(buffer, std::align_val_t{kAlignment});
+    }
+  };
   struct Slot {
-    std::unique_ptr<std::uint8_t, decltype(&std::free)> buffer{nullptr,
-                                                               std::free};
+    std::unique_ptr<std::uint8_t, AlignedDelete> buffer;
     std::future<void> read;
     std::size_t size{0};
   };
@@ -147,8 +157,8 @@ void HashFile(crypto::Sha256Hasher& hash, int fd, std::size_t size) {
     if (next == size)
       return;
     if (!slot.buffer) {
-      slot.buffer.reset(
-          static_cast<std::uint8_t*>(std::aligned_alloc(kAlignment, kChunk)));
+      slot.buffer.reset(static_cast<std::uint8_t*>(
+          ::operator new(kChunk, std::align_val_t{kAlignment}, std::nothrow)));
       if (!slot.buffer)
         throw std::bad_alloc();
     }

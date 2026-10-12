@@ -656,6 +656,11 @@ struct ContinuationDiskStore::Impl {
   }
 
   void InitializeDirectory() {
+#ifdef _WIN32
+    throw std::runtime_error(
+        "Windows disk cache is unavailable pending durability and "
+        "access-control qualification");
+#endif
     std::error_code error;
     const bool existed = std::filesystem::exists(options.directory, error);
     if (error) {

@@ -50,6 +50,7 @@
 #include "src/cli/serve/websocket.hpp"
 #include "src/core/crypto/sha256.hpp"
 #include "src/core/json.hpp"
+#include "src/core/platform/socket.hpp"
 #include "src/core/utf8.hpp"
 #include "src/models/qwen/chat_template.hpp"
 
@@ -167,7 +168,7 @@ bool SendChunk(int fd, std::string_view data, std::string_view prefix = {}) {
 
 bool IsPeerDisconnected(int fd) noexcept {
   pollfd descriptor{
-      .fd = fd,
+      .fd = static_cast<decltype(pollfd::fd)>(fd),
       .events = POLLIN | POLLERR | POLLHUP,
       .revents = 0,
   };
@@ -1876,16 +1877,16 @@ bool HttpServer::start(std::string* error) {
     return false;
   }
   const int yes = 1;
-  ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+  platform::SetSocketOption(listen_fd_, SOL_SOCKET, SO_REUSEADDR, yes);
   // `::` serves IPv4 clients too. Set it explicitly: the kernel default
   // follows net.ipv6.bindv6only, which differs between hosts.
   const int no = 0;
   if (addr.ss_family == AF_INET6 &&
-      ::setsockopt(listen_fd_, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof(no)) !=
+      platform::SetSocketOption(listen_fd_, IPPROTO_IPV6, IPV6_V6ONLY, no) !=
           0) {
     if (error != nullptr)
       *error = "setsockopt(IPV6_V6ONLY) failed";
-    ::close(listen_fd_);
+    platform::CloseSocket(listen_fd_);
     listen_fd_ = -1;
     return false;
   }
@@ -1955,7 +1956,9 @@ void HttpServer::run(bool handle_signals) {
         break;
       }
     }
-    pollfd descriptor{.fd = listen_fd_, .events = POLLIN, .revents = 0};
+    pollfd descriptor{.fd = static_cast<decltype(pollfd::fd)>(listen_fd_),
+                      .events = POLLIN,
+                      .revents = 0};
     const int ready = ::poll(&descriptor, 1, 100);
     if (ready < 0 && errno != EINTR)
       throw std::system_error(errno, std::generic_category(),
@@ -2164,9 +2167,8 @@ bool HttpServer::device_lost() {
 }
 
 void HttpServer::handle_connection(int client_fd) {
-  const struct timeval tv{120, 0};
-  ::setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-  ::setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+  platform::SetSocketTimeout(client_fd, SO_RCVTIMEO, std::chrono::seconds{120});
+  platform::SetSocketTimeout(client_fd, SO_SNDTIMEO, std::chrono::seconds{120});
 
   const auto start_time = std::chrono::steady_clock::now();
   HttpRequest req;

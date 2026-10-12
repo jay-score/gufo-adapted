@@ -1,0 +1,98 @@
+#include <dirent.h>
+#include <fcntl.h>
+#include <spawn.h>
+#include <sys/file.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <array>
+#include <cassert>
+#include <cerrno>
+#include <filesystem>
+#include <stdexcept>
+#include <string>
+
+#include "src/cache/disk.hpp"
+#include "src/cache/ledger.hpp"
+
+int main(int argc, char** argv) {
+  if (argc == 2 && std::string(argv[1]) == "child token with spaces")
+    return 23;
+  pid_t child{};
+  char token[] = "child token with spaces";
+  char* arguments[]{argv[0], token, nullptr};
+  assert(posix_spawn(&child, argv[0], nullptr, nullptr, arguments, nullptr) ==
+         0);
+  int status{};
+  assert(waitpid(child, &status, 0) == child);
+  assert(WIFEXITED(status) && WEXITSTATUS(status) == 23);
+  const auto path = std::filesystem::temp_directory_path() /
+                    ("gufo-win32-" + std::to_string(getpid()));
+  std::filesystem::remove_all(path);
+  std::filesystem::create_directory(path);
+  gufo::cache::ResourceLedger ledger(
+      {1024 * 1024, 1024 * 1024, 1024 * 1024, 1024 * 1024});
+  bool rejected = false;
+  try {
+    gufo::cache::DiskStore store(ledger, path / "unsupported-cache",
+                                 1024 * 1024);
+  } catch (const std::runtime_error& error) {
+    rejected =
+        std::string(error.what()).find("Windows disk cache is unavailable") !=
+        std::string::npos;
+  }
+  assert(rejected && !std::filesystem::exists(path / "unsupported-cache"));
+  const int root = open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  assert(root >= 0);
+  assert(mkdirat(root, "spaced directory", 0700) == 0);
+  assert(mkdirat(root, "spaced directory", 0700) < 0 && errno == EEXIST);
+  const char unicode_name[] = "unicode-\xc3\xa9";
+  assert(mkdirat(root, unicode_name, 0700) == 0);
+  const int file = openat(root, "source", O_RDWR | O_CREAT | O_EXCL, 0600);
+  assert(file >= 0);
+  const int contender = openat(root, "source", O_RDWR);
+  assert(contender >= 0);
+  assert(flock(file, LOCK_EX | LOCK_NB) == 0);
+  assert(flock(contender, LOCK_EX | LOCK_NB) < 0 && errno == EWOULDBLOCK);
+  assert(flock(file, LOCK_UN) == 0);
+  assert(flock(contender, LOCK_EX | LOCK_NB) == 0);
+  assert(close(contender) == 0);
+  constexpr off_t offset = (off_t{1} << 32) + 7;
+  const std::array<char, 4> bytes{'g', 'u', 'f', 'o'};
+  assert(pwrite(file, bytes.data(), bytes.size(), offset) == 4);
+  std::array<char, 4> read_bytes{};
+  assert(pread(file, read_bytes.data(), read_bytes.size(), offset) == 4);
+  assert(bytes == read_bytes);
+  assert(fsync(file) == 0);
+  struct stat before{};
+  assert(fstat(file, &before) == 0 && before.st_size == offset + 4);
+  assert(gufo_rename_noreplace(root, "source", root, "target") == 0);
+  const int replacement =
+      openat(root, "source", O_RDWR | O_CREAT | O_EXCL, 0600);
+  assert(replacement >= 0);
+  assert(gufo_rename_noreplace(root, "source", root, "target") < 0 &&
+         errno == EEXIST);
+  struct stat after{};
+  assert(fstatat(root, "target", &after, 0) == 0);
+  assert(before.st_ino == after.st_ino && before.st_dev == after.st_dev);
+  const int copy = openat(root, ".", O_RDONLY | O_DIRECTORY);
+  assert(copy >= 0);
+  DIR* directory = fdopendir(copy);
+  assert(directory);
+  bool found = false;
+  bool found_unicode = false;
+  errno = 0;
+  while (const auto* entry = readdir(directory)) {
+    found |= std::string(entry->d_name) == "spaced directory";
+    found_unicode |= std::string(entry->d_name) == unicode_name;
+  }
+  assert(errno == 0 && found && found_unicode);
+  assert(closedir(directory) == 0);
+  assert(fsync(root) < 0);  // Unsupported directory durability is explicit.
+  assert(close(replacement) == 0);
+  assert(close(file) == 0);
+  assert(close(root) == 0);
+  std::filesystem::remove_all(path);
+}

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 project(gufo LANGUAGES C CXX)
-if (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
-  message(FATAL_ERROR "Gufo requires Linux x86-64 with an AMD gfx1151 GPU")
+if (NOT CMAKE_SYSTEM_NAME MATCHES "^(Linux|Windows)$" OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+  message(FATAL_ERROR "Gufo requires Linux or Windows x86-64 with an AMD gfx1151 GPU")
 endif()
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
@@ -18,6 +18,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(GUFO_RELEASE_VERSION "development" CACHE STRING "Gufo release version")
 set(GUFO_REVISION "unknown" CACHE STRING "Gufo source revision")
 include_directories(${CMAKE_SOURCE_DIR})
+if (WIN32)
+  include(cmake/Windows.cmake)
+endif()
 
 # Reuse the compiler cache whenever it is installed, as the CPU check
 # derivations do. HIP kernels stay uncached: hipcc drive files and bitcode
@@ -35,8 +38,14 @@ find_package(Threads REQUIRED)
 find_package(CURL REQUIRED)
 find_package(PNG REQUIRED)
 find_package(JPEG REQUIRED)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebp)
+if (WIN32)
+  find_package(WebP CONFIG REQUIRED)
+  set(GUFO_WEBP_TARGET WebP::webp)
+else()
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebp)
+  set(GUFO_WEBP_TARGET PkgConfig::WEBP)
+endif()
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 set(GUFO_FFMPEG_EXECUTABLE "ffmpeg" CACHE STRING
   "FFmpeg executable used for generated media")
@@ -176,7 +185,7 @@ target_compile_definitions(gufo_core PRIVATE
   GUFO_FFMPEG_EXECUTABLE="${GUFO_FFMPEG_EXECUTABLE}"
   GUFO_FFPROBE_EXECUTABLE="${GUFO_FFPROBE_EXECUTABLE}")
 target_link_libraries(gufo_core PUBLIC ICU::uc ICU::i18n Threads::Threads
-  PNG::PNG JPEG::JPEG PkgConfig::WEBP CURL::libcurl OpenSSL::Crypto)
+  PNG::PNG JPEG::JPEG ${GUFO_WEBP_TARGET} CURL::libcurl OpenSSL::Crypto)
 
 add_subdirectory(src/models/qwen)
 add_subdirectory(src/models/qwen_image_21)
@@ -283,10 +292,15 @@ if (ENGINE_ENABLE_HIP)
 endif()
 target_link_libraries(gufo PRIVATE gufo_qwen3_tts gufo_qwen3_asr)
 
-add_custom_target(gufo-server ALL
-  COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE_NAME:gufo> ${CMAKE_CURRENT_BINARY_DIR}/gufo-server
-  DEPENDS gufo
-)
+if (WIN32)
+  add_custom_target(gufo-server ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:gufo> ${CMAKE_CURRENT_BINARY_DIR}/gufo-server.exe
+    DEPENDS gufo)
+else()
+  add_custom_target(gufo-server ALL
+    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE_NAME:gufo> ${CMAKE_CURRENT_BINARY_DIR}/gufo-server
+    DEPENDS gufo)
+endif()
 if (BUILD_TESTING OR GUFO_BUILD_TOOLS)
   add_library(gufo_kernel_bench_support STATIC
     src/cli/bench/kernel_bench.cpp)
@@ -326,7 +340,11 @@ install(FILES
 install(FILES LICENSE NOTICE THIRD_PARTY_NOTICES.md DESTINATION share/licenses/gufo)
 install(DIRECTORY licenses/ DESTINATION share/licenses/gufo/third-party)
 install(FILES src/models/deepseek_v4_flash/LICENSE.ds4 DESTINATION share/licenses/gufo/third-party)
-install(CODE "execute_process(COMMAND \"${CMAKE_COMMAND}\" -E create_symlink gufo \"\$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/gufo-server\")")
+if (WIN32)
+  install(PROGRAMS $<TARGET_FILE:gufo> DESTINATION bin RENAME gufo-server.exe)
+else()
+  install(CODE "execute_process(COMMAND \"${CMAKE_COMMAND}\" -E create_symlink gufo \"\$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/gufo-server\")")
+endif()
 if (ENGINE_ENABLE_HIP AND GUFO_BUILD_TOOLS)
   install(TARGETS gufo-kernel-bench tune_hipblaslt
     DESTINATION bin)
@@ -344,12 +362,14 @@ if (BUILD_TESTING)
 
   # Opt-in live process-failure checks, never preloaded into hosted tests or
   # production. No HIP headers are needed for these stable C ABI hooks.
-  add_library(device_loss_faults SHARED EXCLUDE_FROM_ALL
-    tests/functional/device_loss_faults.cpp)
-  target_link_libraries(device_loss_faults PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
-  add_library(cache_disk_faults SHARED
-    tests/functional/cache_disk_faults.cpp)
-  target_link_libraries(cache_disk_faults PRIVATE ${CMAKE_DL_LIBS})
+  if (NOT WIN32)
+    add_library(device_loss_faults SHARED EXCLUDE_FROM_ALL
+      tests/functional/device_loss_faults.cpp)
+    target_link_libraries(device_loss_faults PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+    add_library(cache_disk_faults SHARED
+      tests/functional/cache_disk_faults.cpp)
+    target_link_libraries(cache_disk_faults PRIVATE ${CMAKE_DL_LIBS})
+  endif()
 
   add_subdirectory(tests/models/qwen)
   add_subdirectory(tests/models/qwen27b)
@@ -665,11 +685,13 @@ if (BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tests/functional/test_cache_workloads.py)
   set_tests_properties(cache_workloads_test PROPERTIES LABELS "cpu;server;functional")
-  add_test(NAME cache_disk_faults_test
-    COMMAND ${Python3_EXECUTABLE}
-      ${CMAKE_CURRENT_SOURCE_DIR}/tests/functional/cache_disk_faults_test.py
-      $<TARGET_FILE:cache_disk_faults>)
-  set_tests_properties(cache_disk_faults_test PROPERTIES LABELS "cpu;server;functional")
+  if (NOT WIN32)
+    add_test(NAME cache_disk_faults_test
+      COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/functional/cache_disk_faults_test.py
+        $<TARGET_FILE:cache_disk_faults>)
+    set_tests_properties(cache_disk_faults_test PROPERTIES LABELS "cpu;server;functional")
+  endif()
 
   add_test(NAME speculative_corpus_test
     COMMAND ${Python3_EXECUTABLE}
@@ -1079,6 +1101,6 @@ if (BUILD_TESTING)
   endif()
 endif()
 
-if (BUILD_TESTING)
+if (BUILD_TESTING AND NOT WIN32)
   include(cmake/Checks.cmake)
 endif()

@@ -142,13 +142,14 @@ void TestEveryPayloadByte() {
 }
 
 void TestFileDigestCache() {
-  char temp[] = "/tmp/gufo-identity-XXXXXX";
-  Expect(mkdtemp(temp) != nullptr, "create cache test directory");
+  auto temp = (std::filesystem::temp_directory_path() / "gufo-identity-XXXXXX")
+                  .string();
+  Expect(mkdtemp(temp.data()) != nullptr, "create cache test directory");
   const std::filesystem::path root(temp);
   const char* old_cache = std::getenv("XDG_CACHE_HOME");
   const std::string saved_cache = old_cache ? old_cache : "";
   const bool had_cache = old_cache != nullptr;
-  setenv("XDG_CACHE_HOME", temp, 1);
+  setenv("XDG_CACHE_HOME", temp.c_str(), 1);
   auto bytes = BuildImage("model", "first", 64 * kWindow, 2 * kWindow);
   const auto path = root / "model.gguf";
   auto write = [&] {
@@ -167,9 +168,14 @@ void TestFileDigestCache() {
   Expect(first == Identity(bytes), "file and memory full digests agree");
   Expect(read() == first, "cached digest agrees with initial scan");
   const auto cache = root / "gufo" / "gguf-sha256-v1";
+#ifdef _WIN32
+  Expect(!std::filesystem::exists(cache),
+         "Windows identity cache remains disabled pending ACL qualification");
+#else
   Expect(std::distance(std::filesystem::directory_iterator(cache),
                        std::filesystem::directory_iterator{}) == 1,
          "one cached full digest exists");
+#endif
   struct stat before{};
   Expect(stat(path.c_str(), &before) == 0, "stat original file");
   bytes[PayloadBase(bytes) + kWindow + 100] ^= 0xff;
@@ -181,10 +187,12 @@ void TestFileDigestCache() {
          "same-size edit with restored mtime invalidates cache");
   Expect(read() == Identity(bytes),
          "edited file still matches full memory digest");
+#ifndef _WIN32
   for (const auto& entry : std::filesystem::directory_iterator(cache)) {
     std::ofstream(entry.path()) << "broken";
   }
   Expect(read() == Identity(bytes), "malformed cached digest is recomputed");
+#endif
   if (had_cache)
     setenv("XDG_CACHE_HOME", saved_cache.c_str(), 1);
   else

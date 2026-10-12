@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -45,7 +46,9 @@ public:
   Value(long long v) : type_(Type::kNumber), num_(static_cast<double>(v)) {}
   Value(unsigned long long v)
       : type_(Type::kNumber), num_(static_cast<double>(v)) {}
-  Value(std::size_t v) : type_(Type::kNumber), num_(static_cast<double>(v)) {}
+  template<typename T>
+    requires std::is_same_v<T, std::size_t>
+  Value(T v) : type_(Type::kNumber), num_(static_cast<double>(v)) {}
   Value(const char* v) : type_(Type::kString), str_(v) {}
   Value(const std::string& v) : type_(Type::kString), str_(v) {}
   Value(std::string&& v) : type_(Type::kString), str_(std::move(v)) {}

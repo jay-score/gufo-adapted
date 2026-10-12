@@ -61,6 +61,16 @@
         "ENGINE_ENABLE_HIP": "ON",
         "GUFO_BUILD_TOOLS": "ON"
       }
+    },
+    {
+      "name": "windows-cpu",
+      "displayName": "Windows CPU integration checks",
+      "inherits": "cpu-test",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
     }
   ],
   "buildPresets": [
@@ -89,6 +99,19 @@
       "configurePreset": "cpu-test",
       "targets": [
         "check-pr"
+      ]
+    },
+    {
+      "name": "windows-cpu",
+      "configurePreset": "windows-cpu",
+      "targets": [
+        "gufo-server",
+        "arg_parser_test",
+        "gguf_reader_test",
+        "gguf_identity_test",
+        "win32_compat_test",
+        "json_test",
+        "json_constraint_test"
       ]
     }
   ],
@@ -158,6 +181,18 @@
       "filter": {
         "include": {
           "label": "qwen-kernel-oracle"
+        }
+      }
+    },
+    {
+      "name": "windows-cpu",
+      "configurePreset": "windows-cpu",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "name": "^(gufo_version|gufo_help|arg_parser_test|gguf_reader_test|gguf_identity_test|win32_compat_test|json_test|json_constraint_test|cache_boundary_test)$"
         }
       }
     }

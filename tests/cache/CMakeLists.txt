@@ -36,10 +36,16 @@ set_tests_properties(cache_ledger_test PROPERTIES LABELS "cpu;cache" TIMEOUT 30)
 file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/cache-links-$<CONFIG>.txt CONTENT
   "$<TARGET_GENEX_EVAL:gufo_cache,$<TARGET_PROPERTY:gufo_cache,LINK_LIBRARIES>>\n$<TARGET_GENEX_EVAL:gufo_cache,$<TARGET_PROPERTY:gufo_cache,INTERFACE_LINK_LIBRARIES>>\n")
 
+set(cache_boundary_platform_args)
+if (WIN32)
+  list(APPEND cache_boundary_platform_args
+    ${CMAKE_BINARY_DIR}/win32-compat-links-$<CONFIG>.txt)
+endif()
 add_test(NAME cache_boundary_test
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/boundary_test.py
     ${PROJECT_SOURCE_DIR}/src/cache
-    ${CMAKE_CURRENT_BINARY_DIR}/cache-links-$<CONFIG>.txt)
+    ${CMAKE_CURRENT_BINARY_DIR}/cache-links-$<CONFIG>.txt
+    ${cache_boundary_platform_args})
 set_tests_properties(cache_boundary_test PROPERTIES LABELS "cpu;cache" TIMEOUT 30)
 
 add_executable(cache_checkpoint_test checkpoint_test.cpp)

@@ -3,7 +3,9 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <immintrin.h>
+#ifndef _WIN32
 #include <linux/fs.h>
+#endif
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -881,8 +883,13 @@ struct DiskStore::Impl {
   }
   void Rename(int target, const std::string& name) {
     CostTimer timer(publication_stats.filesystem_ns);
+#ifdef _WIN32
+    if (gufo_rename_noreplace(temporary.Get(), name.c_str(), target,
+                              name.c_str()) < 0)
+#else
     if (syscall(SYS_renameat2, temporary.Get(), name.c_str(), target,
                 name.c_str(), RENAME_NOREPLACE) < 0)
+#endif
       IoError("publish cache file");
   }
   void WriteFile(int fd, std::span<const std::uint8_t> bytes) {
@@ -1366,6 +1373,11 @@ struct DiskStore::Impl {
     }
   }
   static Fd OpenRoot(const std::filesystem::path& path) {
+#ifdef _WIN32
+    throw std::runtime_error(
+        "Windows disk cache is unavailable pending durability and "
+        "access-control qualification");
+#endif
     // Do not collapse '..': an earlier component may be a symlink and the
     // kernel's configured-directory resolution must remain authoritative.
     auto root_path = path;

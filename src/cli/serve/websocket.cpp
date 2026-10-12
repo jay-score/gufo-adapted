@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "src/cli/serve/audio_stream.hpp"
+#include "src/core/platform/socket.hpp"
 #include "src/core/utf8.hpp"
 
 namespace gufo::server {
@@ -88,17 +89,23 @@ WebSocket::WebSocket(int fd, std::string buffered)
   // Frame headers and audio payloads are separate writes; do not wait for a
   // delayed TCP acknowledgement before sending the payload.
   const int no_delay = 1;
-  (void)::setsockopt(fd_, IPPROTO_TCP, TCP_NODELAY, &no_delay,
-                     sizeof(no_delay));
+  (void)platform::SetSocketOption(fd_, IPPROTO_TCP, TCP_NODELAY, no_delay);
   // Bound backpressure from a client that stops consuming audio. Read timeout
   // stays at the server's idle timeout.
-  const timeval timeout{5, 0};
-  (void)::setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+  (void)platform::SetSocketTimeout(fd_, SO_SNDTIMEO, std::chrono::seconds{5});
+#ifdef _WIN32
+  DWORD idle{};
+  int idle_size = sizeof(idle);
+  if (::getsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char*>(&idle),
+                   &idle_size) == 0)
+    idle_ = std::chrono::milliseconds(idle);
+#else
   timeval idle{};
   socklen_t idle_size = sizeof(idle);
   if (::getsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &idle, &idle_size) == 0)
     idle_ = std::chrono::seconds(idle.tv_sec) +
             std::chrono::microseconds(idle.tv_usec);
+#endif
   last_send_ = std::chrono::steady_clock::now().time_since_epoch().count();
   reader_ = std::jthread([this] { ReadLoop(); });
 }
