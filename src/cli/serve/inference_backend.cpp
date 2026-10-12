@@ -3531,8 +3531,8 @@ InferenceBackend::Result InferenceBackend::complete(
     std::string_view prompt, std::size_t max_tokens,
     const sampling::SamplingConfig& sampling_config,
     const CancellationCheck& is_cancelled, const TokenCallback& on_token,
-    std::string_view client_id,
-    const std::vector<std::string>& stop_sequences) {
+    std::string_view client_id, const std::vector<std::string>& stop_sequences,
+    bool cache_prompt) {
 #if defined(ENGINE_ENABLE_HIP)
   const auto request_start = Clock::now();
   const auto state = impl_->Snapshot();
@@ -3542,9 +3542,10 @@ InferenceBackend::Result InferenceBackend::complete(
   auto prompt_tokens = state->scheduler->runner().Tokenize(prompt);
   return impl_->GenerateScheduled(
       state, std::move(prompt_tokens), request_start, max_tokens,
-      sampling_config, is_cancelled, on_token, std::string(client_id), {}, true,
-      0, stop_sequences);
+      sampling_config, is_cancelled, on_token, std::string(client_id), {},
+      cache_prompt, 0, stop_sequences);
 #else
+  (void)cache_prompt;
   (void)client_id;
   (void)stop_sequences;
   (void)prompt;

@@ -37,6 +37,50 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-12 — Completion-route prompt cache controls
+
+- Source: [gufo-org/gufo@adc3f0f59b32d1e6ceadcb7b2664f38e24a40cd3](https://github.com/gufo-org/gufo/commit/adc3f0f59b32d1e6ceadcb7b2664f38e24a40cd3)
+  and [gufo-org/gufo@4528634fe2474cc1f9099cbdd2e81e823054aee2](https://github.com/gufo-org/gufo/commit/4528634fe2474cc1f9099cbdd2e81e823054aee2)
+  ([PR #557](https://github.com/gufo-org/gufo/pull/557)).
+- Local: commit introducing this entry; based on
+  `11f83fa563b502e3788791e911bd0f7a624bc10e`.
+- Adaptation: forward `cache_prompt` on both raw completion routes through the
+  fork's synchronous `complete()` interface to the existing scheduler. Also
+  close the fork's Responses forwarding gap, which upstream had already fixed.
+  All four routes honor booleans, retain the `true` default for omitted or null
+  values, and reject other types before generation. Preserve cache publication
+  after a bypassed request. Omit upstream's newer raw streaming/deferred-request
+  interface changes because this fork does not have that interface; no scheduler,
+  cache format, kernel or toolchain changes are needed.
+- Areas: `src/cli/serve/http_server.cpp`,
+  `src/cli/serve/inference_backend.cpp`, `src/cli/serve/inference_backend.hpp`,
+  `src/cli/serve/text_generation_backend.hpp`, `src/cli/serve/openai_chat.cpp`,
+  `tests/cli/http_server_test.cpp`, `tests/cli/openai_chat_test.cpp`,
+  `docs/SERVER.md`, `docs/KV-CACHE.md`.
+- Validation: fresh Windows CPU builds with TheRock 10.0.0 (clang 23,
+  MSVC 14.51) pass `http_server_test`, `openai_chat_test`,
+  `text_model_runner_test` and `text_generation_scheduler_test`. HTTP fixtures
+  cover all four routes, sequential false-to-default requests, null, invalid
+  types without backend calls, and buffered/streaming Chat and Responses.
+  Existing runner fixtures cover disk/live/RAM bypass and later cache publication.
+  The Windows HIP production build passes. An isolated gfx1151 HTTP smoke with
+  Flash-Next IQ4_XS, Q8_0 MTP (draft limit 7), BF16 projector, context 4096,
+  one session, temperature 0 and seed 123 reproduces the baseline bug and passes
+  36 candidate requests: bypass has zero cached tokens, true/omitted/null reuse
+  the cache, and invalid strings return 400. Buffered timing counters confirm
+  bypass prefills the full prompt; streaming Chat/Responses forwarding is covered.
+  Against baseline `11f83fa563b5`, the matched 24-token fixed-prose corpus has
+  exact SHA-256 equality for all 22 complete raw-logit rows in each of three
+  schedules (decode 1, mixed verification 1/2/4/8, prefill 8). Perplexities match
+  exactly at 6.238422, 6.238422 and 7.232463, respectively. This is a bounded
+  arithmetic regression check, not a full model-quality qualification.
+  Formatting (clang-format 21.1.8), documentation and diff whitespace checks pass.
+  Commands, build/source identities, artifact/corpus hashes, requests/responses
+  and logs are retained under ignored `build/pr557/` in the implementation
+  worktree. Linux execution, GPU restart/disk-cache smoke, full quality suites
+  and performance comparisons remain unrun. Test-owned GPU processes are stopped.
+- Status: retained.
+
 ### 2026-10-10 — Decode narrow integer GGUF metadata arrays
 
 - Source: [gufo-org/gufo@3fac1bb51c97ef3606bf0bc662bf778344414cb4](https://github.com/gufo-org/gufo/commit/3fac1bb51c97ef3606bf0bc662bf778344414cb4)

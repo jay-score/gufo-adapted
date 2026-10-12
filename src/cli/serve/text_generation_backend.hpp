@@ -240,13 +240,13 @@ public:
     return ToolFormat::kUnknown;
   }
 
-  virtual Result complete(
-      std::string_view prompt, std::size_t max_tokens,
-      const sampling::SamplingConfig& sampling,
-      const CancellationCheck& is_cancelled = {},
-      const TokenCallback& on_token = {},
-      std::string_view client_id = "anonymous",
-      const std::vector<std::string>& stop_sequences = {}) = 0;
+  virtual Result complete(std::string_view prompt, std::size_t max_tokens,
+                          const sampling::SamplingConfig& sampling,
+                          const CancellationCheck& is_cancelled = {},
+                          const TokenCallback& on_token = {},
+                          std::string_view client_id = "anonymous",
+                          const std::vector<std::string>& stop_sequences = {},
+                          bool cache_prompt = true) = 0;
 
   virtual Result chat(const ChatRequest& request, std::size_t max_tokens,
                       const sampling::SamplingConfig& sampling,

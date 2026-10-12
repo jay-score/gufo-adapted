@@ -614,7 +614,8 @@ std::optional<HttpResponse> ParseRequest(const HttpRequest& request,
   }
 
   output->chat.client_id = request.client_id;
-  if (const auto* cache_prompt = body.find("cache_prompt")) {
+  if (const auto* cache_prompt = body.find("cache_prompt");
+      cache_prompt != nullptr && !cache_prompt->is_null()) {
     if (!cache_prompt->is_bool()) {
       return Error(400, "Bad Request", "'cache_prompt' must be a boolean",
                    "invalid_cache_prompt");
@@ -2482,6 +2483,14 @@ HttpResponse StreamingResponse(
 
 bool ParseOpenAiResponseChat(const json::Value& body, ChatRequest* chat,
                              std::string* error) {
+  if (const auto* cache_prompt = body.find("cache_prompt");
+      cache_prompt != nullptr && !cache_prompt->is_null()) {
+    if (!cache_prompt->is_bool()) {
+      *error = "'cache_prompt' must be a boolean";
+      return false;
+    }
+    chat->cache_prompt = cache_prompt->as_bool();
+  }
   if (const auto* reasoning = body.find("reasoning");
       reasoning != nullptr && !reasoning->is_null()) {
     if (!reasoning->is_object()) {

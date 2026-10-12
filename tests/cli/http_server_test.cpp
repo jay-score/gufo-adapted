@@ -37,6 +37,7 @@ public:
     gufo::sampling::SamplingConfig sampling;
     std::string client_id;
     std::vector<std::string> stop_sequences;
+    bool cache_prompt{true};
   };
   Call LastCall() {
     const std::lock_guard lock(mutex_);
@@ -55,12 +56,12 @@ public:
   std::size_t count_tokens(std::string_view text) const override {
     return text.size();
   }
-  Result complete(
-      std::string_view prompt, std::size_t limit,
-      const gufo::sampling::SamplingConfig& sampling,
-      const CancellationCheck& cancel, const TokenCallback& token,
-      std::string_view client_id = "anonymous",
-      const std::vector<std::string>& stop_sequences = {}) override {
+  Result complete(std::string_view prompt, std::size_t limit,
+                  const gufo::sampling::SamplingConfig& sampling,
+                  const CancellationCheck& cancel, const TokenCallback& token,
+                  std::string_view client_id = "anonymous",
+                  const std::vector<std::string>& stop_sequences = {},
+                  bool cache_prompt = true) override {
     ++calls;
     if (failure == 1)
       throw std::length_error("context exceeded");
@@ -86,7 +87,8 @@ public:
                .max_tokens = limit,
                .sampling = sampling,
                .client_id = std::string(client_id),
-               .stop_sequences = stop_sequences};
+               .stop_sequences = stop_sequences,
+               .cache_prompt = cache_prompt};
       result.text = output_;
     }
     result.prompt_tokens = 10;
@@ -1107,7 +1109,55 @@ void TestSignalShutdown() {
 
 }  // namespace
 
+void TestCachePromptRoutes() {
+  RunningServer server;
+  for (const auto* path : {"/v1/completions", "/completion",
+                           "/v1/chat/completions", "/v1/responses"}) {
+    const bool raw = std::string_view(path) == "/v1/completions" ||
+                     std::string_view(path) == "/completion";
+    for (bool stream : {false, true}) {
+      if (raw && stream)
+        continue;  // Raw routes currently use buffered completion only.
+      const auto make_body = [&](const char* value) {
+        auto body = gufo::json::Value::object();
+        body["model"] = "test";
+        body["stream"] = stream;
+        if (raw) {
+          body["prompt"] = "hello";
+        } else if (std::string_view(path) == "/v1/responses") {
+          body["input"] = "hello";
+        } else {
+          body["messages"] =
+              gufo::json::parse(R"([{"role":"user","content":"hello"}])");
+        }
+        if (value)
+          body["cache_prompt"] = gufo::json::parse(value);
+        return body.dump();
+      };
+      for (const auto* value : {"false", "true", "false", "null", "false",
+                                static_cast<const char*>(nullptr)}) {
+        const auto before = server.backend->calls.load();
+        ExpectStatus(server.Post(path, make_body(value)), 200);
+        assert(server.backend->calls == before + 1);
+        const auto call = server.backend->LastCall();
+        const bool expected =
+            value == nullptr || std::string_view(value) != "false";
+        assert((raw ? call.cache_prompt : call.chat.cache_prompt) == expected);
+      }
+      for (const auto* value : {"0", "1", "\"false\"", "[]", "{}"}) {
+        const auto before = server.backend->calls.load();
+        const auto response = server.Post(path, make_body(value));
+        ExpectStatus(response, 400);
+        assert(response.find("'cache_prompt' must be a boolean") !=
+               std::string::npos);
+        assert(server.backend->calls == before);
+      }
+    }
+  }
+}
+
 int main() {
+  TestCachePromptRoutes();
   TestMalformedToolCalls();
   TestRequestLogging();
   TestInvalidBindSettings();
