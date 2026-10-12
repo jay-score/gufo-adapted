@@ -168,6 +168,11 @@ namespace {
 /// Host RAM still available, after cgroup limits. Unified-memory device
 /// allocations draw from the same RAM, so HIP's device capacity is not used.
 std::uint64_t HostAvailableBytes() {
+#ifdef _WIN32
+  // No Linux CMA/cgroup accounting on Windows. This is host physical RAM,
+  // not the WDDM device allocation budget (qualified separately).
+  return gufo_available_physical_bytes();
+#else
   const long pages = sysconf(_SC_AVPHYS_PAGES);
   const long page_size = sysconf(_SC_PAGESIZE);
   if (pages <= 0 || page_size <= 0)
@@ -183,6 +188,7 @@ std::uint64_t HostAvailableBytes() {
   membership_text << membership.rdbuf();
   return CgroupAvailableBytes("/sys/fs/cgroup", membership_text.str(),
                               available);
+#endif
 }
 
 std::size_t ClampToSize(std::uint64_t bytes) {

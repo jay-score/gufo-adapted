@@ -61,6 +61,7 @@ std::string CurrentTimestamp() {
   return {buffer.data(), written};
 }
 
+#ifndef _WIN32
 std::size_t ReadMemoryKiB(const char* path, std::string_view field) {
   std::ifstream input(path);
   for (std::string line; std::getline(input, line);) {
@@ -73,6 +74,7 @@ std::size_t ReadMemoryKiB(const char* path, std::string_view field) {
   }
   return 0;
 }
+#endif
 
 }  // namespace
 
@@ -164,9 +166,15 @@ void Logger::LogFormatted(LogLevel level, std::string_view component,
 
 std::string Logger::MemoryStatus() {
   std::ostringstream output;
+#ifdef _WIN32
+  output << "rss_mib=" << gufo_resident_bytes() / (1024 * 1024)
+         << " host_available_mib="
+         << gufo_available_physical_bytes() / (1024 * 1024);
+#else
   output << "rss_mib=" << ReadMemoryKiB("/proc/self/status", "VmRSS:") / 1024
          << " host_available_mib="
          << ReadMemoryKiB("/proc/meminfo", "MemAvailable:") / 1024;
+#endif
   return output.str();
 }
 
@@ -180,7 +188,7 @@ void Logger::LogRequest(std::string_view id, std::string_view method,
       status_code >= 500 || outcome == "stream_error"   ? LogLevel::kError
       : status_code >= 400 || outcome == "disconnected" ? LogLevel::kWarn
                                                         : success_level;
-  // A filtered line must not pay for MemoryStatus(): two /proc reads per
+  // A filtered line must not pay for MemoryStatus(): host queries per
   // request add up on every quiet poll the tier suppresses.
   if (!Enabled(level)) {
     return;

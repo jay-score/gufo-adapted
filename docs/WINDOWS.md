@@ -1,10 +1,10 @@
 # Windows integration status
 
-Stage one and the server-transport increment of stage two in the
+Stage one and the transport/host increments of stage two in the
 [integration plan](plans/windows-compatibility.md) build the current official
 engine's **CPU CLI and selected host/server checks** natively on Windows x64.
 This is an integration milestone, not a supported Windows inference release.
-Host diagnostics, native HIP inference, persistent cache guarantees, Windows
+Native HIP inference, persistent cache guarantees, Windows
 CPU CI, and the GUI remain pending.
 
 ## Prerequisites and build
@@ -144,7 +144,53 @@ Coverage includes:
 
 Console-window closure, logoff, and forced process termination do not provide a
 graceful-cleanup guarantee. Persistent-cache crash recovery is a separate
-increment. Host memory/diagnostics remain unqualified. The Linux test paths are
+increment. The Linux test paths are
 retained, including their signal subprocess tests, but a Linux build remains
 pending: the toolchain is not installed in this host's WSL environment. Windows
 CPU CI and live GPU/model correctness and timing qualification remain pending.
+
+## Stage-two host integration validation
+
+Validated on 2026-10-12 with the same native toolchain, building on transport
+commit `7a2ab5bb`. All **13** bounded `windows-cpu` checks pass, including the new
+`win32_host_test`. Shared formatting, documentation, and dependency checks pass.
+The native test covers host queries, snapshot budget/ceiling arithmetic, live
+memory log fields, explicit Linux-style fixtures, diagnostic verdicts, and cache
+path selection with Unicode/spaced paths and empty/missing environment values.
+
+The adaptations use the fork at
+`ab4d98189a6d8103fce29d2537e4113da3da2420` as their reference. Windows reports
+CPU names/vendor through CPUID and counts actual physical cores and NUMA nodes
+through
+[GetLogicalProcessorInformationEx](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getlogicalprocessorinformationex),
+rather than assuming two threads per core. Logical processor counts span all
+processor groups. Explicit fixture roots retain the existing `/proc` parser;
+missing fixtures do not fall back to the live Windows host.
+
+Host inventory, HTTP logs, and RAM snapshot admission now use native memory
+queries. The process RSS field reports its Windows working set. Total/available
+RAM comes from
+[GlobalMemoryStatusEx](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-globalmemorystatusex).
+It is OS-visible physical RAM, not installed RAM or a WDDM device budget.
+Admission retains the existing half-available automatic budget and headroom
+ceiling. Linux CMA/cgroup logic remains on Linux. Windows Job Object memory
+limits and actual HIP allocations have not been qualified.
+
+Live CLI JSON and human diagnostics were checked against Windows CIM on this
+host: Ryzen AI MAX+ 395, 16 physical cores, 32 logical processors, one NUMA node,
+Windows `10.0.26300`, and `33,981,009,920` OS-visible physical bytes. CPU-only
+diagnostics report GPU/Windows driver compatibility as `unknown`, with GPU and
+toolchain warnings; platform-only diagnostics pass. Compiler metadata identifies
+the actual Clang build. They no longer inherit Linux's hard-coded GPU, amdgpu,
+GCC, or ROCm values. Memory hardware type/unified classification is unavailable;
+`memoryType` is `unknown`, `isUnified` remains false, and the unqueried Linux
+`freeBytes` field is zero with its limitation identified in `source`.
+
+The shared default-cache selector uses `XDG_CACHE_HOME/gufo`, then on Windows
+`LOCALAPPDATA/gufo`, then `HOME/.cache/gufo`. With no usable root it returns no
+path. Windows reads the native wide environment, preserving Unicode profile
+paths. This only selects a location: both stores and persistent GGUF identity
+caching remain disabled before any directory creation. Opt-in continuation
+cache directories remain caller-selected. ACLs and publication/recovery are the
+next increment; Linux build verification, Windows CI, HIP, and the GUI remain
+pending.

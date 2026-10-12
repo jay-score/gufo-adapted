@@ -45,6 +45,15 @@ if (BUILD_TESTING)
   target_link_libraries(win32_compat_test PRIVATE gufo_cache)
   add_test(NAME win32_compat_test COMMAND win32_compat_test)
   set_tests_properties(win32_compat_test PROPERTIES LABELS "cpu;windows" TIMEOUT 30)
+  add_executable(win32_host_test
+    ${PROJECT_SOURCE_DIR}/tests/platform/win32_host_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/cli/serve/continuation_cache.cpp
+    ${PROJECT_SOURCE_DIR}/src/cli/serve/continuation_disk_store.cpp
+    ${PROJECT_SOURCE_DIR}/src/cli/serve/text_model_runner.cpp)
+  target_compile_options(win32_host_test PRIVATE -UNDEBUG)
+  target_link_libraries(win32_host_test PRIVATE gufo_diagnostics gufo_logging gufo_core)
+  add_test(NAME win32_host_test COMMAND win32_host_test)
+  set_tests_properties(win32_host_test PROPERTIES LABELS "cpu;windows;diagnostics" TIMEOUT 30)
   add_test(NAME win32_server_shutdown_test
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/platform/win32_server_shutdown_test.py
       $<TARGET_FILE:http_server_test>)

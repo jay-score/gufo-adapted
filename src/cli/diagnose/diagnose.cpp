@@ -109,12 +109,21 @@ diagnostics::DiagnosticReport CollectDiagnostics(
     check.name = "platform";
     if (inventory.cpu.architecture == "x86_64") {
       check.status = diagnostics::DiagnosticStatus::kPass;
+#ifdef _WIN32
+      check.message = "Supported architecture: Windows x86-64";
+      check.details["targetArchitecture"] = "x86_64-windows";
+#else
       check.message = "Supported architecture: Linux x86-64";
       check.details["targetArchitecture"] = "x86_64-linux";
+#endif
     } else {
       check.status = diagnostics::DiagnosticStatus::kFail;
+#ifdef _WIN32
+      check.message = "Unsupported target platform: Windows x86-64 is required";
+#else
       check.message =
           "Unsupported target platform: only Linux x86-64 is supported";
+#endif
       report.AddError("Unsupported platform architecture detected");
     }
     report.AddCheck(std::move(check));
@@ -138,12 +147,26 @@ diagnostics::DiagnosticReport CollectDiagnostics(
         std::to_string(inventory.cpu.logical_cores);
     cpu_check.details["physicalCores"] =
         std::to_string(inventory.cpu.physical_cores);
+#ifdef _WIN32
+    if (inventory.cpu.model_name.empty() || inventory.cpu.logical_cores == 0 ||
+        inventory.cpu.physical_cores == 0 || inventory.cpu.numa_nodes == 0) {
+      cpu_check.status = diagnostics::DiagnosticStatus::kWarn;
+      cpu_check.message = "CPU identification/topology query incomplete";
+    }
+#endif
     report.AddCheck(std::move(cpu_check));
 
     diagnostics::DiagnosticCheck mem_check;
     mem_check.name = "memory";
     mem_check.status = diagnostics::DiagnosticStatus::kPass;
     mem_check.message = "Host unified memory pool identified";
+#ifdef _WIN32
+    mem_check.message = "Host physical memory queried; memory type unknown";
+    if (inventory.memory.total_bytes == 0) {
+      mem_check.status = diagnostics::DiagnosticStatus::kWarn;
+      mem_check.message = "Host physical memory query failed";
+    }
+#endif
     mem_check.details["totalBytes"] =
         std::to_string(inventory.memory.total_bytes);
     mem_check.details["availableBytes"] =
@@ -166,6 +189,11 @@ diagnostics::DiagnosticReport CollectDiagnostics(
     if (inventory.gpu.architecture == "gfx1151") {
       check.status = diagnostics::DiagnosticStatus::kPass;
       check.message = "Detected AMD Strix Halo GPU (gfx1151)";
+#ifdef _WIN32
+    } else if (inventory.gpu.architecture.empty()) {
+      check.status = diagnostics::DiagnosticStatus::kWarn;
+      check.message = inventory.gpu.availability;
+#endif
     } else {
       check.status = diagnostics::DiagnosticStatus::kFail;
       check.message =
@@ -183,6 +211,12 @@ diagnostics::DiagnosticReport CollectDiagnostics(
     check.name = "toolchain";
     check.status = diagnostics::DiagnosticStatus::kPass;
     check.message = "Toolchain and driver stack verified";
+#ifdef _WIN32
+    check.status = diagnostics::DiagnosticStatus::kWarn;
+    check.message =
+        "Compiler identified; Windows HIP driver qualification pending";
+    check.details["cxxCompiler"] = inventory.toolchain.cxx_compiler;
+#endif
     check.details["kernelRelease"] = inventory.toolchain.kernel_release;
     check.details["amdgpuStatus"] = inventory.toolchain.amdgpu_status;
     check.details["rocmVersion"] = inventory.toolchain.rocm_version;

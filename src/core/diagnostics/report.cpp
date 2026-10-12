@@ -82,7 +82,11 @@ DiagnosticStatus FromString(std::string_view str) {
   return DiagnosticStatus::kFail;
 }
 
-DiagnosticReport::DiagnosticReport() : timestamp_(CurrentIso8601Utc()) {}
+DiagnosticReport::DiagnosticReport() : timestamp_(CurrentIso8601Utc()) {
+#if defined(_WIN32) && defined(GUFO_REVISION)
+  engine_revision_ = GUFO_REVISION;
+#endif
+}
 
 void DiagnosticReport::SetEngineRevision(std::string_view revision) {
   engine_revision_ = std::string(revision);

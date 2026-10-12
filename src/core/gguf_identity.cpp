@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "src/core/crypto/sha256.hpp"
+#include "src/core/platform/cache_directory.hpp"
 
 namespace gufo::core {
 namespace {
@@ -62,17 +63,10 @@ int OpenCacheDirectory() {
   // Hash the artifact directly until persistent identity caching is qualified.
   return -1;
 #endif
-  const char* base = std::getenv("XDG_CACHE_HOME");
-  std::filesystem::path path;
-  if (base && *base)
-    path = base;
-  else {
-    const char* home = std::getenv("HOME");
-    if (!home || !*home)
-      return -1;
-    path = std::filesystem::path(home) / ".cache";
-  }
-  path /= "gufo";
+  const auto selected = platform::DefaultCacheDirectory();
+  if (!selected)
+    return -1;
+  auto path = *selected;
   std::error_code error;
   std::filesystem::create_directories(path, error);
   if (error)

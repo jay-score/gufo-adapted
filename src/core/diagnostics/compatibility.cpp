@@ -45,15 +45,24 @@ CompatibilityReport EvaluateCompatibility(const SystemInventory& inventory,
   if (section == "all" || section == "platform" || section == "inventory") {
     CompatibilityItem platform_item;
     platform_item.component = "platform";
+#ifdef _WIN32
+    platform_item.detected_value = inventory.cpu.architecture + "-windows";
+    platform_item.required_value = "x86_64-windows";
+#else
     platform_item.detected_value = inventory.cpu.architecture + "-linux";
     platform_item.required_value = "x86_64-linux";
+#endif
     platform_item.evidence = "CPU architecture / host OS";
     if (inventory.cpu.architecture == "x86_64") {
       platform_item.verdict = CompatibilityVerdict::kSupported;
       platform_item.remediation_hint = "None";
     } else {
       platform_item.verdict = CompatibilityVerdict::kUnsupported;
+#ifdef _WIN32
+      platform_item.remediation_hint = "gufo requires Windows x86-64";
+#else
       platform_item.remediation_hint = "gufo only supports Linux x86-64";
+#endif
       overall = CompatibilityVerdict::kUnsupported;
     }
     report.items.push_back(std::move(platform_item));
@@ -69,6 +78,14 @@ CompatibilityReport EvaluateCompatibility(const SystemInventory& inventory,
     if (inventory.gpu.architecture == "gfx1151") {
       gpu_item.verdict = CompatibilityVerdict::kSupported;
       gpu_item.remediation_hint = "None";
+#ifdef _WIN32
+    } else if (inventory.gpu.architecture.empty()) {
+      gpu_item.detected_value = inventory.gpu.availability;
+      gpu_item.verdict = CompatibilityVerdict::kUnknown;
+      gpu_item.remediation_hint = "GPU detection requires a HIP-enabled build";
+      if (overall == CompatibilityVerdict::kSupported)
+        overall = CompatibilityVerdict::kUnknown;
+#endif
     } else {
       gpu_item.verdict = CompatibilityVerdict::kUnsupported;
       gpu_item.remediation_hint =
@@ -83,6 +100,17 @@ CompatibilityReport EvaluateCompatibility(const SystemInventory& inventory,
   // 3. Kernel Driver Check
   if (section == "all" || section == "inventory") {
     CompatibilityItem driver_item;
+#ifdef _WIN32
+    driver_item.component = "windows_driver";
+    driver_item.detected_value = "unavailable";
+    driver_item.required_value = "qualified Windows HIP driver";
+    driver_item.evidence = inventory.gpu.source;
+    driver_item.verdict = CompatibilityVerdict::kUnknown;
+    driver_item.remediation_hint =
+        "Windows HIP driver qualification is pending";
+    if (overall == CompatibilityVerdict::kSupported)
+      overall = CompatibilityVerdict::kUnknown;
+#else
     driver_item.component = "kernel_driver";
     driver_item.detected_value = "amdgpu: " + inventory.toolchain.amdgpu_status;
     driver_item.required_value = "amdgpu: loaded";
@@ -96,6 +124,7 @@ CompatibilityReport EvaluateCompatibility(const SystemInventory& inventory,
           "Ensure Linux kernel >= 6.10 with the amdgpu driver loaded";
       overall = CompatibilityVerdict::kUnsupported;
     }
+#endif
     report.items.push_back(std::move(driver_item));
   }
 

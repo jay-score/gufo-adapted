@@ -1,10 +1,10 @@
 # Minimal native Windows integration
 
-Status: stage one and the server-transport increment of stage two implemented
+Status: stage one and the transport/host increments of stage two implemented
 on `feat/windows-cpu-compat`. The native Windows CPU CLI builds; the bounded
 preset includes host, HTTP, audio WebSocket, and console-shutdown checks. See
 [Windows status](../WINDOWS.md) for commands, provenance, validation, and
-remaining limitations. Host integration, persistent caches, Windows CI, stages
+remaining limitations. Persistent caches, Windows CI, stages
 three/four, and the GUI remain pending. No GPU/model or persistent-cache runtime
 qualification is claimed yet.
 
@@ -196,8 +196,10 @@ keep the existing `windows-port` branch available throughout qualification.
      nonblocking accept with blocking workers, disconnect/cancellation,
      WebSocket idle/close semantics, and actual console-event subprocess tests.
      Content tracing fails explicitly until Windows ACL privacy is qualified.
-   - **Host integration:** diagnostics, host-memory reporting, and Windows
-     cache-directory selection. Aligned allocation was completed in stage one.
+   - **Host integration (implemented):** native CPU topology and OS diagnostics,
+     host-memory reporting/admission, and Unicode Windows cache-directory
+     selection. Unqueried GPU/driver/memory-type fields remain unavailable.
+     Aligned allocation was completed in stage one.
    - **Persistence:** ACLs, stable directory identity, publication/recovery,
      and native subprocess/failure-injection tests. Retain the Windows guards
      until each store's guarantees are demonstrated. The dependency boundary

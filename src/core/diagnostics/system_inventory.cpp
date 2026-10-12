@@ -34,6 +34,25 @@ std::string EscapeJsonStr(std::string_view str) {
 SystemInventory CollectSystemInventory(const LinuxSysfs& sysfs) {
   SystemInventory inv;
 
+#ifdef _WIN32
+  inv.cpu.source = "CPUID + Windows processor topology";
+  inv.memory.source = "GlobalMemoryStatusEx (freeBytes unavailable)";
+  inv.memory.memory_type = "unknown";
+  inv.memory.is_unified = false;
+  inv.gpu.name = "unavailable";
+  inv.gpu.architecture.clear();
+  inv.gpu.compute_units = 0;
+  inv.gpu.driver_name = "unavailable";
+  inv.gpu.pci_id.clear();
+  inv.gpu.power_mode = "unavailable on Windows";
+  inv.gpu.clock_state = "unavailable on Windows";
+  inv.gpu.source = "HIP (Linux DRM/sysfs unavailable on Windows)";
+  inv.toolchain.amdgpu_status = "not applicable on Windows";
+  inv.toolchain.rocm_version = "uncompiled (ENGINE_ENABLE_HIP=OFF)";
+  inv.toolchain.cxx_compiler = "Clang " __clang_version__;
+  inv.toolchain.source = "Windows UAPI + compiler build metadata";
+#endif
+
   // 1. CPU
   if (const auto cpu_opt = sysfs.QueryCpuInfo()) {
     inv.cpu.model_name = cpu_opt->model_name;
@@ -43,7 +62,11 @@ SystemInventory CollectSystemInventory(const LinuxSysfs& sysfs) {
     inv.cpu.physical_cores = cpu_opt->physical_cores;
     inv.cpu.numa_nodes = cpu_opt->numa_nodes;
   } else {
+#ifdef _WIN32
+    inv.cpu.model_name = "unavailable (host CPU query failed)";
+#else
     inv.cpu.model_name = "unavailable (could not read /proc/cpuinfo)";
+#endif
   }
 
   // 2. Memory
@@ -62,6 +85,7 @@ SystemInventory CollectSystemInventory(const LinuxSysfs& sysfs) {
   }
 
   // 4. GPU (Sysfs + HIP query)
+#ifndef _WIN32
   const auto gpus = sysfs.QueryDrmGpuDevices();
   if (!gpus.empty()) {
     const auto& primary_gpu = gpus[0];
@@ -83,8 +107,17 @@ SystemInventory CollectSystemInventory(const LinuxSysfs& sysfs) {
       inv.gpu.availability = "unsupported GPU (" + primary_gpu.pci_id + ")";
     }
   }
+#endif
 
 #if defined(ENGINE_ENABLE_HIP)
+#ifdef _WIN32
+  inv.toolchain.rocm_version = "unavailable (HIP runtime query failed)";
+  if (int version = 0; hipRuntimeGetVersion(&version) == hipSuccess) {
+    inv.toolchain.rocm_version = std::to_string(version / 10000000) + "." +
+                                 std::to_string(version / 100000 % 100) + "." +
+                                 std::to_string(version % 100000);
+  }
+#endif
   int dev_count = 0;
   const hipError_t err = hipGetDeviceCount(&dev_count);
   if (err == hipSuccess && dev_count > 0) {
@@ -210,7 +243,11 @@ std::string SystemInventory::ToHuman() const {
       << memory.memory_type << ")\n";
   oss << "GPU Model           : " << gpu.name << " [" << gpu.architecture
       << ", " << gpu.compute_units << " CUs] (" << gpu.availability << ")\n";
+#ifdef _WIN32
+  oss << "Windows Version     : " << toolchain.kernel_release << "\n";
+#else
   oss << "Linux Kernel        : " << toolchain.kernel_release << "\n";
+#endif
   oss << "ROCm Version        : " << toolchain.rocm_version << "\n";
 
   return oss.str();
