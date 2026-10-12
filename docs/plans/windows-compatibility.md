@@ -1,10 +1,11 @@
 # Minimal native Windows integration
 
-Status: stage one and the transport/host increments of stage two implemented
+Status: stage one and the transport/host increments of stage two implemented;
+persistence foundations qualified, checkpoint-store port still pending
 on `feat/windows-cpu-compat`. The native Windows CPU CLI builds; the bounded
 preset includes host, HTTP, audio WebSocket, and console-shutdown checks. See
 [Windows status](../WINDOWS.md) for commands, provenance, validation, and
-remaining limitations. Persistent caches, Windows CI, stages
+remaining limitations. Checkpoint persistence, Windows CI, stages
 three/four, and the GUI remain pending. No GPU/model or persistent-cache runtime
 qualification is claimed yet.
 
@@ -195,7 +196,7 @@ keep the existing `windows-port` branch available throughout qualification.
    - **Transport and shutdown (implemented):** native socket handles and I/O,
      nonblocking accept with blocking workers, disconnect/cancellation,
      WebSocket idle/close semantics, and actual console-event subprocess tests.
-     Content tracing fails explicitly until Windows ACL privacy is qualified.
+     The later persistence foundations qualify private content tracing.
    - **Host integration (implemented):** native CPU topology and OS diagnostics,
      host-memory reporting/admission, and Unicode Windows cache-directory
      selection. Unqueried GPU/driver/memory-type fields remain unavailable.
@@ -204,6 +205,13 @@ keep the existing `windows-port` branch available throughout qualification.
      and native subprocess/failure-injection tests. Retain the Windows guards
      until each store's guarantees are demonstrated. The dependency boundary
      and isolated locking/offset/no-replace operations were covered in stage one.
+     The foundation increment qualifies protected ACLs, handle-relative file
+     operations, native operation-level death/failure checks, private tracing,
+     and GGUF identity caching. Both checkpoint stores remain guarded. Native
+     directory flush succeeds with write access, but this process cannot flush
+     `C:\Users` or the volume root required by the new store's ancestor walk.
+     Resolve that Windows durability contract before enabling stores; a weaker
+     power-loss guarantee has not been selected. See the validation record.
    - **Windows CPU CI:** automate the qualified bounded suite, preserving the
      existing Linux checks.
 

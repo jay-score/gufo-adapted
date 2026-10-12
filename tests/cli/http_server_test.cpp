@@ -517,7 +517,6 @@ void TestRequestLogging() {
   assert(debug.text.find("event=options") == std::string::npos);
 }
 
-#ifndef _WIN32
 std::string ResponseRequestId(const std::string& response) {
   const auto header = response.find("X-Request-ID: ");
   assert(header != std::string::npos);
@@ -546,7 +545,6 @@ std::string ChunkedBody(const std::string& response) {
 
 // `--trace` keeps what a text request carried in and out under the id the
 // logs name. Polls, other routes and unauthenticated requests stay out.
-#endif
 
 void TestContentTrace() {
   namespace fs = std::filesystem;
@@ -555,13 +553,6 @@ void TestContentTrace() {
       fs::temp_directory_path() /
       ("gufo-trace-test-" + std::to_string(::getpid()) + ".jsonl");
   fs::remove(path);
-#ifdef _WIN32
-  const auto error = Trace::Open(path.string());
-  assert(error &&
-         error->find("access-control qualification") != std::string::npos);
-  assert(!Trace::Enabled());
-  assert(!fs::exists(path));
-#else
   assert(!Trace::Open(path.string()).has_value());
   std::string plain_id;
   std::string stream_id;
@@ -612,8 +603,15 @@ void TestContentTrace() {
   }
   Trace::Close();
 
+#ifdef _WIN32
+  struct stat trace_status{};
+  assert(stat(path.c_str(), &trace_status) == 0 &&
+         (trace_status.st_mode & 0777) == 0600 &&
+         trace_status.st_uid == geteuid());
+#else
   assert((fs::status(path).permissions() & fs::perms::all) ==
          (fs::perms::owner_read | fs::perms::owner_write));
+#endif
   std::vector<gufo::json::Value> records;
   {
     std::ifstream input(path);
@@ -660,6 +658,23 @@ void TestContentTrace() {
 
   assert(record("request", invalid_id).member_str("body") == "{");
   assert(record("response", invalid_id).member_size("status") == 400);
+#ifdef _WIN32
+  // Existing files with inherited/unprotected ACLs are not silently secured.
+  {
+    std::ofstream public_file(path);
+    public_file << "existing data";
+  }
+  assert(Trace::Open(path.string()).has_value());
+  assert(!Trace::Enabled() && fs::file_size(path) == 13);
+  fs::remove(path);
+  assert(!Trace::Open(path.string()));
+  Trace::Close();
+  const auto alias = fs::path(path.string() + ".alias");
+  fs::create_hard_link(path, alias);
+  assert(Trace::Open(path.string()).has_value());
+  assert(!Trace::Enabled());
+  fs::remove(alias);
+  fs::remove(path);
 #endif
 }
 

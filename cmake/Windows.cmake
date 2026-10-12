@@ -9,6 +9,7 @@ endif()
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_library(gufo_posix_compat STATIC
   ${PROJECT_SOURCE_DIR}/compat/win32/posix.cpp
+  ${PROJECT_SOURCE_DIR}/compat/win32/filesystem.cpp
   ${PROJECT_SOURCE_DIR}/compat/win32/directory.cpp
   ${PROJECT_SOURCE_DIR}/compat/win32/spawn.cpp)
 target_include_directories(gufo_posix_compat SYSTEM BEFORE PUBLIC
@@ -16,7 +17,7 @@ target_include_directories(gufo_posix_compat SYSTEM BEFORE PUBLIC
 target_compile_definitions(gufo_posix_compat PUBLIC
   _CRT_DECLARE_NONSTDC_NAMES=0 WIN32_LEAN_AND_MEAN NOMINMAX
   _CRT_SECURE_NO_WARNINGS _USE_MATH_DEFINES)
-target_link_libraries(gufo_posix_compat PUBLIC ws2_32 psapi)
+target_link_libraries(gufo_posix_compat PUBLIC ws2_32 psapi advapi32)
 file(GENERATE OUTPUT ${CMAKE_BINARY_DIR}/win32-compat-links-$<CONFIG>.txt CONTENT
   "$<TARGET_PROPERTY:gufo_posix_compat,LINK_LIBRARIES>\n$<TARGET_PROPERTY:gufo_posix_compat,INTERFACE_LINK_LIBRARIES>\n")
 
@@ -39,12 +40,20 @@ endfunction()
 cmake_language(DEFER CALL gufo_windows_targets "${PROJECT_SOURCE_DIR}")
 
 if (BUILD_TESTING)
+  target_compile_definitions(gufo_posix_compat PRIVATE GUFO_WIN32_TESTING=1)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_executable(win32_compat_test ${PROJECT_SOURCE_DIR}/tests/platform/win32_compat_test.cpp)
   target_compile_options(win32_compat_test PRIVATE -UNDEBUG)
   target_link_libraries(win32_compat_test PRIVATE gufo_cache)
   add_test(NAME win32_compat_test COMMAND win32_compat_test)
   set_tests_properties(win32_compat_test PROPERTIES LABELS "cpu;windows" TIMEOUT 30)
+  add_executable(win32_filesystem_test ${PROJECT_SOURCE_DIR}/tests/platform/win32_filesystem_test.cpp)
+  target_compile_options(win32_filesystem_test PRIVATE -UNDEBUG)
+  target_compile_definitions(win32_filesystem_test PRIVATE GUFO_WIN32_TESTING=1)
+  target_include_directories(win32_filesystem_test PRIVATE ${PROJECT_SOURCE_DIR})
+  target_link_libraries(win32_filesystem_test PRIVATE gufo_posix_compat)
+  add_test(NAME win32_filesystem_test COMMAND win32_filesystem_test)
+  set_tests_properties(win32_filesystem_test PROPERTIES LABELS "cpu;windows;filesystem" TIMEOUT 30)
   add_executable(win32_host_test
     ${PROJECT_SOURCE_DIR}/tests/platform/win32_host_test.cpp
     ${PROJECT_SOURCE_DIR}/src/cli/serve/continuation_cache.cpp

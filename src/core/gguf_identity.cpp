@@ -58,11 +58,6 @@ std::string FileStamp(int fd, std::size_t size) {
 }
 
 int OpenCacheDirectory() {
-#ifdef _WIN32
-  // The inherited POSIX shim does not establish private Windows ACLs yet.
-  // Hash the artifact directly until persistent identity caching is qualified.
-  return -1;
-#endif
   const auto selected = platform::DefaultCacheDirectory();
   if (!selected)
     return -1;

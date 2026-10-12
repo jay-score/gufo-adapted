@@ -78,7 +78,7 @@ def link_violations(metadata: Path, windows_compat: Path | None = None) -> list[
         failures.extend(f"gufo_posix_compat: unapproved dependency {library}"
                         for line in windows_compat.read_text().splitlines()
                         for library in line.split(";")
-                        if library and library not in {"ws2_32", "psapi"})
+                        if library and library not in {"ws2_32", "psapi", "advapi32"})
     failures.extend(f"gufo_cache: unapproved dependency {library}"
             for line in metadata.read_text().splitlines()
             for library in line.split(";") if library and library not in allowed
@@ -155,7 +155,7 @@ class BoundaryTests(unittest.TestCase):
             metadata.write_text("Threads::Threads;::@(000012AB);gufo_posix_compat;::@\n")
             self.assertTrue(link_violations(metadata))
             self.assertTrue(link_violations(metadata, compat))
-            compat.write_text("ws2_32;psapi\nws2_32;psapi\n")
+            compat.write_text("ws2_32;psapi;advapi32\nws2_32;psapi;advapi32\n")
             self.assertEqual(link_violations(metadata, compat), [])
             for dependency in ("hip::host", "dxgi", "gufo_core", "gufo_model_relay"):
                 compat.write_text("ws2_32;psapi;" + dependency + "\n")

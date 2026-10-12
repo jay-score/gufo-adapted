@@ -4,14 +4,17 @@
 
 #include <cerrno>
 #include <memory>
-#include <string>
+#include <vector>
 
 struct gufo_directory {
   int fd{-1};
-  HANDLE search{INVALID_HANDLE_VALUE};
-  WIN32_FIND_DATAW data{};
+  HANDLE handle{INVALID_HANDLE_VALUE};
+  std::vector<unsigned long long> buffer =
+      std::vector<unsigned long long>(8192);
+  DWORD offset{};
   bool first{true};
-  bool empty{false};
+  bool refill{true};
+  bool finished{};
   dirent entry{};
 };
 
@@ -26,50 +29,50 @@ extern "C" DIR* fdopendir(int fd) {
     errno = ENOTDIR;
     return nullptr;
   }
-  wchar_t path[32768];
-  const DWORD count =
-      GetFinalPathNameByHandleW(handle, path, 32768, FILE_NAME_NORMALIZED);
-  if (!count || count >= 32768) {
-    errno = EIO;
-    return nullptr;
-  }
   auto directory = std::make_unique<gufo_directory>();
-  const auto pattern = std::wstring(path, count) + L"\\*";
-  directory->search = FindFirstFileW(pattern.c_str(), &directory->data);
-  if (directory->search == INVALID_HANDLE_VALUE) {
-    if (GetLastError() != ERROR_FILE_NOT_FOUND) {
-      errno = EIO;
-      return nullptr;
-    }
-    directory->empty = true;
-  }
   directory->fd = fd;
+  directory->handle = handle;
   return directory.release();
 }
 
 extern "C" dirent* readdir(DIR* directory) {
-  if (directory->empty)
+  if (directory->finished)
     return nullptr;
-  if (!directory->first &&
-      !FindNextFileW(directory->search, &directory->data)) {
-    if (GetLastError() != ERROR_NO_MORE_FILES)
-      errno = EIO;
-    return nullptr;
+  if (directory->refill) {
+    if (!GetFileInformationByHandleEx(
+            directory->handle,
+            directory->first ? FileIdBothDirectoryRestartInfo
+                             : FileIdBothDirectoryInfo,
+            directory->buffer.data(),
+            static_cast<DWORD>(directory->buffer.size() *
+                               sizeof(unsigned long long)))) {
+      if (GetLastError() != ERROR_NO_MORE_FILES)
+        errno = EIO;
+      directory->finished = true;
+      return nullptr;
+    }
+    directory->first = false;
+    directory->offset = 0;
   }
-  directory->first = false;
-  if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
-                           directory->data.cFileName, -1,
-                           directory->entry.d_name,
-                           sizeof(directory->entry.d_name), nullptr, nullptr)) {
+  const auto* item = reinterpret_cast<const FILE_ID_BOTH_DIR_INFO*>(
+      reinterpret_cast<const unsigned char*>(directory->buffer.data()) +
+      directory->offset);
+  const auto count = WideCharToMultiByte(
+      CP_UTF8, WC_ERR_INVALID_CHARS, item->FileName,
+      static_cast<int>(item->FileNameLength / sizeof(wchar_t)),
+      directory->entry.d_name, sizeof(directory->entry.d_name) - 1, nullptr,
+      nullptr);
+  if (!count) {
     errno = EILSEQ;
     return nullptr;
   }
+  directory->entry.d_name[count] = '\0';
+  directory->refill = item->NextEntryOffset == 0;
+  directory->offset += item->NextEntryOffset;
   return &directory->entry;
 }
 
 extern "C" int closedir(DIR* directory) {
-  if (directory->search != INVALID_HANDLE_VALUE)
-    FindClose(directory->search);
   const int result = close(directory->fd);
   delete directory;
   return result;

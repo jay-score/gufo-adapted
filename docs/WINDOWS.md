@@ -1,15 +1,15 @@
 # Windows integration status
 
-Stage one and the transport/host increments of stage two in the
+Stage one, the transport/host increments, and persistence foundations in the
 [integration plan](plans/windows-compatibility.md) build the current official
 engine's **CPU CLI and selected host/server checks** natively on Windows x64.
 This is an integration milestone, not a supported Windows inference release.
-Native HIP inference, persistent cache guarantees, Windows
-CPU CI, and the GUI remain pending.
+Native HIP inference, checkpoint-cache guarantees, Windows CPU CI, and the GUI
+remain pending. GGUF digest caching and private content tracing are enabled.
 
 ## Prerequisites and build
 
-Use Windows x64, Visual Studio C++ Build Tools with the Windows SDK, CMake 3.21
+Use Windows 11 x64, Visual Studio C++ Build Tools with the Windows SDK, CMake 3.21
 or newer, Ninja, Python, Git, and a bootstrapped vcpkg checkout. The initial
 compiler is the clang distributed with TheRock 10.0.0, extracted under
 `C:\TheRock\build`. Stage one uses that compiler without enabling HIP or needing
@@ -46,7 +46,8 @@ and is for developer use only, not public binary redistribution.
 
 Windows build wiring is in `cmake/Windows.cmake`. The CPU-only
 `gufo_posix_compat` target supplies the shadow headers and Win32 implementations
-to Gufo-owned targets; it links only Winsock and PSAPI, with no HIP or DXGI
+to Gufo-owned targets; it links only Winsock, PSAPI, and Advapi32 security APIs,
+with no HIP or DXGI
 dependency. Linux does not include the module. Linux WebP discovery, Nix,
 compiler flags, model framing, algorithms, and the disk format are retained.
 
@@ -57,17 +58,13 @@ of `std::aligned_alloc`, which is absent from the Windows CRT. Small socket
 option, descriptor-type, and fatal-signal adaptations initially made the CPU
 CLI link; server transport validation is recorded below.
 
-Both disk-store implementations reject Windows initialization before touching
-their cache directories. Persistent GGUF digest caching is also disabled on
-Windows; full hashing remains available and is tested. The imported shim's
-POSIX ownership/mode fields are synthetic, and `chmod` does not establish a
-private ACL. A failed file/directory flush is reported as a failure rather than
-silently treated as durable. Stage two must establish Windows access control,
-directory identity, publication/recovery, and fault coverage before enabling
-persistence. Content tracing (`--trace`) also rejects Windows initialization
-before creating a file: it contains prompts/replies and needs a private ACL.
-The new ordinary directory enumeration and no-replace rename
-operations are tested in isolation, not qualified as a crash-safe cache.
+Both checkpoint-store implementations reject Windows initialization before
+touching their cache directories. Private GGUF digest caching and content
+tracing are now qualified by the focused CPU checks below. The filesystem shim
+creates protected ACLs, verifies ownership/privacy, and uses native handles for
+child-file operations. Unsupported flushes fail explicitly. Checkpoint layout
+durability, store-level recovery, and their native fault harnesses remain
+pending; the isolated filesystem checks do not establish those guarantees.
 
 HIP configuration on Windows currently stops with an explicit stage-three
 message. Keep using the existing `windows-port` checkout for its qualified
@@ -189,8 +186,69 @@ GCC, or ROCm values. Memory hardware type/unified classification is unavailable;
 The shared default-cache selector uses `XDG_CACHE_HOME/gufo`, then on Windows
 `LOCALAPPDATA/gufo`, then `HOME/.cache/gufo`. With no usable root it returns no
 path. Windows reads the native wide environment, preserving Unicode profile
-paths. This only selects a location: both stores and persistent GGUF identity
-caching remain disabled before any directory creation. Opt-in continuation
-cache directories remain caller-selected. ACLs and publication/recovery are the
-next increment; Linux build verification, Windows CI, HIP, and the GUI remain
-pending.
+paths. At that increment both stores and persistent GGUF identity caching
+remained disabled before any directory creation. Opt-in continuation cache
+directories remain caller-selected. The persistence-foundation increment below
+qualifies the independent identity cache and tracing. Linux build verification,
+Windows CI, HIP, and the GUI remain pending.
+
+## Persistence foundations and unresolved cache contract
+
+Validated on 2026-10-12 on local NTFS with the same native toolchain, building on
+host-integration commit `e20cc86a`. The bounded preset now contains **14 checks**,
+including `win32_filesystem_test`. All pass. This increment qualifies private
+file operations, tracing, and identity caching; it does **not** complete the
+checkpoint-persistence increment.
+
+`compat/win32/filesystem.cpp` isolates native handle-relative operations. It
+uses
+[NtCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile)
+with the parent directory handle for `openat`/`mkdirat`; directory enumeration
+also uses the handle. Rename, no-replace publication, unlink, and `fstatat` keep
+that identity after the directory is renamed and its old path is replaced.
+Replacement permits existing readers to finish with the old file. No-follow
+opens reject intermediate and final reparse points. Native junction tests do
+not require symbolic-link privileges, which are unavailable on this host.
+
+New `0600`/`0700` objects receive a protected DACL granting access only to the
+process's token user SID. Existing ownership and ACLs are inspected; synthetic
+uid zero means that SID, while foreign/unknown ownership fails cache checks.
+Mode bits are conservative privacy indicators, not complete Unix permission
+emulation. `chmod`/`fchmod` implement private `0600`/`0700` ACLs and reject other
+modes; they are no longer no-ops. Unknown or broader ACL shapes fail privacy
+checks. Tests inspect the actual ACL and demonstrate access denial with a
+restricted token. NTFS ChangeTime is required rather than falling back to
+mtime, so restoring mtime cannot conceal edits from cached GGUF identities.
+
+GGUF digest caching uses the unchanged upstream format, full-hash invalidation,
+and malformed-digest fallback. Native cache files and directories are private.
+`--trace` creates private files and rejects unprotected existing files, reparse
+points, directories, and files with multiple hard links before recording data.
+The HTTP trace content/authorization/streaming tests now run on Windows too.
+These facilities are separate from both disabled checkpoint stores.
+
+Filesystem tests force process death after payload write, file flush, rename,
+and directory flush, then reopen and verify the namespace and complete payload.
+Failure injection covers write/flush failure and errors before or after rename
+and unlink take effect. Fault controls exist only in `BUILD_TESTING` builds;
+production compilation of the filesystem/shim was also checked with those
+controls absent. Process termination does not model power loss, and these are
+operation tests, not checkpoint-store recovery tests. Linux's ELF-wrap/fork
+harnesses remain unchanged.
+
+Native experiments show
+[FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers)
+succeeds on writable directory handles here and rejects a read-only handle.
+The shim requests directory write access rather than ignoring a failed flush.
+However, the new common store syncs every ancestor up to the filesystem root
+when creating its layout. This unprivileged process cannot obtain that access
+to `C:\Users` or `C:\`, although it can flush its own directories. A successful
+rename or a process-crash test cannot establish the missing ancestor durability.
+
+The selected contract preserves upstream guarantees: both checkpoint
+guards stay intact. Finishing their port requires resolving the Windows
+durability contract, qualifying the store algorithms and privacy checks, and
+adding native restart/reclamation/corruption/failure tests. A weaker Windows
+power-loss contract has not been selected or implemented. No Linux build,
+live GPU/model cache behavior, numerical quality, or speed qualification is
+claimed by these CPU checks.

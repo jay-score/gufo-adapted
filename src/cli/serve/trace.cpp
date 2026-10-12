@@ -1,6 +1,9 @@
 #include "src/cli/serve/trace.hpp"
 
 #include <fcntl.h>
+#ifdef _WIN32
+#include <sys/stat.h>
+#endif
 #include <unistd.h>
 
 #include <array>
@@ -72,18 +75,23 @@ std::string CurrentTimestamp() {
 }  // namespace
 
 std::optional<std::string> Trace::Open(const std::string& path) {
+  int flags = O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC;
 #ifdef _WIN32
-  // Traces contain prompts and replies. The POSIX shim's mode bits do not
-  // create a private Windows ACL; reject before opening or creating a file.
-  (void)path;
-  return "Windows content tracing is unavailable pending access-control "
-         "qualification";
-#else
-  const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
-                        S_IRUSR | S_IWUSR);
+  flags |= O_NOFOLLOW;
+#endif
+  const int fd = ::open(path.c_str(), flags, S_IRUSR | S_IWUSR);
   if (fd < 0) {
     return std::string(std::strerror(errno));
   }
+#ifdef _WIN32
+  struct stat status{};
+  if (fstat(fd, &status) != 0 || !S_ISREG(status.st_mode) ||
+      status.st_uid != geteuid() || (status.st_mode & 0077) != 0 ||
+      status.st_nlink != 1) {
+    ::close(fd);
+    return "Windows content trace requires a private owned regular file";
+  }
+#endif
   const std::lock_guard lock(TraceMutex());
   if (TraceFd() >= 0) {
     ::close(TraceFd());
@@ -91,7 +99,6 @@ std::optional<std::string> Trace::Open(const std::string& path) {
   TraceFd() = fd;
   TraceEnabled().store(true, std::memory_order_release);
   return std::nullopt;
-#endif
 }
 
 void Trace::Close() {

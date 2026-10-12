@@ -168,14 +168,9 @@ void TestFileDigestCache() {
   Expect(first == Identity(bytes), "file and memory full digests agree");
   Expect(read() == first, "cached digest agrees with initial scan");
   const auto cache = root / "gufo" / "gguf-sha256-v1";
-#ifdef _WIN32
-  Expect(!std::filesystem::exists(cache),
-         "Windows identity cache remains disabled pending ACL qualification");
-#else
   Expect(std::distance(std::filesystem::directory_iterator(cache),
                        std::filesystem::directory_iterator{}) == 1,
          "one cached full digest exists");
-#endif
   struct stat before{};
   Expect(stat(path.c_str(), &before) == 0, "stat original file");
   bytes[PayloadBase(bytes) + kWindow + 100] ^= 0xff;
@@ -187,12 +182,10 @@ void TestFileDigestCache() {
          "same-size edit with restored mtime invalidates cache");
   Expect(read() == Identity(bytes),
          "edited file still matches full memory digest");
-#ifndef _WIN32
   for (const auto& entry : std::filesystem::directory_iterator(cache)) {
     std::ofstream(entry.path()) << "broken";
   }
   Expect(read() == Identity(bytes), "malformed cached digest is recomputed");
-#endif
   if (had_cache)
     setenv("XDG_CACHE_HOME", saved_cache.c_str(), 1);
   else

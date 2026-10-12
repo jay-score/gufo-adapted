@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
   }
   assert(errno == 0 && found && found_unicode);
   assert(closedir(directory) == 0);
-  assert(fsync(root) < 0);  // Unsupported directory durability is explicit.
+  assert(fsync(root) == 0);  // Native writable directory handle flush.
   assert(close(replacement) == 0);
   assert(close(file) == 0);
   assert(close(root) == 0);

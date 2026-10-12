@@ -61,6 +61,7 @@
 #include <unordered_map>
 
 #include "gufo_socket.h"
+#include "filesystem.hpp"
 
 namespace {
 
@@ -237,6 +238,7 @@ int ErrnoFromWin32(DWORD error) {
     case ERROR_OPERATION_ABORTED:
       return EINTR;
     case ERROR_CANT_RESOLVE_FILENAME:
+    case ERROR_REPARSE_POINT_ENCOUNTERED:
       return ELOOP;
     case ERROR_FILENAME_EXCED_RANGE:
       return ENAMETOOLONG;
@@ -355,7 +357,10 @@ DWORD AccessFor(int flags) {
     access &= ~static_cast<DWORD>(GENERIC_WRITE);
     access |= FILE_APPEND_DATA | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE;
   }
-  return access | FILE_READ_ATTRIBUTES;
+  // Windows requires write access for a real directory flush.
+  if (flags & O_DIRECTORY)
+    access |= GENERIC_WRITE;
+  return access | FILE_READ_ATTRIBUTES | READ_CONTROL;
 }
 
 DWORD AttributesFor(int flags) {
@@ -400,29 +405,33 @@ bool IsDirectoryHandle(HANDLE handle) {
          (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
-int OpenPath(const std::wstring& path, int flags, mode_t mode) {
-  DWORD disposition = OPEN_EXISTING;
+int OpenPath(const std::wstring& path, int flags, mode_t mode,
+             HANDLE parent = nullptr) {
+  DWORD disposition = 1;  // FILE_OPEN
   if (flags & O_CREAT) {
     if (flags & O_EXCL) {
-      disposition = CREATE_NEW;
+      disposition = 2;  // FILE_CREATE
     } else if (flags & O_TRUNC) {
-      disposition = CREATE_ALWAYS;
+      disposition = 5;  // FILE_OVERWRITE_IF
     } else {
-      disposition = OPEN_ALWAYS;
+      disposition = 3;  // FILE_OPEN_IF
     }
   } else if (flags & O_TRUNC) {
-    disposition = TRUNCATE_EXISTING;
+    disposition = 4;  // FILE_OVERWRITE
   }
-  DWORD attributes = AttributesFor(flags);
-  if ((flags & O_CREAT) && (mode & S_IWUSR) == 0 && mode != 0) {
-    attributes |= FILE_ATTRIBUTE_READONLY;
-  }
-  SECURITY_ATTRIBUTES security{sizeof(security), nullptr,
-                               (flags & O_CLOEXEC) == 0 ? FALSE : FALSE};
-  const HANDLE handle = CreateFileW(
-      path.c_str(), AccessFor(flags),
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &security,
-      disposition, attributes, nullptr);
+  DWORD options = flags & (O_DIRECT | O_CONCURRENT_RANDOM) ? 0 : 0x20;
+  if (flags & O_DIRECTORY)
+    options |= 1;
+  if (flags & O_NOFOLLOW)
+    options |= 0x200000;
+  if (flags & O_DIRECT)
+    options |= 8;  // FILE_NO_INTERMEDIATE_BUFFERING
+  if (flags & O_CONCURRENT_RANDOM)
+    options |= 0x800;  // FILE_RANDOM_ACCESS
+  if (flags & O_SYNC)
+    options |= 2;  // FILE_WRITE_THROUGH
+  const HANDLE handle = gufo::win32::OpenAt(parent, path, AccessFor(flags),
+      disposition, options, mode, (flags & O_NOFOLLOW) != 0);
   if (handle == INVALID_HANDLE_VALUE) {
     DWORD error = GetLastError();
     if (error == ERROR_ACCESS_DENIED && !(flags & O_DIRECTORY)) {
@@ -520,15 +529,13 @@ int StatHandle(HANDLE handle, struct stat* st, bool no_follow) {
     return Fail(GetLastError());
   }
   const bool directory = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
-  bool link = false;
-  if (no_follow && (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
-    FILE_ATTRIBUTE_TAG_INFO tag{};
-    link = GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag,
-                                        sizeof(tag)) &&
-           (tag.ReparseTag == IO_REPARSE_TAG_SYMLINK ||
-            tag.ReparseTag == IO_REPARSE_TAG_MOUNT_POINT);
-  }
-  mode_t permissions = directory ? 0700 : 0600;
+  // Cache no-follow checks must reject every reparse tag, including cloud
+  // placeholders; not just symbolic links and directory junctions.
+  const bool link = no_follow &&
+                    (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT);
+  unsigned owner{};
+  mode_t permissions = gufo::win32::Permissions(handle, directory, &owner);
+  st->st_uid = owner;
   if (info.dwFileAttributes & FILE_ATTRIBUTE_READONLY) {
     permissions &= ~static_cast<mode_t>(0200);
   }
@@ -555,7 +562,8 @@ int StatHandle(HANDLE handle, struct stat* st, bool no_follow) {
     change.dwHighDateTime = static_cast<DWORD>(basic.ChangeTime.QuadPart >> 32);
     st->st_ctim = TimespecFromFiletime(change);
   } else {
-    st->st_ctim = st->st_mtim;
+    // A restored mtime must not hide edits from persistent digest caching.
+    return Fail(GetLastError());
   }
   return 0;
 }
@@ -566,7 +574,7 @@ int StatPath(const std::wstring& path, struct stat* st, bool no_follow) {
     attributes |= FILE_FLAG_OPEN_REPARSE_POINT;
   }
   const HANDLE handle =
-      CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+      CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES | READ_CONTROL,
                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                   nullptr, OPEN_EXISTING, attributes, nullptr);
   if (handle == INVALID_HANDLE_VALUE) {
@@ -676,27 +684,30 @@ void gufo_register_child(pid_t pid, void* process) {
   g_children[pid] = static_cast<HANDLE>(process);
 }
 
-int mkdirat(int dirfd, const char* path, mode_t) {
-  const auto resolved = ResolveAt(dirfd, path);
-  if (resolved.empty()) {
+int mkdirat(int dirfd, const char* path, mode_t mode) {
+  const HANDLE parent = dirfd == AT_FDCWD ? nullptr : HandleOf(dirfd);
+  if (parent == INVALID_HANDLE_VALUE) {
     errno = EBADF;
     return -1;
   }
-  return CreateDirectoryW(resolved.c_str(), nullptr) ? 0 : Fail(GetLastError());
+  const auto directory = gufo::win32::OpenAt(parent, Widen(path),
+      GENERIC_READ | GENERIC_WRITE, 2, 1 | 0x20 | 0x200000, mode, true);
+  if (directory == INVALID_HANDLE_VALUE)
+    return Fail(GetLastError());
+  CloseHandle(directory);
+  return 0;
 }
 
 int gufo_rename_noreplace(int olddirfd, const char* oldpath, int newdirfd,
                           const char* newpath) {
-  const auto from = ResolveAt(olddirfd, oldpath);
-  const auto to = ResolveAt(newdirfd, newpath);
-  if (from.empty() || to.empty()) {
-    errno = EBADF;
+  if (gufo::win32::Fault("rename"))
     return -1;
-  }
-  // No REPLACE_EXISTING or COPY_ALLOWED: fail rather than overwrite or copy.
-  return MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_WRITE_THROUGH)
-             ? 0
-             : Fail(GetLastError());
+  const auto result = gufo::win32::RenameAt(
+      olddirfd == AT_FDCWD ? nullptr : HandleOf(olddirfd), Widen(oldpath),
+      newdirfd == AT_FDCWD ? nullptr : HandleOf(newdirfd), Widen(newpath), false);
+  if (result < 0)
+    return Fail(GetLastError());
+  return gufo::win32::Fault("rename", true) ? -1 : 0;
 }
 
 int open(const char* path, int flags, ...) {
@@ -726,12 +737,12 @@ int openat(int dirfd, const char* path, int flags, ...) {
     mode = va_arg(args, int);
     va_end(args);
   }
-  const std::wstring resolved = ResolveAt(dirfd, path);
-  if (resolved.empty()) {
+  const HANDLE parent = dirfd == AT_FDCWD ? nullptr : HandleOf(dirfd);
+  if (parent == INVALID_HANDLE_VALUE) {
     errno = EBADF;
     return -1;
   }
-  return OpenPath(resolved, flags, mode);
+  return OpenPath(Widen(path), flags, mode, parent);
 }
 
 int close(int fd) {
@@ -755,6 +766,8 @@ ssize_t read(int fd, void* buf, size_t count) {
 }
 
 ssize_t write(int fd, const void* buf, size_t count) {
+  if (gufo::win32::Fault("write"))
+    return -1;
   return Stream(fd, const_cast<void*>(buf), count, true);
 }
 
@@ -781,6 +794,8 @@ off_t lseek(int fd, off_t offset, int whence) {
 }
 
 int fsync(int fd) {
+  if (gufo::win32::Fault("sync"))
+    return -1;
   if (!FlushFileBuffers(HandleOf(fd))) {
     const DWORD error = GetLastError();
     // Do not claim durability when Windows cannot flush this handle.
@@ -899,10 +914,14 @@ int unlink(const char* path) {
 }
 
 int unlinkat(int dirfd, const char* path, int flags) {
-  const std::wstring resolved = ResolveAt(dirfd, path);
-  const std::string narrow = Narrow(resolved.c_str());
-  return (flags & 0x200 /* AT_REMOVEDIR */) ? rmdir(narrow.c_str())
-                                            : unlink(narrow.c_str());
+  if (gufo::win32::Fault("unlink"))
+    return -1;
+  const auto result = gufo::win32::UnlinkAt(
+      dirfd == AT_FDCWD ? nullptr : HandleOf(dirfd), Widen(path),
+      (flags & 0x200) != 0);
+  if (result < 0)
+    return Fail(GetLastError());
+  return gufo::win32::Fault("unlink", true) ? -1 : 0;
 }
 
 int rmdir(const char* path) {
@@ -912,12 +931,7 @@ int rmdir(const char* path) {
   return 0;
 }
 
-int mkdir(const char* path, mode_t) {
-  if (!CreateDirectoryW(Widen(path).c_str(), nullptr)) {
-    return Fail(GetLastError());
-  }
-  return 0;
-}
+int mkdir(const char* path, mode_t mode) { return mkdirat(AT_FDCWD, path, mode); }
 
 int access(const char* path, int mode) {
   const DWORD attributes = GetFileAttributesW(Widen(path).c_str());
@@ -992,12 +1006,37 @@ int lstat(const char* path, struct stat* st) {
 }
 
 int fstatat(int dirfd, const char* path, struct stat* st, int flags) {
-  const std::wstring resolved = ResolveAt(dirfd, path);
-  return StatPath(resolved, st, (flags & 0x100 /* AT_SYMLINK_NOFOLLOW */) != 0);
+  const auto file = gufo::win32::OpenAt(
+      dirfd == AT_FDCWD ? nullptr : HandleOf(dirfd), Widen(path),
+      FILE_READ_ATTRIBUTES | READ_CONTROL, 1,
+      0x20 | ((flags & 0x100) ? 0x200000 : 0), 0, false);
+  if (file == INVALID_HANDLE_VALUE)
+    return Fail(GetLastError());
+  const auto result = StatHandle(file, st, (flags & 0x100) != 0);
+  CloseHandle(file);
+  return result;
 }
 
-int fchmod(int, mode_t) { return 0; }
-int chmod(const char*, mode_t) { return 0; }
+int fchmod(int fd, mode_t mode) {
+  const auto file = gufo::win32::OpenAt(HandleOf(fd), L".",
+      READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+      1, 0x20, 0, true);
+  if (file == INVALID_HANDLE_VALUE)
+    return Fail(GetLastError());
+  const auto result = gufo::win32::Chmod(file, mode);
+  CloseHandle(file);
+  return result;
+}
+int chmod(const char* path, mode_t mode) {
+  const auto file = gufo::win32::OpenAt(nullptr, Widen(path),
+      READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+      1, 0x20 | 0x200000, 0, true);
+  if (file == INVALID_HANDLE_VALUE)
+    return Fail(GetLastError());
+  const auto result = gufo::win32::Chmod(file, mode);
+  CloseHandle(file);
+  return result;
+}
 
 void* mmap(void* addr, size_t length, int prot, int flags, int fd,
            off_t offset) {
@@ -1423,43 +1462,14 @@ unsigned long long gufo_total_physical_bytes(void) {
 
 int renameat(int olddirfd, const char* oldpath, int newdirfd,
              const char* newpath) {
-  const std::wstring from = ResolveAt(olddirfd, oldpath);
-  const std::wstring to = ResolveAt(newdirfd, newpath);
-  if (from.empty() || to.empty()) {
-    errno = EBADF;
+  if (gufo::win32::Fault("rename"))
     return -1;
-  }
-  // POSIX-semantics rename replaces the target even while another handle
-  // has it open, like rename(2). Fall back to MoveFileEx on older systems.
-  const HANDLE source =
-      CreateFileW(from.c_str(), 0x00010000L /* DELETE */ | SYNCHRONIZE,
-                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                  nullptr, OPEN_EXISTING,
-                  FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-                  nullptr);
-  if (source == INVALID_HANDLE_VALUE) {
+  const auto result = gufo::win32::RenameAt(
+      olddirfd == AT_FDCWD ? nullptr : HandleOf(olddirfd), Widen(oldpath),
+      newdirfd == AT_FDCWD ? nullptr : HandleOf(newdirfd), Widen(newpath), true);
+  if (result < 0)
     return Fail(GetLastError());
-  }
-  const size_t bytes = sizeof(FILE_RENAME_INFO) + to.size() * sizeof(wchar_t);
-  std::string storage(bytes, '\0');
-  auto* info = reinterpret_cast<FILE_RENAME_INFO*>(storage.data());
-  info->Flags = 0x1 /* FILE_RENAME_FLAG_REPLACE_IF_EXISTS */ |
-                0x2 /* FILE_RENAME_FLAG_POSIX_SEMANTICS */;
-  info->RootDirectory = nullptr;
-  info->FileNameLength = static_cast<DWORD>(to.size() * sizeof(wchar_t));
-  memcpy(info->FileName, to.c_str(), to.size() * sizeof(wchar_t));
-  const BOOL renamed = SetFileInformationByHandle(
-      source, static_cast<FILE_INFO_BY_HANDLE_CLASS>(22 /* FileRenameInfoEx */),
-      info, static_cast<DWORD>(bytes));
-  CloseHandle(source);
-  if (renamed) {
-    return 0;
-  }
-  if (!MoveFileExW(from.c_str(), to.c_str(),
-                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-    return Fail(GetLastError());
-  }
-  return 0;
+  return gufo::win32::Fault("rename", true) ? -1 : 0;
 }
 
 static FILETIME FiletimeFromTimespec(const struct timespec& ts) {
@@ -1761,7 +1771,7 @@ int rmdir(const wchar_t* path) { return rmdir(Narrow(path).c_str()); }
 
 int unlink(const wchar_t* path) { return unlink(Narrow(path).c_str()); }
 
-int chmod(const wchar_t*, mode_t) { return 0; }
+int chmod(const wchar_t* path, mode_t mode) { return chmod(Narrow(path).c_str(), mode); }
 
 int utimensat(int dirfd, const wchar_t* path, const struct timespec times[2],
               int flags) {
