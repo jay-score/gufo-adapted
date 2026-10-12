@@ -138,10 +138,11 @@ Turning disk caching off does not remove this build dependency.
 ### New GPU/cache paths
 
 [`executor.cpp`](../../src/models/qwen38_flash_next/kernels/rocm/executor.cpp)
-now checks `hipMemGetInfo` when admitting snapshot backing. This call site was
-not covered by the old port's device-memory replacements. Audit every current
-memory-admission call and apply the Windows budget helper where needed; retain
-the Linux pass-through.
+checks device headroom when admitting snapshot backing. This call site was not
+covered by the old port's device-memory replacements. The GPU-budget increment
+routes all six current production admission sites through `DeviceMemoryInfo`,
+retaining Linux's direct HIP pass-through. Audit new `hipMemGetInfo` sites when
+merging future upstream updates. The loader's informational query stays raw HIP.
 
 Validate the current
 [`committed_backing.cpp`](../../src/core/hip/committed_backing.cpp),
@@ -238,10 +239,15 @@ keep the existing `windows-port` branch available throughout qualification.
 
    The native HIP build and initial Flash-Next AR/MTP smoke check are implemented.
    Buffered/streamed generation, one RAM continuation restore in each mode, actual
-   MTP drafts, and one AR image request pass on the local 8060S. WDDM admission,
-   pinned-memory qualification, long-context/cancellation, other model paths,
-   numerical checks, and matched speed measurements remain pending. See
+   MTP drafts, and one AR image request pass on the local 8060S. WDDM admission is
+   implemented with native budget/adapter/fallback checks. Selected Flash-Next
+   AR/MTP cancellation and RAM replay checks match the earlier binary; timing
+   qualification remains inconclusive. Pinned-memory
+   qualification, long-context and wider cancellation coverage, other model
+   paths, numerical checks, and speed qualification remain pending. See
    [the validation record](../WINDOWS.md#initial-native-hip-live-inference).
+   The [GPU-budget record](../WINDOWS.md#windows-gpu-budget-admission) details
+   the adapter selection, scope, native checks, and retained timing controls.
 
 4. **Qualification and maintenance handoff.** Run the official Linux hosted
    checks and formatting checks, Windows CPU checks, affected numerical-quality

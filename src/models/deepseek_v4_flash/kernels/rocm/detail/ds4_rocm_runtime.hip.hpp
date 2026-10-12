@@ -1,3 +1,5 @@
+#include "src/core/platform/device_memory.hpp"
+
 static const void *g_model_host_base;
 static uint64_t g_model_registered_size;
 /* Placement for this model load, decided once from the registered weight size
@@ -396,7 +398,7 @@ static int hip_q8_f16_cache_has_budget(uint64_t request_bytes, const char *label
 
     size_t free_b = 0;
     size_t total_b = 0;
-    hipError_t err = hipMemGetInfo(&free_b, &total_b);
+    hipError_t err = gufo::platform::DeviceMemoryInfo(&free_b, &total_b);
     if (err != hipSuccess) {
         gufo::server::Logger::LogFormatted(
                 gufo::server::LogLevel::kWarn, "ds4",
@@ -896,7 +898,7 @@ extern "C" int ds4_gpu_should_use_managed_kv_cache(uint64_t kv_cache_bytes, uint
 
     size_t free_b = 0;
     size_t total_b = 0;
-    hipError_t err = hipMemGetInfo(&free_b, &total_b);
+    hipError_t err = gufo::platform::DeviceMemoryInfo(&free_b, &total_b);
     if (err != hipSuccess) {
         (void)hipGetLastError();
         return 0;

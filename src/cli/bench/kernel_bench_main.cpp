@@ -4,8 +4,12 @@
 // Profiler markers are no-ops where rocprofiler-sdk is unavailable (Windows).
 inline void roctxProfilerResume(int) {}
 inline void roctxProfilerPause(int) {}
-inline int roctxRangePushA(const char*) { return 0; }
-inline int roctxRangePop() { return 0; }
+inline int roctxRangePushA(const char*) {
+  return 0;
+}
+inline int roctxRangePop() {
+  return 0;
+}
 #else
 #include <rocprofiler-sdk-roctx/roctx.h>
 #endif

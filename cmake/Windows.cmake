@@ -50,6 +50,29 @@ function(gufo_windows_targets directory)
 endfunction()
 cmake_language(DEFER CALL gufo_windows_targets "${PROJECT_SOURCE_DIR}")
 
+# Resolve after the root file has enabled HIP and created gufo_core. Keep
+# DXGI/HIP out of the CPU shim and the common cache's dependency graph.
+function(gufo_windows_device_memory)
+  if (ENGINE_ENABLE_HIP)
+    add_library(gufo_device_memory STATIC
+      ${PROJECT_SOURCE_DIR}/src/core/platform/device_memory.cpp)
+    target_include_directories(gufo_device_memory PUBLIC ${PROJECT_SOURCE_DIR})
+    target_link_libraries(gufo_device_memory PUBLIC hip::host PRIVATE dxgi)
+    target_compile_definitions(gufo_device_memory PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_link_libraries(gufo_core PRIVATE gufo_device_memory)
+    if (BUILD_TESTING)
+      add_executable(win32_device_memory_test
+        ${PROJECT_SOURCE_DIR}/tests/platform/win32_device_memory_test.cpp)
+      target_compile_options(win32_device_memory_test PRIVATE -UNDEBUG)
+      target_compile_definitions(win32_device_memory_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+      target_link_libraries(win32_device_memory_test PRIVATE gufo_device_memory dxgi)
+      add_test(NAME win32_device_memory_test COMMAND win32_device_memory_test)
+      set_tests_properties(win32_device_memory_test PROPERTIES LABELS "gpu;windows" TIMEOUT 30)
+    endif()
+  endif()
+endfunction()
+cmake_language(DEFER CALL gufo_windows_device_memory)
+
 if (BUILD_TESTING)
   target_compile_definitions(gufo_posix_compat PRIVATE GUFO_WIN32_TESTING=1)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)

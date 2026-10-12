@@ -22,6 +22,7 @@
 #include "qfn_mmq.h"
 #include "src/core/hip/managed_alloc.hpp"
 #include "src/core/hip/snapshot_transfer.hpp"
+#include "src/core/platform/device_memory.hpp"
 #include "src/models/qwen38_flash_next/draft_vocab.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
 
@@ -257,7 +258,7 @@ public:
   [[nodiscard]] bool Fits(std::uint64_t bytes) const {
     std::size_t free = 0;
     std::size_t total = 0;
-    if (hipMemGetInfo(&free, &total) != hipSuccess)
+    if (platform::DeviceMemoryInfo(&free, &total) != hipSuccess)
       return false;
     return free >= bytes && free - bytes >= reserve_;
   }

@@ -4,8 +4,8 @@ Stage one, the transport/host increments, and persistence foundations in the
 [integration plan](plans/windows-compatibility.md) build the current official
 engine's **CPU CLI and selected host/server checks** natively on Windows x64.
 This is an integration milestone, not a supported Windows inference release.
-Native HIP builds and an initial Flash-Next live smoke check now pass; WDDM
-memory admission and wider runtime qualification remain pending, as does the GUI.
+Native HIP builds, Windows GPU-budget admission, and initial Flash-Next live
+checks now pass; wider runtime qualification and the GUI remain pending.
 Windows CPU CI is implemented,
 with its first hosted run pending. Disk checkpoint persistence is deferred from
 the initial port. GGUF digest caching and private content tracing are enabled.
@@ -351,6 +351,75 @@ retained locally under `build/windows-gpu/live-flash-20261012-184954`. The test
 servers were stopped after use. These short checks establish live execution,
 streaming, a RAM restore, and one vision example; they do not establish numerical
 quality, a speed comparison, long-context/cancellation behavior, allocation
-pressure, or support for other models. WDDM admission, pinned-memory contracts,
-broader model-owned checks, and the final Linux/Windows qualification remain
-required. Disk checkpoint persistence remains excluded from the initial port.
+pressure, or support for other models. The GPU-budget increment below addresses
+WDDM admission. Pinned-memory contracts, broader model-owned checks, and the final
+Linux/Windows qualification remain required. Disk checkpoint persistence remains
+excluded from the initial port.
+
+## Windows GPU-budget admission
+
+The GPU-only [platform helper](../src/core/platform/device_memory.hpp) adapts
+the fork's budget query against the current official source. On an integrated
+Windows GPU it matches the calling thread's current HIP device to DXGI by LUID,
+then queries the process's local and non-local segment budgets through
+[QueryVideoMemoryInfo](https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_4/nf-dxgi1_4-idxgiadapter3-queryvideomemoryinfo).
+Available bytes are the sum of each segment's nonnegative `Budget - CurrentUsage`.
+Total bytes are the summed OS budgets, not physical installed memory. These are
+admission limits; allocation can still fail as budgets and usage change.
+
+Adapter discovery is shared under a mutex, with an independent COM reference
+for each query. Switching the current device cannot leave a caller using the
+previous device's adapter. Budget values are refreshed on every query. TheRock
+10.0.0 supplies a valid LUID but a zero node mask on this `gfx1151` APU; that known
+single-node case uses node zero. Unknown zero/multiple-node masks and discrete
+GPUs retain the HIP fallback. Failed/partial DXGI queries and overflowing sums
+leave the complete HIP result intact. HIP errors return before DXGI is consulted;
+null output pointers retain the runtime's partial-query behavior.
+
+Six production admission sites use the helper: the Qwen, DeepSeek, and
+Flash-Next resource claims; DeepSeek's FP16-cache and managed-KV decisions; and
+Flash-Next's snapshot allocator. The loader's informational `hipMemGetInfo`
+query remains raw HIP for comparison. Linux's helper directly forwards to
+`hipMemGetInfo`. The Windows CMake module links DXGI only into the HIP build;
+the CPU shim and common cache retain their reviewed dependencies.
+
+Validation on 2026-10-12 uses the same TheRock/VS/SDK host as the initial HIP
+record, based on `1e4c4333` plus this increment:
+
+- The native HIP engine rebuild and the new GPU-only
+  `win32_device_memory_test` pass. Its independent DXGI oracle matches the active
+  HIP adapter before/after a 512 MiB allocation, after free, and on another thread.
+  Synthetic checks cover reduced/exhausted budgets, failure of either segment,
+  partial results, and overflow; real null-output calls match HIP. This host has
+  one HIP device, so actual switching between multiple GPUs is not qualified.
+- All 14 Windows CPU checks pass in 17.50 seconds. The cache dependency boundary,
+  shared C++ formatting, and dependency-record checks pass. Two profiler no-op
+  functions from the prior HIP increment were formatted to satisfy the shared
+  check; their behavior is unchanged.
+- Selected live cancellation/replay checks pass in AR and MTP, including repeated
+  fresh-server runs. Both restore 317 cached tokens and prefill only 34 new tokens;
+  the third turn retains the growing prefix. Seeded replay output and cache work
+  match the earlier binary. AR performs zero drafts; interrupted MTP generations
+  actually propose and accept nine tokens over two draft rounds.
+
+Per-request/phase comparisons retain the repository's 5% and 3 ms limits.
+Early comparisons using different executable names flagged a warm MTP replay's
+wall/server duration. A temporary trace found no budget query during that replay;
+the tracing code was removed. Alternating the binaries at the same executable
+path did not reproduce that apparent slowdown: the warm replay's server duration
+was 89.3-91.7 ms for the control and 85.5 ms for both candidate observations.
+This does not establish the cause of the earlier difference. Other timings vary,
+so overall AR/MTP performance evidence remains **inconclusive and unqualified**.
+Earlier flags, repeated observations, and unchanged-binary controls are retained;
+no timing margins were widened and no speed qualification is claimed.
+
+The retained evidence is under `build/windows-gpu/wddm-20261012-190713`, including
+binary identities, build/CTest logs, server commands, model file metadata,
+request/phase timings, and every timing comparison and control. The earlier
+binary's SHA-256 matches the initial smoke record, and its recorded build patch
+matches `1e4c4333`. The selected live check uses `tests/functional/continuation.py`
+with `content-preserve0-sampled0`, one session, context 4096, and a fixed 2 GiB RAM
+cache. All test servers were stopped. Disk restart is excluded. Performance
+qualification and the wider
+Linux/model/pinned-backing checks remain pending; these checks do not establish
+a physical-memory-pressure or allocation-failure contract.
