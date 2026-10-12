@@ -156,9 +156,11 @@ These handoffs occur after the current forward finishes.
 Prompt reuse is enabled by default; how the cache finds, retains and
 evicts that state is described in [the KV cache](KV-CACHE.md).
 `cache_prompt: false` on
-`/v1/chat/completions` bypasses both memory and disk lookup for that request;
-the result can still populate the cache. DeepSeek and Qwen tool requests retain
-a checkpoint before the assistant-generation suffix, including when a client
+`/v1/chat/completions`, `/v1/responses`, `/v1/completions` or `/completion`
+bypasses both memory and disk lookup for that request; the result can still
+populate the cache. Omitted or `null` keeps the default, `true`; other
+non-boolean values return 400. DeepSeek and Qwen tool requests retain a
+checkpoint before the assistant-generation suffix, including when a client
 drops the interrupted assistant and appends `"."` after a tool result. DeepSeek
 also accounts for tokenization changes where adjacent user/tool turns join.
 Qwen requests retain this checkpoint with thinking enabled or disabled.
