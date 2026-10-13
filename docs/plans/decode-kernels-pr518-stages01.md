@@ -130,3 +130,13 @@ On the original baseline, IQ4_XS fails attention relative RMS 0.0093689 against
 0.002; UD-Q4_K_XL passes the complete independent audit. The IQ4 failure also
 occurs before the cached-norm change. Exact baseline regression agreement does
 not resolve that pre-existing model/oracle gap, which remains unqualified.
+
+### Few-row Q8 read-ahead
+
+The narrow one-input path retains the original scalar Q8 arithmetic and requires
+complete twenty-step groups. Fresh production/operator builds and the expanded
+projection test pass, including the MTP 4×10240 geometry, every supported batch
+width, gated outputs and fallback widths. All 696 matched target logit rows and
+perplexities remain exact. Artifacts: `q8-ahead-quality/`,
+`q8-ahead-operators.log`, `q8-ahead-comparison.json` and the preserved
+`baseline-bin/gufo-q8-ahead.exe`.
