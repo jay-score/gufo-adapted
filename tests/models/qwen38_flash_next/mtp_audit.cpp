@@ -1,5 +1,5 @@
 // Independent scalar MTP oracle and model-level cost calibration.
-// Reports aggregate errors only; no generated logit fixtures.
+// Reports scalar errors and complete stage/vocabulary hashes.
 #include <hip/hip_runtime.h>
 
 #include <algorithm>
@@ -10,10 +10,13 @@
 #include <cstdio>
 #include <cstring>
 #include <numeric>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "src/core/crypto/sha256.hpp"
 #include "src/models/qwen/tokenizer.hpp"
 #include "src/models/qwen38_flash_next/cpu_ops.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/executor.hpp"
@@ -85,7 +88,7 @@ void AuditMtpCatchup(q::rocm::Executor& exec,
 void AuditMtp(q::rocm::Executor& exec, const q::rocm::DeviceModel& device,
               const q::ModelWeights& weights, const q::MtpWeights& mtp,
               const gufo::tokenization::QwenTokenizer& tokenizer,
-              const std::filesystem::path& path) {
+              const std::filesystem::path& path, bool hashes_only) {
   const auto& c = exec.config();
   const auto stream = exec.stream();
   std::string error;
@@ -191,19 +194,24 @@ void AuditMtp(q::rocm::Executor& exec, const q::rocm::DeviceModel& device,
                               &error, step == 0 ? input : nullptr),
               error);
       Require(gpu.hidden == replay.hidden, "MTP head evaluation altered carry");
-      Require(references[sequence]->MtpStep(mtp, token, initial, {}, &cpu.spans,
-                                            &rope, &error, &gpu.spans),
-              error);
+      if (!hashes_only) {
+        Require(
+            references[sequence]->MtpStep(mtp, token, initial, {}, &cpu.spans,
+                                          &rope, &error, &gpu.spans),
+            error);
+      }
       initial = gpu.hidden;
       std::printf("MTP oracle sequence=%u step=%u image=%u\n", sequence, step,
                   sequence);
       // Independent scalar execution includes storage rounding. Remaining
       // differences come from reductions and nonlinear approximations.
-      Compare(gpu.norm, cpu.norm, "full-hidden-norm", 2e-6);
-      Compare(gpu.fused, cpu.fused, "split-fusion", 0.002);
-      Compare(gpu.attention, cpu.attention, "attention-state", 0.002);
-      Compare(gpu.hidden, cpu.hidden, "recursive-carry", 0.00005);
-      Compare(gpu.head, cpu.head, "head-mixer", 0.00005);
+      if (!hashes_only) {
+        Compare(gpu.norm, cpu.norm, "full-hidden-norm", 2e-6);
+        Compare(gpu.fused, cpu.fused, "split-fusion", 0.002);
+        Compare(gpu.attention, cpu.attention, "attention-state", 0.002);
+        Compare(gpu.hidden, cpu.hidden, "recursive-carry", 0.00005);
+        Compare(gpu.head, cpu.head, "head-mixer", 0.00005);
+      }
       // Full Q8 vocabulary baseline uses the exact production dot arithmetic;
       // independent host sorting checks candidate selection and vocabulary
       // tail.
@@ -220,6 +228,27 @@ void AuditMtp(q::rocm::Executor& exec, const q::rocm::DeviceModel& device,
                          all_logits.size() * sizeof(float),
                          hipMemcpyDeviceToHost, stream));
       Hip(hipStreamSynchronize(stream));
+      for (const auto& [label, values] :
+           std::array<std::pair<const char*, std::span<const float>>, 8>{{
+               {"norm", gpu.norm},
+               {"fusion", gpu.fused},
+               {"attention", gpu.attention},
+               {"ffn-input", gpu.ffn_input},
+               {"ffn-output", gpu.ffn_output},
+               {"carry", gpu.hidden},
+               {"head", gpu.head},
+               {"logits", all_logits},
+           }}) {
+        Require(std::all_of(values.begin(), values.end(),
+                            [](float v) { return std::isfinite(v); }),
+                "MTP trace contains nonfinite values");
+        const auto hash = gufo::crypto::Sha256Hex(
+            std::span(reinterpret_cast<const std::uint8_t*>(values.data()),
+                      values.size_bytes()));
+        std::printf(
+            "MTP hash sequence=%u step=%u stage=%s floats=%zu sha256=%s\n",
+            sequence, step, label, values.size(), hash.c_str());
+      }
       std::vector<std::uint32_t> ids(c.vocab_size);
       std::iota(ids.begin(), ids.end(), 0);
       std::partial_sort(ids.begin(), ids.begin() + candidates.size, ids.end(),
@@ -317,9 +346,12 @@ void AuditMtp(q::rocm::Executor& exec, const q::rocm::DeviceModel& device,
   }
   std::puts("MTP short catch-up: ragged/full candidates and carry exact");
   AuditMtpCatchup(exec, device, tokenizer);
-  std::puts(
-      "MTP oracle PASS: full-width norm, byte-exact split, attention, "
-      "recursive carry, full-Q8 head, image IDs and independent batches");
+  std::puts(hashes_only
+                ? "MTP hash capture PASS: finite stages, full-Q8 head, "
+                  "image IDs and isolated batch/catch-up comparisons"
+                : "MTP oracle PASS: full-width norm, byte-exact split, "
+                  "attention, recursive carry, full-Q8 head, image IDs and "
+                  "independent batches");
 }
 
 void AuditMtpCatchup(q::rocm::Executor& exec,
