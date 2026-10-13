@@ -119,7 +119,9 @@ The fixture now uses `FSCTL_SET_SPARSE`, retaining the same production
 It also checks zero-filled hole reads and physical allocation of at most 1 MiB.
 Flushed phase markers identify future stalls. No production filesystem behavior
 or CTest timeout changed. Focused repeats pass locally in 0.03–0.07 seconds;
-the full bounded suite passes. The correction awaits hosted verification.
+the full bounded suite passes. The
+[hosted correction run at `2e3f9a91`](https://github.com/thomas9120/gufo-adapted/actions/runs/38329300470)
+passes all 15 checks in 12.95 seconds, including the compatibility fixture.
 Logs are retained under `build/windows-ci/compat-timeout-20261012-204754`, including
 the original hosted artifacts and local build/CTest/format results.
 
@@ -563,3 +565,72 @@ Full model-file hashes were not collected. Windows queue residency, idle power,
 multiple GPU processes, broader model quality and other modalities' inference
 throughput remain unqualified. Linux-hosted checks remain pending. This change
 does not enable disk checkpoint persistence.
+
+## Flash-Next broader runtime checks
+
+The next qualification increment uses the same supplied four-shard Q4_K_XL
+model, shared Q8 MTP sidecar, BF16 projector, TheRock 10.0.0 and production
+executable. No engine, kernel or Linux test-harness change is needed.
+
+All ten model-owned numerical operator checks pass on the 8060S in 95.05
+seconds, with assertions active: MTP primitives, BLASLt, HC mixing, GDN,
+attention, MoE epilogue/IDs, projection, routed WMMA and selection. Their
+existing reference implementations and numerical envelopes are unchanged;
+attention includes positions beyond 128K. These are operator contracts, not
+a full-model F32 reference or quality-benchmark qualification.
+
+The unchanged SDK suites `discovery`, `long-context`, `cache-depth` and
+`stream-start` pass in both AR and MTP at 32,768 configured context tokens,
+two execution slots and an explicit 8 GiB RAM snapshot budget. Each mode
+records 36 HTTP requests, including five discovery probes and three deliberate
+stream disconnects. The long-context history starts at 12,359 prompt tokens;
+the deep histories reach 23,548. Checks cover JSON keyword recall, exact cached
+replay, Chat/Responses switching, thinking limits/cancellation, concurrent
+rewritten branches, side-conversation rotation, resume and exact uncached
+controls. Stream headers arrive before cold prefill completes and at the
+five-second bound while both slots remain occupied. Hidden private consoles
+also verify graceful Ctrl+C shutdown after inference drains.
+
+The 8 GiB budget produces real byte-capacity pressure. Both binaries log
+refused snapshot copies; the deep-history unchanged retry prefills seven
+assistant-opening tokens, as the existing test explicitly allows only with
+matching refusal evidence. Expected reuse and uncached-output checks remain
+strict. Disk caching is off; the disk-restarting `cache` suite
+is excluded by the Windows contract, not counted as passed.
+
+The full `cache-depth` suite also passes with one execution slot in each mode,
+at the same 32K context and 8 GiB budget: another 16 requests per mode, including
+the exact uncached controls. This tests RAM retention after the only execution
+slot is reused. AR executes zero drafts. The two-slot MTP run records 610
+proposed and 388 accepted draft tokens; the one-slot deep run records 48
+proposed and 10 accepted. These counts establish execution, not speed.
+
+Two-slot outputs, token counts and expected prefill/cache work match the
+preceding Windows WDDM binary exactly. Per-request/phase comparisons retain
+the strict 5%/3 ms limits. Focused repeats replay discovery, long context and
+the first deep snapshot, with unchanged-baseline controls and the same executable
+path. The AR first-deep snapshot spans 47.40–70.63 ms on baseline observations
+and 60.11–61.68 ms on the candidate. No confirmed timing failure is established,
+but variation and unconfirmed flags leave both modes **inconclusive and
+unqualified for performance**. All original/focused observations are retained.
+The one-slot run retains timings but has no matched speed qualification.
+
+This increment qualifies selected Flash-Next behavior and numerical operator
+contracts. Full-model reference/quality checks, the standard speed benchmark,
+HIP failure injection, physical memory pressure and Linux-hosted checks remain
+pending. Qwen27B Q4_K_XL and DFlash2 files were found locally but have not been
+runtime-qualified here. The user confirmed that Qwen27B Q8_K_XL and DeepSeek
+Flash 0731/DSpark weights are unavailable; those profiles remain unqualified.
+
+The temporary Windows process wrapper invokes `openai_sdk.py` directly because
+`run.py` owns POSIX signals. The original runner remains unchanged. Use UTF-8
+mode for the Windows Python environment. SDK 2.41.1 matches
+[the repository's pinned Nix package](https://github.com/NixOS/nixpkgs/blob/2fcb964de67fcf60b43471c55d5d99e61a9ccb5a/pkgs/development/python-modules/openai/default.nix);
+HTTPX, JSON Schema and other package versions are retained in the evidence.
+Initial environment/setup failures are retained and do not count as engine
+qualification. No weights are downloaded and all API traffic stays on loopback.
+
+Artifacts are retained under `build/windows-gpu/runtime-20261012-205456`,
+including numerical output, wrapper/commands, SDK reports, complete request
+measurements and server logs, package/toolchain identities, binary hashes and
+model size/mtime identity. Full model-file hashes were not collected.

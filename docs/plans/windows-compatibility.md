@@ -5,8 +5,8 @@ persistence foundations qualified, checkpoint-store port deferred
 on `feat/windows-cpu-compat`. The native Windows CPU CLI builds; the bounded
 preset includes host, HTTP, audio WebSocket, and console-shutdown checks. See
 [Windows status](../WINDOWS.md) for commands, provenance, validation, and
-remaining limitations. Windows CPU CI is implemented; hosted compilation passes,
-and a bounded-test fixture correction awaits hosted verification. Stage three is
+remaining limitations. Windows CPU CI is implemented and all 15 hosted checks
+pass after the bounded-test fixture correction. Stage three is
 in progress: native HIP, WDDM admission, pinned-memory
 checks and selected Flash-Next AR/MTP checks pass. Stage four and the GUI remain
 pending. Disk checkpoint persistence is outside the initial port's scope.
@@ -234,10 +234,10 @@ keep the existing `windows-port` branch available throughout qualification.
    - **Windows CPU CI (implemented):** a separate workflow automates the
      qualified bounded suite with pinned standalone LLVM and the manifest's
      vcpkg baseline, preserving the existing Linux checks. Local validation
-     precedes hosted qualification. Hosted compilation and 14 of 15 checks pass;
+     precedes hosted qualification. Hosted compilation and all 15 checks pass;
      the large-offset compatibility fixture is now sparse to avoid allocating
      and flushing 4 GiB during the bounded suite. Its timeout correction passes
-     locally; hosted verification remains pending.
+     locally and in the hosted correction run.
 
 3. **Native HIP runtime.** Enable the production Windows build with the fork's
    pinned TheRock 10.0.0 as the initial reference toolchain. Verify its
@@ -257,9 +257,13 @@ keep the existing `windows-port` branch available throughout qualification.
    AR/MTP cancellation and RAM replay checks match the earlier binary; timing
    qualification remains inconclusive. Focused pinned-memory/transfer checks and
    4,096-token Flash-Next AR/MTP cross-slot state-integrity checks pass. Windows
-   HIP fault injection and larger backing capacities, long-context and wider
-   cancellation coverage, other model
-   paths, numerical checks, and speed qualification remain pending. See
+   HIP fault injection and physical memory pressure, other model paths,
+   full-model numerical quality and speed qualification remain pending. Selected
+   32K-context Flash-Next AR/MTP long-context, deep RAM reuse and streaming-header
+   checks pass with two slots; deep reuse also passes with one slot. All ten
+   model-owned numerical operator checks pass. Timing qualification remains
+   inconclusive. See the
+   [broader runtime record](../WINDOWS.md#flash-next-broader-runtime-checks) and
    [the validation record](../WINDOWS.md#initial-native-hip-live-inference).
    The [GPU-budget record](../WINDOWS.md#windows-gpu-budget-admission) details
    the adapter selection, scope, native checks, and retained timing controls.
