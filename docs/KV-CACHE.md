@@ -277,6 +277,26 @@ reusable with `--cache-disk` and not without. The boundary is not learned on
 first sight; in one run it became usable from the fifth conversation
 **(measured)**. See #267.
 
+**Disk checkpoints are spaced at least 2048 tokens apart.** A conversation
+advances a few hundred tokens per turn, so writing every turn serialises, fsyncs
+and retains a nearly identical snapshot. A checkpoint less than 2048 tokens past
+the longest stored entry that is still a prefix of it is skipped and logged as
+`min_step`; the RAM tier still retains it. When RAM does not retain it either,
+the device state is not copied at all, so a skipped checkpoint costs no capture
+time on the request path. Learned shared-prefix boundaries are
+exempt, because they sit close to a deeper entry by construction. On a
+Qwen3.8-27B functional run this cut disk writes from 31 to 5 and written bytes
+from 6.97 GiB to 1.37 GiB **(measured)**. Ported from upstream #348; see
+upstream #492 for the write-volume report.
+
+The trade-off is what a disk-only restore resumes from. After a restart, or
+once RAM evicted the conversation, a request restores the nearest stored entry
+and re-prefills up to 2048 tokens plus its own turn, instead of resuming
+exactly at the previous frontier. Greedy output is unchanged. Sampled output can
+differ from the pre-restart response, because the re-prefilled gap follows
+different chunk shapes, as with any partial hit. Plain continuation from RAM is
+unaffected.
+
 Disk entries are evicted by global LRU on last access, so one active run whose
 checkpoints are all recent will displace every other conversation in age order
 **(measured)**. See #275.
@@ -318,6 +338,7 @@ the cache.
 | `event=snapshot action=skipped reason=byte_capacity` | a checkpoint did not fit the RAM budget |
 | `event=disk_cache action=removed reason=lru` | a disk entry was evicted to stay inside `--cache-disk-bytes` |
 | `event=disk_cache action=skipped reason=staging_capacity` | a checkpoint exceeded `--cache-disk-staging-bytes` and was never written |
+| `event=disk_cache action=skipped reason=min_step` | a checkpoint was less than 2048 tokens past a stored prefix; RAM still retains it |
 
 Per-request outcomes appear in the completion log and in `usage.gufo`:
 `cache_hit`, `cache_miss_reason`, `cache_common_prefix_tokens`,
