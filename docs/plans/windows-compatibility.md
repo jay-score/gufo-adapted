@@ -6,9 +6,10 @@ on `feat/windows-cpu-compat`. The native Windows CPU CLI builds; the bounded
 preset includes host, HTTP, audio WebSocket, and console-shutdown checks. See
 [Windows status](../WINDOWS.md) for commands, provenance, validation, and
 remaining limitations. Windows CPU CI is implemented; its first hosted run is
-pending. Stages three/four and the GUI remain pending. Disk checkpoint
-persistence is outside the initial port's scope. No GPU/model or persistent-cache
-runtime qualification is claimed yet.
+pending. Stage three is in progress: native HIP, WDDM admission, pinned-memory
+checks and selected Flash-Next AR/MTP checks pass. Stage four and the GUI remain
+pending. Disk checkpoint persistence is outside the initial port's scope.
+Full GPU/model qualification remains pending.
 
 ## Objective and baseline
 
@@ -144,11 +145,15 @@ routes all six current production admission sites through `DeviceMemoryInfo`,
 retaining Linux's direct HIP pass-through. Audit new `hipMemGetInfo` sites when
 merging future upstream updates. The loader's informational query stays raw HIP.
 
-Validate the current
+Focused native checks now exercise the current
 [`committed_backing.cpp`](../../src/core/hip/committed_backing.cpp),
 [`staging.cpp`](../../src/core/hip/staging.cpp), and snapshot transfers on
-TheRock. They use coherent pinned memory and allocation/transfer contracts
-that the fork's older cache cannot qualify for us.
+TheRock. Coherent backing/staging, accounting and lifetime checks, real transfers
+and Flash-Next cross-slot restoration pass without production-code changes.
+The Linux HIP fault-injection harness remains unqualified on Windows; larger
+capacity/pressure checks are also pending. See the
+[pinned-memory record](../WINDOWS.md#windows-pinned-backing-and-transfers).
+The fork's older cache does not qualify these newer contracts.
 
 The official server also automatically plans GPU queues from Linux KFD sysfs.
 On Windows, missing sysfs is not evidence that no other process has queues.
@@ -242,12 +247,16 @@ keep the existing `windows-port` branch available throughout qualification.
    MTP drafts, and one AR image request pass on the local 8060S. WDDM admission is
    implemented with native budget/adapter/fallback checks. Selected Flash-Next
    AR/MTP cancellation and RAM replay checks match the earlier binary; timing
-   qualification remains inconclusive. Pinned-memory
-   qualification, long-context and wider cancellation coverage, other model
+   qualification remains inconclusive. Focused pinned-memory/transfer checks and
+   4,096-token Flash-Next AR/MTP cross-slot state-integrity checks pass. Windows
+   HIP fault injection and larger backing capacities, long-context and wider
+   cancellation coverage, other model
    paths, numerical checks, and speed qualification remain pending. See
    [the validation record](../WINDOWS.md#initial-native-hip-live-inference).
    The [GPU-budget record](../WINDOWS.md#windows-gpu-budget-admission) details
    the adapter selection, scope, native checks, and retained timing controls.
+   The [pinned-memory record](../WINDOWS.md#windows-pinned-backing-and-transfers)
+   identifies the native allocation, ownership and copy checks and their limits.
 
 4. **Qualification and maintenance handoff.** Run the official Linux hosted
    checks and formatting checks, Windows CPU checks, affected numerical-quality

@@ -4,8 +4,9 @@ Stage one, the transport/host increments, and persistence foundations in the
 [integration plan](plans/windows-compatibility.md) build the current official
 engine's **CPU CLI and selected host/server checks** natively on Windows x64.
 This is an integration milestone, not a supported Windows inference release.
-Native HIP builds, Windows GPU-budget admission, and initial Flash-Next live
-checks now pass; wider runtime qualification and the GUI remain pending.
+Native HIP builds, Windows GPU-budget admission, pinned-memory/transfer checks,
+and selected Flash-Next live checks now pass; wider runtime qualification and
+the GUI remain pending.
 Windows CPU CI is implemented,
 with its first hosted run pending. Disk checkpoint persistence is deferred from
 the initial port. GGUF digest caching and private content tracing are enabled.
@@ -421,5 +422,67 @@ matches `1e4c4333`. The selected live check uses `tests/functional/continuation.
 with `content-preserve0-sampled0`, one session, context 4096, and a fixed 2 GiB RAM
 cache. All test servers were stopped. Disk restart is excluded. Performance
 qualification and the wider
-Linux/model/pinned-backing checks remain pending; these checks do not establish
+Linux/model checks remain pending; these checks do not establish
 a physical-memory-pressure or allocation-failure contract.
+
+## Windows pinned backing and transfers
+
+TheRock 10.0.0 on the local Radeon 8060S (`gfx1151`) passes the native
+[`win32_pinned_transfer_test`](../tests/platform/win32_pinned_transfer_test.cpp).
+The increment adds only Windows test wiring and a test; the production backing,
+staging, transfer and model code is unchanged.
+
+The test covers explicit `hipHostMallocCoherent` flags and zeroed pages,
+precommitted block accounting, exhaustion/reuse, pins retaining physical memory
+and accounting after pool destruction, and four concurrent borrowers. Ledger
+reserve/convert failures exercise rollback, including failure after backing
+allocation. Staging retains its allocation after the allocator and original
+owner release it; all ledger charges return to zero after owners drain.
+
+Real H2D/D2H transfers preserve a nonuniform payload with unaligned endpoints,
+4,093-byte pieces, a partial tail and untouched guard bytes. The test also
+covers stream/event lease exhaustion and reuse, repeated waits, sealed streams,
+zero-byte copies, independently progressing streams with one pending host
+callback, and a completion surviving pool destruction. Snapshot transfers
+drain before releasing a borrowed stream and preserve row padding with different
+source/destination pitches. The common cache dependency boundary passes.
+
+Build and run the focused checks after the HIP development build above:
+
+```powershell
+./tools/windows/build.ps1 -Preset windows-gpu -Target win32_pinned_transfer_test -Vcpkg C:\vcpkg
+ctest --test-dir build/windows-gpu -R '^win32_pinned_transfer_test$' --output-on-failure
+./tools/windows/build.ps1 -Preset windows-gpu -Target qwen38_flash_next_continuation_probe -Vcpkg C:\vcpkg
+./build/windows-gpu/qwen38_flash_next_continuation_probe.exe --model PATH --mtp-model MTP_PATH --mode ar --context 4096 --sessions 2 --backing-gib 1 --round-trip
+./build/windows-gpu/qwen38_flash_next_continuation_probe.exe --model PATH --mtp-model MTP_PATH --mode mtp --context 4096 --sessions 2 --backing-gib 1 --round-trip
+```
+
+The Linux `cache_backing_test` and its ELF `--wrap` hooks are unchanged. The
+native test does not observe every HIP allocation/copy call or inject HIP
+allocation, submission, event or drain failures; those Linux fault cases remain
+unqualified on Windows. Disk persistence remains disabled. Physical memory
+pressure, larger backing capacities, broader numerical quality and speed
+qualification are separate work.
+
+The unchanged Flash-Next continuation probe passes AR and MTP cross-slot
+round-trips with the supplied `Qwen3.8-Flash-Next-UD-Q4_K_XL` four-shard model,
+the shared Q8 MTP sidecar, and the automatically discovered BF16 projector.
+Each run prefills two different 4,096-token histories, allows 4,224 positions
+for the next decode, and commits 1 GiB of coherent backing. Capture uses four
+64 MiB blocks: AR captures 131,614,880 private bytes and 103,825,408 row bytes;
+MTP captures 133,032,096 private bytes and 112,473,856 row bytes.
+
+Restoration into the other slot reproduces token history and logits bit for
+bit; readback verifies every captured device component. The next decode step
+also matches tokens, logits and draft/acceptance statistics. Nonzero MTP drafting
+is asserted during that post-restore step. These are focused state-integrity
+checks, not a broader model-quality or timing qualification. The probe's capacity
+printout still uses raw HIP memory reporting; it does not qualify Windows
+capacity limits under pressure.
+
+Evidence is retained under `build/windows-gpu/pinned-20261012-200729`: native
+CTest/build logs, AR/MTP probe output, exact commands, source base and binary
+hashes, CMake toolchain configuration, and model file sizes/modification times.
+Full model-file hashes were not collected. Formatting and documentation checks
+pass. No production source change was needed, and the earlier inconclusive
+performance qualification remains unchanged.

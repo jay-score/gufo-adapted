@@ -68,6 +68,15 @@ function(gufo_windows_device_memory)
       target_link_libraries(win32_device_memory_test PRIVATE gufo_device_memory dxgi)
       add_test(NAME win32_device_memory_test COMMAND win32_device_memory_test)
       set_tests_properties(win32_device_memory_test PROPERTIES LABELS "gpu;windows" TIMEOUT 30)
+      # The Linux backing test uses ELF --wrap fault hooks. Exercise the real
+      # pinned-memory/transfer paths here without changing those Linux hooks.
+      add_executable(win32_pinned_transfer_test
+        ${PROJECT_SOURCE_DIR}/tests/platform/win32_pinned_transfer_test.cpp)
+      target_compile_options(win32_pinned_transfer_test PRIVATE -UNDEBUG)
+      target_link_libraries(win32_pinned_transfer_test PRIVATE gufo_cache_hip Threads::Threads)
+      add_test(NAME win32_pinned_transfer_test COMMAND win32_pinned_transfer_test)
+      set_tests_properties(win32_pinned_transfer_test PROPERTIES
+        LABELS "hip;gpu;gfx1151;windows;cache" TIMEOUT 60)
     endif()
   endif()
 endfunction()
