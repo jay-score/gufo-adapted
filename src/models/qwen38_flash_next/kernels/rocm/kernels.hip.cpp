@@ -27,6 +27,38 @@ __device__ __forceinline__ float SoftplusF(float x) {
 __device__ __forceinline__ float SiluF(float x) {
   return x * SigmoidF(x);
 }
+/// Lane i receives lane (i ^ offset)'s value, as __shfl_xor(v, offset) does
+/// across a wave32. On gfx1151 it is a DPP row_xmask (offsets below 16) or
+/// v_permlanex16 (16): a register move instead of an LDS crossbar round trip
+/// (ds_bpermute). Only the transport differs, so reductions stay bitwise;
+/// every lane must be active, as the shuffle's callers already require.
+__device__ __forceinline__ int XorLane(int v, int offset) {
+#if defined(__gfx1151__)
+  switch (offset) {
+    case 1:
+      return __builtin_amdgcn_update_dpp(0, v, 0x161, 0xF, 0xF, false);
+    case 2:
+      return __builtin_amdgcn_update_dpp(0, v, 0x162, 0xF, 0xF, false);
+    case 4:
+      return __builtin_amdgcn_update_dpp(0, v, 0x164, 0xF, 0xF, false);
+    case 8:
+      return __builtin_amdgcn_update_dpp(0, v, 0x168, 0xF, 0xF, false);
+    case 16:
+      return __builtin_amdgcn_permlanex16(v, v, 0x76543210, 0xfedcba98, false,
+                                          false);
+  }
+#endif
+  return __shfl_xor(v, offset);
+}
+
+__device__ __forceinline__ unsigned XorLane(unsigned v, int offset) {
+  return static_cast<unsigned>(XorLane(static_cast<int>(v), offset));
+}
+
+__device__ __forceinline__ float XorLane(float v, int offset) {
+  return __builtin_bit_cast(float, XorLane(__builtin_bit_cast(int, v), offset));
+}
+
 __device__ __forceinline__ float Bf16ToF32(std::uint16_t h) {
   return __uint_as_float(static_cast<std::uint32_t>(h) << 16);
 }
@@ -70,7 +102,7 @@ __device__ __forceinline__ std::size_t RowBytes(WeightType type,
 /// kernels split rows across lanes (gfx1151 runs wave32).
 __device__ __forceinline__ float WaveSum(float v) {
   for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
-    v += __shfl_xor(v, offset);
+    v += XorLane(v, offset);
   }
   return v;
 }
@@ -78,7 +110,7 @@ __device__ __forceinline__ float WaveSum(float v) {
 /// Block-wide sum over kThreads threads; every thread receives the total.
 __device__ float BlockSum(float v, float* shared) {
   for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
-    v += __shfl_xor(v, offset);
+    v += XorLane(v, offset);
   }
   const int lane = threadIdx.x % warpSize;
   const int warp = threadIdx.x / warpSize;
@@ -96,7 +128,7 @@ __device__ float BlockSum(float v, float* shared) {
 
 __device__ float BlockMax(float v, float* shared) {
   for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
-    v = fmaxf(v, __shfl_xor(v, offset));
+    v = fmaxf(v, XorLane(v, offset));
   }
   const int lane = threadIdx.x % warpSize;
   const int warp = threadIdx.x / warpSize;
@@ -366,7 +398,7 @@ __global__ void HcMixEpilogueF16Kernel(const __half* xn, const float* gate,
     float max_abs = fmaxf(fmaxf(fabsf(acc.x), fabsf(acc.y)),
                           fmaxf(fabsf(acc.z), fabsf(acc.w)));
     for (int off = 4; off > 0; off >>= 1) {
-      max_abs = fmaxf(max_abs, __shfl_xor(max_abs, off));
+      max_abs = fmaxf(max_abs, XorLane(max_abs, off));
     }
     if (live) {
       const float d = max_abs / 127.0F;
@@ -466,7 +498,7 @@ __global__ void HcCombineKernel(float* res, const float* block_out,
       // it for the next mixer's W8A8 down projection, K = streams * hidden.
       float max_abs = fabsf(v);
       for (int off = 16; off > 0; off >>= 1) {
-        max_abs = fmaxf(max_abs, __shfl_xor(max_abs, off));
+        max_abs = fmaxf(max_abs, XorLane(max_abs, off));
       }
       const float d = max_abs / 127.0F;
       const float id = (d != 0.0F) ? (1.0F / d) : 0.0F;
@@ -592,7 +624,7 @@ __global__ void HcCombineVec4Kernel(float* res, const float* block_out,
     float max_abs =
         fmaxf(fmaxf(fabsf(n.x), fabsf(n.y)), fmaxf(fabsf(n.z), fabsf(n.w)));
     for (int off = 4; off > 0; off >>= 1) {
-      max_abs = fmaxf(max_abs, __shfl_xor(max_abs, off));
+      max_abs = fmaxf(max_abs, XorLane(max_abs, off));
     }
     if (e < hc_dim) {
       const float d = max_abs / 127.0F;
@@ -732,7 +764,7 @@ __global__ void HcCombineMoeF16Kernel(
       float max_abs =
           fmaxf(fmaxf(fabsf(n.x), fabsf(n.y)), fmaxf(fabsf(n.z), fabsf(n.w)));
       for (int off = 4; off > 0; off >>= 1) {
-        max_abs = fmaxf(max_abs, __shfl_xor(max_abs, off));
+        max_abs = fmaxf(max_abs, XorLane(max_abs, off));
       }
       if (i < hidden) {
         const float d = max_abs / 127.0F;
@@ -811,7 +843,7 @@ __global__ void SwigluQ8Kernel(const float* gate, const float* up, void* out_q8,
   float max_abs =
       fmaxf(fmaxf(fabsf(v.x), fabsf(v.y)), fmaxf(fabsf(v.z), fabsf(v.w)));
   for (int off = 4; off > 0; off >>= 1) {
-    max_abs = fmaxf(max_abs, __shfl_xor(max_abs, off));
+    max_abs = fmaxf(max_abs, XorLane(max_abs, off));
   }
   if (!live) {
     return;
@@ -1057,9 +1089,9 @@ __global__ void GdnPrepKqKernel(const float* conv_out, float* scales,
   float kq = k4.x * q4.x + k4.y * q4.y + k4.z * q4.z + k4.w * q4.w;
 #pragma unroll
   for (unsigned offset = 16; offset > 0; offset >>= 1) {
-    qs += __shfl_xor(qs, offset);
-    ks += __shfl_xor(ks, offset);
-    kq += __shfl_xor(kq, offset);
+    qs += XorLane(qs, offset);
+    ks += XorLane(ks, offset);
+    kq += XorLane(kq, offset);
   }
   if (lane == 0) {
     float* dst = scales + (static_cast<std::size_t>(t) * k_heads + kh) * 3;
@@ -1363,7 +1395,7 @@ __global__ void GdnKernel(const float* conv_out, const float* qn,
     }
 #pragma unroll
     for (unsigned off = kGdnLanes / 2; off > 0; off >>= 1) {
-      u += __shfl_xor(u, off, kGdnLanes);
+      u += XorLane(u, off);
     }
     const float error = vv - u;
     float acc = 0.0f;
@@ -1379,7 +1411,7 @@ __global__ void GdnKernel(const float* conv_out, const float* qn,
     }
 #pragma unroll
     for (unsigned off = kGdnLanes / 2; off > 0; off >>= 1) {
-      acc += __shfl_xor(acc, off, kGdnLanes);
+      acc += XorLane(acc, off);
     }
     if (lane == 0) {
       raw[static_cast<std::size_t>(t) * v_heads * d + h * d + j] =
@@ -1504,7 +1536,7 @@ __global__ void GdnEpilogueKernel(const float* raw, const float* z,
     const float n = v[r] * scale * norm_w[i] * SigmoidF(zrow[i]);
     float max_abs = fabsf(n);
     for (int off = 16; off > 0; off >>= 1) {
-      max_abs = fmaxf(max_abs, __shfl_xor(max_abs, off));
+      max_abs = fmaxf(max_abs, XorLane(max_abs, off));
     }
     const float dq = max_abs / 127.0F;
     const float id = (dq != 0.0F) ? (1.0F / dq) : 0.0F;
@@ -2008,7 +2040,7 @@ __global__ void SelectMarkKernel(std::uint32_t* mask, const float* scores,
     maximum = threadIdx.x < min(complete, kThreads) ? sc[threadIdx.x] : 0u;
 #pragma unroll
     for (unsigned offset = 16; offset > 0; offset /= 2)
-      maximum = max(maximum, __shfl_xor(maximum, offset));
+      maximum = max(maximum, XorLane(maximum, offset));
     if (lane == 0)
       wave_ties[wave] = maximum;
     __syncthreads();
@@ -2424,8 +2456,8 @@ __global__ void RouterTopKKernel(const float* logits, std::uint32_t stride,
     }
 #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
-      float other = __shfl_xor(best, offset);
-      unsigned oi = __shfl_xor(index, offset);
+      float other = XorLane(best, offset);
+      unsigned oi = XorLane(index, offset);
       if (other > best || (other == best && oi < index)) {
         best = other;
         index = oi;
@@ -2546,7 +2578,7 @@ __device__ ArgmaxCandidate ArgmaxBlock(ArgmaxCandidate best,
   const unsigned wave = threadIdx.x >> 5u;
   for (int offset = 16; offset > 0; offset >>= 1) {
     best = BetterCandidate(
-        best, {__shfl_xor(best.value, offset), __shfl_xor(best.index, offset)});
+        best, {XorLane(best.value, offset), XorLane(best.index, offset)});
   }
   if (lane == 0) {
     shared[wave] = best;
@@ -3094,7 +3126,7 @@ __launch_bounds__(256, 2) __global__ void WmmaCausalAttentionKernel(
         }
 #pragma unroll
         for (std::uint32_t off = 1; off < kSoftmaxLanes; off <<= 1) {
-          part_max = fmaxf(part_max, __shfl_xor(part_max, off));
+          part_max = fmaxf(part_max, XorLane(part_max, off));
         }
         const float prev_max = running_max;
         const float next_max = fmaxf(prev_max, part_max);
@@ -3109,7 +3141,7 @@ __launch_bounds__(256, 2) __global__ void WmmaCausalAttentionKernel(
         }
 #pragma unroll
         for (std::uint32_t off = 1; off < kSoftmaxLanes; off <<= 1) {
-          part_sum += __shfl_xor(part_sum, off);
+          part_sum += XorLane(part_sum, off);
         }
         running_max = next_max;
         running_sum = (running_sum * prior_scale) + part_sum;
@@ -3275,7 +3307,7 @@ __global__ void QuantizeQ8TiledVec4Kernel(const float* __restrict__ x,
   float max_abs =
       fmaxf(fmaxf(fabsf(v.x), fabsf(v.y)), fmaxf(fabsf(v.z), fabsf(v.w)));
   for (int off = 4; off > 0; off >>= 1) {
-    max_abs = fmaxf(max_abs, __shfl_xor(max_abs, off));
+    max_abs = fmaxf(max_abs, XorLane(max_abs, off));
   }
   const float d = max_abs / 127.0F;
   const float id = (d != 0.0F) ? (1.0F / d) : 0.0F;
@@ -3317,7 +3349,7 @@ __global__ void QuantizeQ8TiledKernel(const float* __restrict__ x,
   const float val = x[(tok * k) + (blk * 32) + lane_id];
   float max_abs = fabsf(val);
   for (int off = 16; off > 0; off >>= 1) {
-    max_abs = fmaxf(max_abs, __shfl_xor(max_abs, off));
+    max_abs = fmaxf(max_abs, XorLane(max_abs, off));
   }
   const float d = max_abs / 127.0F;
   const float id = (d != 0.0F) ? (1.0F / d) : 0.0F;
@@ -5143,7 +5175,7 @@ __launch_bounds__(256) __global__ void DenseF16GEMMKernel(
                                   fmaxf(fabsf(value.z), fabsf(value.w)));
 #pragma unroll
             for (int off = 4; off > 0; off >>= 1) {
-              max_abs = fmaxf(max_abs, __shfl_xor(max_abs, off));
+              max_abs = fmaxf(max_abs, XorLane(max_abs, off));
             }
             const float d = max_abs / 127.0F;
             const float id = d != 0.0F ? 1.0F / d : 0.0F;

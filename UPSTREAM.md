@@ -37,6 +37,27 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-13 — Flash-Next DPP wave transport
+
+- Source: [gufo-org/gufo@28b3c03b43f6951a5d13c2031cf1b6ced1ae6b52](https://github.com/gufo-org/gufo/commit/28b3c03b43f6951a5d13c2031cf1b6ced1ae6b52)
+  (PR #518).
+- Local: commit introducing this entry.
+- Adaptation: replace remaining XOR shuffle transports with gfx1151 DPP and
+  permlanex16, retaining the existing reduction loops, operands and fallback.
+  Keep the fork's ascending GDN DPP tree and its wave64 expert dispatch with
+  logical 32-lane reductions. Producer Q8_1 fusion is not imported.
+- Areas: Flash-Next `kernels.hip.cpp` and `mmq/common.hpp`.
+- Validation: fresh TheRock 10.0.0 Windows production/operator builds pass;
+  all 15 Flash-Next CPU/operator tests pass. Against the preserved `ab4d98189a6d`
+  baseline, IQ4_XS and UD-Q4_K_XL each retain all 348 complete vocabulary rows
+  across scalar decode, verification widths 1–8 and eight-row prefill, with
+  exact perplexity. All 57 prefill resource-contract kernels pass; the 38
+  inspected decode/attention variants retain zero scratch and spills.
+  Normal-prefill capture, native state qualification, matched end-to-end timing
+  and Linux execution remain pending. See the
+  [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+- Status: retained in the implementation worktree pending final qualification.
+
 ### 2026-10-12 — Completion-route prompt cache controls
 
 - Source: [gufo-org/gufo@adc3f0f59b32d1e6ceadcb7b2664f38e24a40cd3](https://github.com/gufo-org/gufo/commit/adc3f0f59b32d1e6ceadcb7b2664f38e24a40cd3)
