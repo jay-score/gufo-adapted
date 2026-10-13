@@ -37,6 +37,28 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-13 — Cached Flash-Next norms and MTP row reads
+
+- Source: [gufo-org/gufo@e1b20ba9e11540e817116ae196b51696cc80d71a](https://github.com/gufo-org/gufo/commit/e1b20ba9e11540e817116ae196b51696cc80d71a)
+  (PR #518), using the previously recorded materialization helper.
+- Local: commit introducing this entry.
+- Adaptation: retain 2560/10240-element norm inputs/gamma in registers with
+  explicit original square/FMA order, and vectorize aligned MTP copy/add rows.
+  General geometry/alignment fallbacks and full-width normalization remain.
+- Areas: Flash-Next `kernels.hip.cpp`.
+- Validation: fresh Windows builds, three affected GPU operators and the
+  57-kernel prefill resource contract pass. All 696 matched target logit rows
+  and perplexities are exact. A new explicit diagnostic built against the
+  original `ab4d98189a6d` kernels captures eight fixed MTP states per format;
+  both formats retain all 128 stage hashes, including 16 complete vocabulary
+  rows, with finite values and exact isolated batch/catch-up comparisons.
+  The original IQ4_XS independent scalar MTP oracle fails attention relative RMS
+  0.0093689 against 0.002; its limits remain unchanged. The original UD-Q4_K_XL
+  independent oracle passes. This is regression parity, not new IQ4 oracle
+  qualification. Final native/prefill/timing checks and Linux remain pending;
+  see the [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+- Status: retained in the implementation worktree pending final qualification.
+
 ### 2026-10-13 — Vector reads for small Flash-Next F32 projections
 
 - Source: [gufo-org/gufo@482fd027d109c160dc97f307202f717c05fc5bc5](https://github.com/gufo-org/gufo/commit/482fd027d109c160dc97f307202f717c05fc5bc5)

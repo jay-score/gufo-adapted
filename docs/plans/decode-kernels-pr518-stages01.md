@@ -112,3 +112,21 @@ exercise the generic fallback. Fresh builds, the expanded projection test and
 the 57-kernel prefill resource contract pass. All 696 matched logit rows and
 perplexities remain exact. Artifacts use the `f32-vectors-` prefix and
 `f32-vectors-quality/`; the candidate is `baseline-bin/gufo-f32-vectors.exe`.
+
+### Cached norms and MTP row vectorization
+
+Fresh builds, three affected operators and the 57-kernel resource check pass.
+All 696 target rows and perplexities match the original baseline exactly.
+The added MTP hash diagnostic was also rebuilt with the three original baseline
+kernel files, then the candidate sources were restored and SHA-256 verified.
+Both quantizations retain all 128 fixed-state stage hashes, including 16 full
+vocabulary rows. The mode also passes isolated batching, image-ID handling and
+ragged/full catch-up through 2048 rows. Artifacts: `baseline-mtp-identities.json`,
+`baseline-mtp-hashes-*.log`, `norm-mtp-hashes-*.log`, their comparison JSON files,
+`norm-mtp-quality/` and the preserved baseline/candidate probe executables.
+
+The independent `--mtp-audit` remains separate and unchanged in its limits.
+On the original baseline, IQ4_XS fails attention relative RMS 0.0093689 against
+0.002; UD-Q4_K_XL passes the complete independent audit. The IQ4 failure also
+occurs before the cached-norm change. Exact baseline regression agreement does
+not resolve that pre-existing model/oracle gap, which remains unqualified.
