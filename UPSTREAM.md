@@ -37,6 +37,166 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-13 — Reduce-scatter for narrow batched Q8 decode
+
+- Source: [gufo-org/gufo@c1f01311318e6c677fd25c268b51a4e94ca324cc](https://github.com/gufo-org/gufo/commit/c1f01311318e6c677fd25c268b51a4e94ca324cc)
+  (PR #518), following the recorded DPP transport and few-row read-ahead.
+- Local: 76656a5befc12b2a9171895654c24c4a2524a42a.
+- Adaptation: distribute the same descending 32-lane butterfly sums across
+  lanes for two through eight Q8 inputs, including gated projections. Keep
+  scalar dispatch, wide/ragged paths and separate wave64 expert routes intact.
+- Areas: Flash-Next `mmq/common.hpp` and `mmq/mmvq.hip.cpp`.
+- Validation: fresh Windows builds and the projection operator pass with strict
+  scalar/batched equality at widths 1–8 and wide/ragged controls. Both formats
+  retain all 696 complete matched target rows and exact perplexity. The compiled
+  prefill resource guard passes 57 kernels; 83 relevant decode variants have
+  zero scratch/spills. Final prefill/native checks pass; functional timing and
+  Linux remain unqualified; see the
+  [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+- Status: held in the isolated implementation worktree. Windows numerical/state
+  gates pass and decode gains are measured; full functional-latency and Linux
+  qualification remain outstanding. Final evidence and limits are recorded in
+  [the implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+
+### 2026-10-13 — Read ahead for few-row Q8 decode
+
+- Source: [gufo-org/gufo@0aa6f75af25639504a6aaaa14946d6f47f31f3dd](https://github.com/gufo-org/gufo/commit/0aa6f75af25639504a6aaaa14946d6f47f31f3dd)
+  (PR #518).
+- Local: b713fe95db8913496c0cb6e512252b9293e6c31f.
+- Adaptation: load twenty lane-local Q8 blocks ahead for complete long rows
+  with one input and at most 64 outputs. Preserve scalar products, FMA order,
+  original reduction and all other dispatch paths. No producer fusion.
+- Areas: Flash-Next `mmq/mmvq.hip.cpp` and projection operator fixtures.
+- Validation: fresh Windows release/operator builds and the expanded projection
+  test pass, including 4×10240 scalar-versus-batched outputs. All 696 complete
+  matched target logit rows and six perplexities remain exact on both formats.
+  Final prefill/native checks pass; functional timing and Linux remain
+  unqualified; see the [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+- Status: held in the isolated implementation worktree. Windows numerical/state
+  gates pass and decode gains are measured; full functional-latency and Linux
+  qualification remain outstanding. Final evidence and limits are recorded in
+  [the implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+
+### 2026-10-13 — Cached Flash-Next norms and MTP row reads
+
+- Source: [gufo-org/gufo@e1b20ba9e11540e817116ae196b51696cc80d71a](https://github.com/gufo-org/gufo/commit/e1b20ba9e11540e817116ae196b51696cc80d71a)
+  (PR #518), using the previously recorded materialization helper.
+- Local: e480c3af62a6b4de7221f18d5d665e067607cbbd.
+- Adaptation: retain 2560/10240-element norm inputs/gamma in registers with
+  explicit original square/FMA order, and vectorize aligned MTP copy/add rows.
+  General geometry/alignment fallbacks and full-width normalization remain.
+- Areas: Flash-Next `kernels.hip.cpp`.
+- Validation: fresh Windows builds, three affected GPU operators and the
+  57-kernel prefill resource contract pass. All 696 matched target logit rows
+  and perplexities are exact. A new explicit diagnostic built against the
+  original `ab4d98189a6d` kernels captures eight fixed MTP states per format;
+  both formats retain all 128 stage hashes, including 16 complete vocabulary
+  rows, with finite values and exact isolated batch/catch-up comparisons.
+  The original IQ4_XS independent scalar MTP oracle fails attention relative RMS
+  0.0093689 against 0.002; its limits remain unchanged. The original UD-Q4_K_XL
+  independent oracle passes. This is regression parity, not new IQ4 oracle
+  qualification. Final prefill/native checks pass; functional timing and Linux
+  remain unqualified; see the [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+- Status: held in the isolated implementation worktree. Windows numerical/state
+  gates pass and decode gains are measured; full functional-latency and Linux
+  qualification remain outstanding. Final evidence and limits are recorded in
+  [the implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+
+### 2026-10-13 — Vector reads for small Flash-Next F32 projections
+
+- Source: [gufo-org/gufo@482fd027d109c160dc97f307202f717c05fc5bc5](https://github.com/gufo-org/gufo/commit/482fd027d109c160dc97f307202f717c05fc5bc5)
+  (PR #518), following the recorded small-kernel load scheduling adaptation.
+- Local: 0f5900d94dc44a3433821e016201175402e8ee8e.
+- Adaptation: use 16-byte reads for aligned, whole-pass F32 rows, with explicit
+  original FMA order. Preserve the generic path for misaligned, ragged and
+  non-F32 inputs, including grouped projection dispatch.
+- Areas: Flash-Next `kernels.hip.cpp` and projection operator fixtures.
+- Validation: fresh Windows production/operator builds and the projection
+  operator test pass, including deliberate four-byte misalignment, FP64 formulas,
+  allocation-boundary tails, every narrow width and grouped widths through 64.
+  All 696 matched full-logit rows and perplexities remain exact across the two
+  target quantizations. The 57-kernel prefill resource contract passes. Final
+  prefill/native checks pass; functional timing and Linux remain unqualified;
+  see the [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+- Status: held in the isolated implementation worktree. Windows numerical/state
+  gates pass and decode gains are measured; full functional-latency and Linux
+  qualification remain outstanding. Final evidence and limits are recorded in
+  [the implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+
+### 2026-10-13 — Flash-Next decode load scheduling
+
+- Source: [gufo-org/gufo@6e52e0f8a30fa609b8e2a0a817c2e48b2875a963](https://github.com/gufo-org/gufo/commit/6e52e0f8a30fa609b8e2a0a817c2e48b2875a963),
+  [19cbf32fabea093c161fc018f9c36a0bfba8db0a](https://github.com/gufo-org/gufo/commit/19cbf32fabea093c161fc018f9c36a0bfba8db0a),
+  [773fcfb3147876c9cc52d8d53954f57c142d5544](https://github.com/gufo-org/gufo/commit/773fcfb3147876c9cc52d8d53954f57c142d5544),
+  and only the materialization helper from
+  [11827a9a809cab06ab447054b56c122770b3f25b](https://github.com/gufo-org/gufo/commit/11827a9a809cab06ab447054b56c122770b3f25b)
+  (PR #518).
+- Local: 036dc3243e5aa5246531eb9bf6d7f30c5a96f794.
+- Adaptation: preload bounded small-GEMM, HC and MoE operands while keeping
+  the original product/add order and existing output layouts. Specialize the
+  residual register cache to complete 2560-element rows; ragged shapes keep
+  guarded reads instead of clamped unused residual reads. Preserve null-gamma
+  handling and the Windows HC-down/SiLU route. No producer Q8_1 fusion.
+- Areas: Flash-Next `kernels.hip.cpp` and projection operator fixtures.
+- Validation: fresh Windows production/operator builds and four affected GPU
+  tests pass, including independent projection/HC formulas and allocation-ended
+  ragged F32 rows. Both quantizations retain all 696 matched full-logit rows and
+  exact perplexity. All 57 prefill resource-contract kernels pass; 32 inspected
+  changed-family variants have zero scratch/spills. Final prefill/native checks
+  pass; functional timing and Linux remain unqualified; see the
+  [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+- Status: held in the isolated implementation worktree. Windows numerical/state
+  gates pass and decode gains are measured; full functional-latency and Linux
+  qualification remain outstanding. Final evidence and limits are recorded in
+  [the implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+
+### 2026-10-13 — Branch-free Flash-Next Q4 scale reads
+
+- Source: [gufo-org/gufo@a17f9ea148de29a6b2b95afed89a5411c530f799](https://github.com/gufo-org/gufo/commit/a17f9ea148de29a6b2b95afed89a5411c530f799)
+  and [gufo-org/gufo@d1a8a8e26311b366a8cfa374af9db59cf1e3be3e](https://github.com/gufo-org/gufo/commit/d1a8a8e26311b366a8cfa374af9db59cf1e3be3e)
+  (PR #518).
+- Local: d4099648739d12fa6e73bf25c2580b96748bca11.
+- Adaptation: reuse the final combined integer scale helper for scalar and
+  grouped Q4_K dots, including existing wave64 callers. Keep the fork's native
+  IQ expert paths, tensor encodings and projection dispatch. No routing changes.
+- Areas: Flash-Next `mmq/vecdotq.hpp`.
+- Validation: fresh Windows production/operator builds pass; projection and
+  routed-WMMA operator tests pass. All 696 matched complete logit rows and
+  per-schedule perplexities match the `ab4d98189a6d` baseline across IQ4_XS and
+  UD-Q4_K_XL. A separate CPU algebra check covers all 256 byte values in each
+  scale-byte position plus 5,000 random packings (8,072 cases × four sub-blocks);
+  this supplements the compiled-kernel checks. Final prefill/native checks pass;
+  functional timing and Linux remain unqualified; see the
+  [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+- Status: held in the isolated implementation worktree. Windows numerical/state
+  gates pass and decode gains are measured; full functional-latency and Linux
+  qualification remain outstanding. Final evidence and limits are recorded in
+  [the implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+
+### 2026-10-13 — Flash-Next DPP wave transport
+
+- Source: [gufo-org/gufo@28b3c03b43f6951a5d13c2031cf1b6ced1ae6b52](https://github.com/gufo-org/gufo/commit/28b3c03b43f6951a5d13c2031cf1b6ced1ae6b52)
+  (PR #518).
+- Local: 3fdb31ec5a6d5a3bfc50da7bbc89d11b6d61e270.
+- Adaptation: replace remaining XOR shuffle transports with gfx1151 DPP and
+  permlanex16, retaining the existing reduction loops, operands and fallback.
+  Keep the fork's ascending GDN DPP tree and its wave64 expert dispatch with
+  logical 32-lane reductions. Producer Q8_1 fusion is not imported.
+- Areas: Flash-Next `kernels.hip.cpp` and `mmq/common.hpp`.
+- Validation: fresh TheRock 10.0.0 Windows production/operator builds pass;
+  all 15 Flash-Next CPU/operator tests pass. Against the preserved `ab4d98189a6d`
+  baseline, IQ4_XS and UD-Q4_K_XL each retain all 348 complete vocabulary rows
+  across scalar decode, verification widths 1–8 and eight-row prefill, with
+  exact perplexity. All 57 prefill resource-contract kernels pass; the 38
+  inspected decode/attention variants retain zero scratch and spills.
+  Final prefill/native checks pass; functional timing and Linux remain
+  unqualified. See the
+  [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+- Status: held in the isolated implementation worktree. Windows numerical/state
+  gates pass and decode gains are measured; full functional-latency and Linux
+  qualification remain outstanding. Final evidence and limits are recorded in
+  [the implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+
 ### 2026-10-12 — Completion-route prompt cache controls
 
 - Source: [gufo-org/gufo@adc3f0f59b32d1e6ceadcb7b2664f38e24a40cd3](https://github.com/gufo-org/gufo/commit/adc3f0f59b32d1e6ceadcb7b2664f38e24a40cd3)

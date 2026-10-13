@@ -196,8 +196,19 @@ RIGHT.bin.sha256` to compare complete raw-logit hashes for corresponding schedul
 See the [Windows logit check](WINDOWS.md#windows-validated-switches) for limits.
 Perplexity alone can hide individual mismatches. Parser/API-only changes still
 require deterministic contract tests; teacher-forced logits do not exercise tool
-parsing, sampling draws, rejection rollback or snapshot interleaving. Run those
-focused checks separately when affected.
+parsing, sampling draws, rejection or draft-head arithmetic.
+
+For Flash-Next draft-head regression checks, build the explicit
+`qwen38_flash_next_gpu_probe` and use `--model FIRST.gguf --mtp-model MTP.gguf
+--batch 2048 --context 4096 --mtp-hashes`. This emits complete finite stage and
+vocabulary-row hashes at eight fixed text/image-ID states, then checks isolated
+batching and ragged catch-up. Compare the hash lines from matched baseline and
+candidate builds. `--mtp-audit` separately retains the independent scalar oracle
+and its numerical limits; hash equality does not establish oracle parity. The
+two modes cannot be combined.
+
+Run affected state, sampling, rejection/rollback and snapshot checks separately
+from the logit comparisons.
 
 Tokenize once and feed the same predetermined history to teacher and
 candidate. Compare full next-token distributions at each position before
