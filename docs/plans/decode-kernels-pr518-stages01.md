@@ -103,3 +103,12 @@ The 57-kernel prefill resource contract and 32 inspected changed-family variants
 have zero scratch/spills. Artifacts: `loads-quality/`, `loads-operators.log`,
 `loads-comparison.json`, `loads-decode-resources.json`, `loads.patch` and the
 preserved `baseline-bin/gufo-loads.exe`.
+
+### Aligned F32 vector reads
+
+The new fast path loads complete aligned F32 passes in 16-byte pieces and keeps
+the original FMA chain. Ragged and deliberately four-byte-misaligned fixtures
+exercise the generic fallback. Fresh builds, the expanded projection test and
+the 57-kernel prefill resource contract pass. All 696 matched logit rows and
+perplexities remain exact. Artifacts use the `f32-vectors-` prefix and
+`f32-vectors-quality/`; the candidate is `baseline-bin/gufo-f32-vectors.exe`.

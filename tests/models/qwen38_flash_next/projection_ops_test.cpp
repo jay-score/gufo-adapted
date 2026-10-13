@@ -579,7 +579,8 @@ double Run(std::size_t batch, std::size_t m, std::size_t k, std::uint32_t seed,
 
 // Unquantized router, alpha/beta and indexer projections must keep the same
 // result when a token moves between decode and any verification batch width.
-void CheckSmallProjection(q::WeightType type, unsigned rows, unsigned cols) {
+void CheckSmallProjection(q::WeightType type, unsigned rows, unsigned cols,
+                          bool misaligned = false) {
   constexpr unsigned tokens = 64;
   const unsigned element_bytes = type == q::WeightType::kF32 ? 4 : 2;
   std::vector<std::uint8_t> weights(std::size_t(rows) * cols * element_bytes);
@@ -607,10 +608,16 @@ void CheckSmallProjection(q::WeightType type, unsigned rows, unsigned cols) {
   void* dw = nullptr;
   float* dx = nullptr;
   float* dy = nullptr;
+  void* weight_allocation = nullptr;
+  float* input_allocation = nullptr;
+  const std::size_t offset = misaligned ? sizeof(float) : 0;
   const std::size_t count = std::size_t(tokens) * rows;
-  CheckHip(hipMalloc(&dw, weights.size()), "small weights allocation");
-  CheckHip(hipMalloc(&dx, input.size() * sizeof(float)),
+  CheckHip(hipMalloc(&weight_allocation, weights.size() + offset),
+           "small weights allocation");
+  CheckHip(hipMalloc(&input_allocation, input.size() * sizeof(float) + offset),
            "small input allocation");
+  dw = static_cast<std::uint8_t*>(weight_allocation) + offset;
+  dx = input_allocation + offset / sizeof(float);
   CheckHip(hipMalloc(&dy, (count + 8) * sizeof(float)),
            "small output allocation");
   CheckHip(hipMemcpy(dw, weights.data(), weights.size(), hipMemcpyHostToDevice),
@@ -663,8 +670,8 @@ void CheckSmallProjection(q::WeightType type, unsigned rows, unsigned cols) {
   if (std::memcmp(scalar.data(), replay.data(), count * sizeof(float)))
     throw std::runtime_error("small projection replay differs");
   CheckHip(hipFree(dy), "small output free");
-  CheckHip(hipFree(dx), "small input free");
-  CheckHip(hipFree(dw), "small weights free");
+  CheckHip(hipFree(input_allocation), "small input free");
+  CheckHip(hipFree(weight_allocation), "small weights free");
 }
 
 void CheckDecodeGrouping(int rows, int cols) {
@@ -837,6 +844,7 @@ int main() {
     CheckRoutedQ8Placement();
     CheckSmallProjection(q::WeightType::kF32, 513, 2560);
     CheckSmallProjection(q::WeightType::kF32, 96, 2560);
+    CheckSmallProjection(q::WeightType::kF32, 96, 2560, true);
     CheckSmallProjection(q::WeightType::kF32, 7, 131);
     CheckSmallProjection(q::WeightType::kBF16, 129, 2560);
     CheckSmallProjection(q::WeightType::kF16, 7, 131);

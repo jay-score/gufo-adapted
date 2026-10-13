@@ -37,6 +37,24 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-13 — Vector reads for small Flash-Next F32 projections
+
+- Source: [gufo-org/gufo@482fd027d109c160dc97f307202f717c05fc5bc5](https://github.com/gufo-org/gufo/commit/482fd027d109c160dc97f307202f717c05fc5bc5)
+  (PR #518), following the recorded small-kernel load scheduling adaptation.
+- Local: commit introducing this entry.
+- Adaptation: use 16-byte reads for aligned, whole-pass F32 rows, with explicit
+  original FMA order. Preserve the generic path for misaligned, ragged and
+  non-F32 inputs, including grouped projection dispatch.
+- Areas: Flash-Next `kernels.hip.cpp` and projection operator fixtures.
+- Validation: fresh Windows production/operator builds and the projection
+  operator test pass, including deliberate four-byte misalignment, FP64 formulas,
+  allocation-boundary tails, every narrow width and grouped widths through 64.
+  All 696 matched full-logit rows and perplexities remain exact across the two
+  target quantizations. The 57-kernel prefill resource contract passes. Final
+  prefill/native state/timing checks and Linux execution remain pending; see the
+  [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+- Status: retained in the implementation worktree pending final qualification.
+
 ### 2026-10-13 — Flash-Next decode load scheduling
 
 - Source: [gufo-org/gufo@6e52e0f8a30fa609b8e2a0a817c2e48b2875a963](https://github.com/gufo-org/gufo/commit/6e52e0f8a30fa609b8e2a0a817c2e48b2875a963),
