@@ -27,6 +27,12 @@ __device__ __forceinline__ float SoftplusF(float x) {
 __device__ __forceinline__ float SiluF(float x) {
   return x * SigmoidF(x);
 }
+/// Preserve a stored FP32 rounding boundary under fast math.
+__device__ __forceinline__ float Materialize(float v) {
+  asm volatile("" : "+v"(v));
+  return v;
+}
+
 /// Lane i receives lane (i ^ offset)'s value, as __shfl_xor(v, offset) does
 /// across a wave32. On gfx1151 it is a DPP row_xmask (offsets below 16) or
 /// v_permlanex16 (16): a register move instead of an LDS crossbar round trip
@@ -183,27 +189,51 @@ __global__ void RmsNormKernel(const float* x, const float* gamma, float* out,
 /// the thread. With `inject_w` every block also contributes its slice of the
 /// inject dot products, written as partial sums [t][stream][chunk] that
 /// HcCombine totals (a fixed-order reduction, so the result is stable).
+template<std::uint32_t kStreams>
 __global__ void HcMixEpilogueKernel(const float* xn, const float* gate,
                                     const float* inject_w, float* mixed,
                                     float* inject, std::uint32_t hidden,
                                     std::uint32_t streams) {
   constexpr std::uint32_t kMaxStreams = 8;
+  constexpr std::uint32_t kSlots = kStreams != 0 ? kStreams : kMaxStreams;
+  if constexpr (kStreams != 0) {
+    streams = kStreams;
+  }
   const std::uint32_t t = blockIdx.x;
   const std::uint32_t i = blockIdx.y * blockDim.x + threadIdx.x;
   const std::size_t hc_dim = static_cast<std::size_t>(streams) * hidden;
   const float* x = xn + static_cast<std::size_t>(t) * hc_dim;
-  float v[kMaxStreams];
-  float acc = 0.0f;
-  for (std::uint32_t s = 0; s < streams; ++s) {
+  const float* g = gate + static_cast<std::size_t>(t) * hc_dim;
+  const bool live = i < hidden;
+  float v[kSlots];
+  float gv[kSlots];
+#pragma unroll
+  for (std::uint32_t s = 0; s < kSlots; ++s) {
     const std::size_t idx = static_cast<std::size_t>(s) * hidden + i;
-    v[s] = i < hidden ? x[idx] : 0.0f;
-    if (i < hidden) {
-      acc += v[s] * SigmoidF(gate[static_cast<std::size_t>(t) * hc_dim + idx]);
+    v[s] = live && s < streams ? x[idx] : 0.0f;
+    gv[s] = live && s < streams ? g[idx] : 0.0f;
+  }
+  float wv[kSlots][kSlots];
+#pragma unroll
+  for (std::uint32_t o = 0; o < kSlots; ++o) {
+#pragma unroll
+    for (std::uint32_t s = 0; s < kSlots; ++s) {
+      wv[o][s] =
+          inject_w != nullptr && live && o < streams && s < streams
+              ? inject_w[o * hc_dim + static_cast<std::size_t>(s) * hidden + i]
+              : 0.0f;
     }
   }
-  if (i < hidden) {
-    mixed[static_cast<std::size_t>(t) * hidden + i] =
-        acc / static_cast<float>(streams);
+  float acc = 0.0f;
+#pragma unroll
+  for (std::uint32_t s = 0; s < kSlots; ++s) {
+    if (live && s < streams) {
+      acc = Materialize(acc + v[s] * SigmoidF(gv[s]));
+    }
+  }
+  if (live) {
+    const float out = acc / static_cast<float>(streams);
+    mixed[static_cast<std::size_t>(t) * hidden + i] = out;
   }
   if (inject_w == nullptr) {
     return;
@@ -213,12 +243,18 @@ __global__ void HcMixEpilogueKernel(const float* xn, const float* gate,
   __shared__ float partial[kMaxStreams][kThreads / 32];
   const std::uint32_t lane = threadIdx.x % warpSize;
   const std::uint32_t wave = threadIdx.x / warpSize;
-  for (std::uint32_t o = 0; o < streams; ++o) {
-    const float* w = inject_w + o * hc_dim;
+#pragma unroll
+  for (std::uint32_t o = 0; o < kSlots; ++o) {
+    if (o >= streams) {
+      break;
+    }
     float dot = 0.0f;
-    if (i < hidden) {
-      for (std::uint32_t s = 0; s < streams; ++s) {
-        dot += w[static_cast<std::size_t>(s) * hidden + i] * v[s];
+    if (live) {
+#pragma unroll
+      for (std::uint32_t s = 0; s < kSlots; ++s) {
+        if (s < streams) {
+          dot = Materialize(dot + wv[o][s] * v[s]);
+        }
       }
     }
     dot = WaveSum(dot);
@@ -455,6 +491,63 @@ __global__ void HcMixEpilogueF16Kernel(const __half* xn, const float* gate,
   }
 }
 
+__device__ __forceinline__ void QuantizeQ8TiledLane(
+    float v, void* xn_q8, std::uint32_t t, std::uint32_t s, std::uint32_t i,
+    std::uint32_t hidden, std::uint32_t streams) {
+  float max_abs = fabsf(v);
+  for (int off = 16; off > 0; off >>= 1) {
+    max_abs = fmaxf(max_abs, XorLane(max_abs, off));
+  }
+  const float d = max_abs / 127.0F;
+  const float id = (d != 0.0F) ? (1.0F / d) : 0.0F;
+  const auto q = static_cast<std::int8_t>(roundf(v * id));
+  const std::size_t num_blocks =
+      (static_cast<std::size_t>(streams) * hidden) / 32;
+  const std::size_t kb = (static_cast<std::size_t>(s) * hidden + i) / 32;
+  const std::size_t lane = threadIdx.x & 31u;
+  std::int8_t* tile = Q8ActTile(xn_q8, num_blocks, t / kQ8ActTileTokens, kb);
+  const std::size_t tl = t % kQ8ActTileTokens;
+  tile[((lane >> 4u) * 256) + (tl * 16) + (lane & 15u)] = q;
+  if (lane == 0) {
+    *reinterpret_cast<float*>(tile + kQ8ActScaleOffset + (tl * sizeof(float))) =
+        d;
+  }
+}
+
+struct InjectParts {
+  static constexpr std::uint32_t kMaxParts = 16;
+  const float* parts;
+  std::uint32_t n;
+  float v[kMaxParts];
+
+  __device__ __forceinline__ InjectParts(const float* p, std::uint32_t count)
+      : parts(p), n(count) {
+    if (n - 1 < kMaxParts) {
+#pragma unroll
+      for (std::uint32_t i = 0; i < kMaxParts; ++i) {
+        v[i] = parts[i < n ? i : n - 1];
+      }
+    }
+  }
+
+  __device__ __forceinline__ float Sum() const {
+    float total = Materialize(0.0f);
+    if (n - 1 >= kMaxParts) {
+      for (std::uint32_t i = 0; i < n; ++i) {
+        total += parts[i];
+      }
+      return total;
+    }
+#pragma unroll
+    for (std::uint32_t i = 0; i < kMaxParts; ++i) {
+      if (i < n) {
+        total = Materialize(total + v[i]);
+      }
+    }
+    return total;
+  }
+};
+
 /// grid (tokens, streams): one block owns one residual stream, so the
 /// grouped norm of the next mixer reduces over exactly its own elements.
 /// `XnT` is float for the reference route and __half for the F16 mixer
@@ -469,15 +562,65 @@ __global__ void HcCombineKernel(float* res, const float* block_out,
   __shared__ float shared[32];
   const std::uint32_t t = blockIdx.x;
   const std::uint32_t s = blockIdx.y;
-  float logit = 0.0f;
-  for (std::uint32_t p = 0; p < inject_parts; ++p) {
-    logit +=
-        inject[(static_cast<std::size_t>(t) * streams + s) * inject_parts + p];
-  }
-  const float w = 2.0f * SigmoidF(logit / static_cast<float>(streams));
+  const float* parts =
+      inject + (static_cast<std::size_t>(t) * streams + s) * inject_parts;
   const std::size_t base = (static_cast<std::size_t>(t) * streams + s) * hidden;
   float* dst = res + base;
   const float* src = block_out + static_cast<std::size_t>(t) * hidden;
+  const float* g =
+      gamma == nullptr ? nullptr : gamma + static_cast<std::size_t>(s) * hidden;
+  // A row of up to kHeld elements per thread stays in registers between the
+  // two passes, every read issued up front (a strided loop of loads behind
+  // stores to `res` would wait out each one): the inject partials first, as
+  // the update needs their sum before any row element, then the row at
+  // whole-row indices. Ragged geometries retain the original guarded loop,
+  // so unused lanes do not read residuals another lane may already update.
+  // Same arithmetic, same order.
+  constexpr std::uint32_t kHeld = 10;
+  if (hidden == kHeld * blockDim.x) {
+    const InjectParts inject_sum(parts, inject_parts);
+    float r[kHeld];
+    float b[kHeld];
+    float gv[kHeld];
+#pragma unroll
+    for (std::uint32_t c = 0; c < kHeld; ++c) {
+      const std::uint32_t i = threadIdx.x + c * blockDim.x;
+      r[c] = dst[i];
+      b[c] = src[i];
+      gv[c] = gamma != nullptr ? g[i] : 0.0f;
+    }
+    const float w =
+        2.0f * SigmoidF(inject_sum.Sum() / static_cast<float>(streams));
+    float ss = 0.0f;
+#pragma unroll
+    for (std::uint32_t c = 0; c < kHeld; ++c) {
+      const std::uint32_t i = threadIdx.x + c * blockDim.x;
+      if (i < hidden) {
+        r[c] = r[c] + b[c] * w;
+        dst[i] = r[c];
+        ss = Materialize(ss + r[c] * r[c]);
+      }
+    }
+    if (gamma == nullptr) {
+      return;
+    }
+    ss = BlockSum(ss, shared);
+    const float scale = rsqrtf(ss / static_cast<float>(hidden) + eps);
+#pragma unroll
+    for (std::uint32_t c = 0; c < kHeld; ++c) {
+      const std::uint32_t i = threadIdx.x + c * blockDim.x;
+      if (i < hidden) {
+        const float v = r[c] * scale * gv[c];
+        xn[base + i] = static_cast<XnT>(v);
+        if (xn_q8 != nullptr) {
+          QuantizeQ8TiledLane(v, xn_q8, t, s, i, hidden, streams);
+        }
+      }
+    }
+    return;
+  }
+  const float w = 2.0f * SigmoidF(InjectParts(parts, inject_parts).Sum() /
+                                  static_cast<float>(streams));
   float ss = 0.0f;
   for (std::uint32_t i = threadIdx.x; i < hidden; i += blockDim.x) {
     const float v = dst[i] + src[i] * w;
@@ -489,32 +632,11 @@ __global__ void HcCombineKernel(float* res, const float* block_out,
   }
   ss = BlockSum(ss, shared);
   const float scale = rsqrtf(ss / static_cast<float>(hidden) + eps);
-  const float* g = gamma + static_cast<std::size_t>(s) * hidden;
   for (std::uint32_t i = threadIdx.x; i < hidden; i += blockDim.x) {
     const float v = dst[i] * scale * g[i];
     xn[base + i] = static_cast<XnT>(v);
     if (xn_q8 != nullptr) {
-      // A wave holds one 32-wide block of the row per iteration: quantize
-      // it for the next mixer's W8A8 down projection, K = streams * hidden.
-      float max_abs = fabsf(v);
-      for (int off = 16; off > 0; off >>= 1) {
-        max_abs = fmaxf(max_abs, XorLane(max_abs, off));
-      }
-      const float d = max_abs / 127.0F;
-      const float id = (d != 0.0F) ? (1.0F / d) : 0.0F;
-      const auto q = static_cast<std::int8_t>(roundf(v * id));
-      const std::size_t num_blocks =
-          (static_cast<std::size_t>(streams) * hidden) / 32;
-      const std::size_t kb = (static_cast<std::size_t>(s) * hidden + i) / 32;
-      const std::size_t lane = threadIdx.x & 31u;
-      std::int8_t* tile =
-          Q8ActTile(xn_q8, num_blocks, t / kQ8ActTileTokens, kb);
-      const std::size_t tl = t % kQ8ActTileTokens;
-      tile[((lane >> 4u) * 256) + (tl * 16) + (lane & 15u)] = q;
-      if (lane == 0) {
-        *reinterpret_cast<float*>(tile + kQ8ActScaleOffset +
-                                  (tl * sizeof(float))) = d;
-      }
+      QuantizeQ8TiledLane(v, xn_q8, t, s, i, hidden, streams);
     }
   }
 }
@@ -914,22 +1036,45 @@ __global__ void SmallGemmKernel(const void* w, const float* x, float* out,
   }
   const auto* wrow =
       static_cast<const std::uint8_t*>(w) + RowBytes(type, k) * row;
+  // A lane's steps are loaded kSteps at a time so their reads overlap (one
+  // step at a time leaves a decode-sized projection latency-bound); the
+  // steps still accumulate one after another, in order.
+  constexpr unsigned kSteps = tokens <= 2 ? 4 : 2;
+  const std::uint32_t stride = warpSize * 4;
   float acc[tokens] = {};
-  for (std::uint32_t i0 = lane * 4; i0 < k; i0 += warpSize * 4) {
-    float wv[4];
+  for (std::uint32_t i_base = lane * 4; i_base < k; i_base += stride * kSteps) {
+    float wv[kSteps][4];
+    float xv[kSteps][tokens][4];
 #pragma unroll
-    for (unsigned r = 0; r < 4; ++r) {
-      wv[r] = i0 + r < k ? RowElement(wrow, type, i0 + r) : 0.0f;
-    }
-#pragma unroll
-    for (unsigned j = 0; j < tokens; ++j) {
-      const float* xr = x + static_cast<std::size_t>(j) * k + i0;
-      float dot = 0.0f;
+    for (unsigned st = 0; st < kSteps; ++st) {
+      const std::uint32_t i0 = i_base + st * stride;
 #pragma unroll
       for (unsigned r = 0; r < 4; ++r) {
-        dot += wv[r] * (i0 + r < k ? xr[r] : 0.0f);
+        wv[st][r] = i0 + r < k ? RowElement(wrow, type, i0 + r) : 0.0f;
       }
-      acc[j] += dot;
+#pragma unroll
+      for (unsigned j = 0; j < tokens; ++j) {
+        const float* xr = x + static_cast<std::size_t>(j) * k + i0;
+#pragma unroll
+        for (unsigned r = 0; r < 4; ++r) {
+          xv[st][j][r] = i0 + r < k ? xr[r] : 0.0f;
+        }
+      }
+    }
+#pragma unroll
+    for (unsigned st = 0; st < kSteps; ++st) {
+      if (i_base + st * stride >= k) {
+        break;
+      }
+#pragma unroll
+      for (unsigned j = 0; j < tokens; ++j) {
+        float dot = 0.0f;
+#pragma unroll
+        for (unsigned r = 0; r < 4; ++r) {
+          dot += wv[st][r] * xv[st][j][r];
+        }
+        acc[j] = Materialize(acc[j] + dot);
+      }
     }
   }
 #pragma unroll
@@ -2494,6 +2639,29 @@ __global__ void MoeEpilogueKernel(const float* expert_out, const float* weights,
   const std::uint32_t t = blockIdx.x;
   const std::uint32_t i = blockIdx.y * blockDim.x + threadIdx.x;
   if (i >= dim) {
+    return;
+  }
+  constexpr std::uint32_t kMaxSlots = 16;
+  if (k <= kMaxSlots) {
+    const float* rows = expert_out + static_cast<std::size_t>(t) * k * dim + i;
+    float w[kMaxSlots];
+    float v[kMaxSlots];
+#pragma unroll
+    for (std::uint32_t s = 0; s < kMaxSlots; ++s) {
+      w[s] = s < k ? weights[t * k + s] : 0.0f;
+      v[s] = s < k ? rows[static_cast<std::size_t>(s) * dim] : 0.0f;
+    }
+    const std::size_t idx = static_cast<std::size_t>(t) * dim + i;
+    const float sh = shared_out[idx];
+    const float g = gate[static_cast<std::size_t>(t) * gate_stride];
+    float acc = Materialize(0.0f);
+#pragma unroll
+    for (std::uint32_t s = 0; s < kMaxSlots; ++s) {
+      if (s < k) {
+        acc = Materialize(acc + w[s] * v[s]);
+      }
+    }
+    out[idx] = acc + SigmoidF(g) * sh;
     return;
   }
   float acc = 0.0f;
@@ -4360,7 +4528,13 @@ void HcMixEpilogue(const float* xn, const float* gate, const float* inject_w,
                    float* mixed, float* inject, std::uint32_t n_tokens,
                    std::uint32_t hidden, std::uint32_t streams,
                    hipStream_t stream) {
-  hipLaunchKernelGGL(HcMixEpilogueKernel, dim3(n_tokens, Blocks(hidden)),
+  if (streams == 4) {
+    hipLaunchKernelGGL(HcMixEpilogueKernel<4>, dim3(n_tokens, Blocks(hidden)),
+                       dim3(kThreads), 0, stream, xn, gate, inject_w, mixed,
+                       inject, hidden, streams);
+    return;
+  }
+  hipLaunchKernelGGL(HcMixEpilogueKernel<0>, dim3(n_tokens, Blocks(hidden)),
                      dim3(kThreads), 0, stream, xn, gate, inject_w, mixed,
                      inject, hidden, streams);
 }
