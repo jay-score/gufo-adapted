@@ -75,3 +75,15 @@ the same runtime assets as the baseline.
 Remaining mechanisms and final checks are in progress. Final checks cover normal
 prefill, state/rejection/rollback, snapshots and matched release timings. Linux
 execution remains outstanding until recorded.
+
+### Branch-free Q4 scales
+
+The final combined helper retains both Q4 scale packings. Fresh production and
+operator builds pass, with projection and routed-WMMA checks passing. All 696
+matched full-logit rows and the six per-schedule perplexities remain exact.
+The separate integer packing check covers 8,072 cases and four sub-block indices;
+compiled operator checks provide the actual GPU validation.
+
+Artifacts: `q4-scales-quality/`, `q4-scales-operators.log`,
+`q4-scales-comparison.json`, `q4-scale-packing.json` and `q4-scales.patch`.
+The preserved candidate is `baseline-bin/gufo-q4-scales.exe`.

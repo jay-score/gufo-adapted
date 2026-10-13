@@ -37,6 +37,26 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-13 — Branch-free Flash-Next Q4 scale reads
+
+- Source: [gufo-org/gufo@a17f9ea148de29a6b2b95afed89a5411c530f799](https://github.com/gufo-org/gufo/commit/a17f9ea148de29a6b2b95afed89a5411c530f799)
+  and [gufo-org/gufo@d1a8a8e26311b366a8cfa374af9db59cf1e3be3e](https://github.com/gufo-org/gufo/commit/d1a8a8e26311b366a8cfa374af9db59cf1e3be3e)
+  (PR #518).
+- Local: commit introducing this entry.
+- Adaptation: reuse the final combined integer scale helper for scalar and
+  grouped Q4_K dots, including existing wave64 callers. Keep the fork's native
+  IQ expert paths, tensor encodings and projection dispatch. No routing changes.
+- Areas: Flash-Next `mmq/vecdotq.hpp`.
+- Validation: fresh Windows production/operator builds pass; projection and
+  routed-WMMA operator tests pass. All 696 matched complete logit rows and
+  per-schedule perplexities match the `ab4d98189a6d` baseline across IQ4_XS and
+  UD-Q4_K_XL. A separate CPU algebra check covers all 256 byte values in each
+  scale-byte position plus 5,000 random packings (8,072 cases × four sub-blocks);
+  this supplements the compiled-kernel checks. Normal-prefill/native state,
+  matched timings and Linux execution remain pending; see the
+  [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+- Status: retained in the implementation worktree pending final qualification.
+
 ### 2026-10-13 — Flash-Next DPP wave transport
 
 - Source: [gufo-org/gufo@28b3c03b43f6951a5d13c2031cf1b6ced1ae6b52](https://github.com/gufo-org/gufo/commit/28b3c03b43f6951a5d13c2031cf1b6ced1ae6b52)
