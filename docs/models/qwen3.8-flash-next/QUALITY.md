@@ -44,6 +44,36 @@ embedding bytes but do not resolve this gap. [Evidence](artifacts/vision-parity.
 
 ## Reproduce
 
+### Windows PR #518 local decode kernels
+
+October 13, 2026: stages 0/1 on native Windows/gfx1151 with TheRock 10.0.0,
+unchanged compiler/dependency versions, UD-IQ4_XS and UD-Q4_K_XL targets and
+the shared Q8_0 MTP sidecar. The preserved original `ab4d98189a6d` and final
+kernel build `76656a5befc1` retain **1,236 identical complete target-logit rows**:
+696 fixed-corpus scalar/verification/p8 hashes and 540 byte-identical normal
+prefill/continuation rows through 4096 tokens. Mean NLL and perplexity are exact
+within each schedule/format. All **128 fixed MTP stage hashes**, including
+16 complete vocabulary rows, also match; full/ragged catch-up through 2048,
+isolated batching and image-ID controls pass. The Q4 independent scalar MTP
+audit passes unchanged numerical limits.
+
+All 15 CPU/GPU operators pass, including wave64 and native IQ paths. Both
+formats pass session, persistent snapshot, 105-prefix rollback and EOS suites,
+with graph replay, private C2/C4/C6/C8 state/RNG, sampled rejection/residual
+correction, 23 serving sampler strategies, request budgets, cancellation and
+cache replay. Rollback also passes with Windows tuning disabled. The compatible
+BF16 projector and two 256×256 fixtures retain all 24 complete-vector hashes
+and perplexities for IQ4_XS, including partial-image/cancelled and seeded replay.
+
+Two baseline gaps remain: the original IQ4_XS independent MTP attention audit
+has relative RMS **0.0093689** against **0.002**; the Q4 two-image MTP stage-2
+cached/cold greedy/seeded decode assertion fails on both original and candidate.
+All 20 Q4 image vectors captured before that assertion retain identical hashes
+and perplexities, but full Q4 image replay remains unqualified. Assertions and
+limits were not relaxed. These are fork-consistency checks, not new conversion
+or encoder qualification. Linux execution and GPU timeline profiling are unrun.
+[Commands, identities and qualification scope](../../plans/decode-kernels-pr518-stages01.md).
+
 ### Windows prefill spill regression
 
 October 7, 2026: TheRock 10.0.0/clang 23, UD-IQ4_XS and shared Q8_0 MTP,
