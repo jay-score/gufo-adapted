@@ -53,8 +53,8 @@ matched-build consistency checks, not new model-conversion qualification.
 | IQ4_XS | 11.731620 | 11.731620 | 12.379730 | 1.2938102451945588 |
 | UD-Q4_K_XL | 11.318354 | 11.318354 | 11.757455 | 1.1907444613614468 |
 
-Timing controls and implementation validation are in progress. Results below
-will distinguish completed checks from remaining qualification.
+The completed numerical/state checks and release timing controls are recorded
+below. Baseline failures remain qualification gaps rather than relaxed limits.
 
 ## Stage 1 decisions and validation
 
@@ -72,9 +72,8 @@ Artifacts: `dpp-quality/`, `dpp-operators.log`, `dpp-resources.log`,
 directory. The candidate is preserved as `baseline-bin/gufo-dpp.exe` beside
 the same runtime assets as the baseline.
 
-Remaining mechanisms and final checks are in progress. Final checks cover normal
-prefill, state/rejection/rollback, snapshots and matched release timings. Linux
-execution remains outstanding until recorded.
+The complete retained group receives normal-prefill, state/rejection/rollback,
+snapshot and matched release checks below. Linux execution remains unrun.
 
 ### Branch-free Q4 scales
 
@@ -152,3 +151,143 @@ variants finds zero scratch/spills (maximum 150 VGPRs). Artifacts:
 `scatter-quality/`, `scatter-operators.log`, `scatter-comparison.json`,
 `final-resources.log` and `final-decode-resources.json`. The complete release
 candidate is preserved as `baseline-bin/gufo-final.exe`.
+
+## Final numerical and state checks
+
+The final kernel commit is `76656a5befc12b2a9171895654c24c4a2524a42a`.
+Fresh production and assertion-enabled native/probe/operator builds use the
+same pinned toolchain. The preserved production candidate reports
+`gufo version 76656a5befc1`, SHA-256
+`8a3bb7517c72c7f6a2faa63dc42610d2ec32e0ea6e4b85c2a09f657ff480d9cf`.
+The baseline SHA-256 is
+`32f84f70f1cafa51597acd7a57560360fc07498ead7e9687825a76b5d5d970d5`.
+Runtime DLLs and ROCm assets remain together with the preserved binaries.
+
+- All 15 final Flash-Next CPU/GPU operators pass, including wave64 routed and
+  native IQ controls. The 57-kernel resource guard and ten extraction fixtures
+  pass; 83 inspected decode variants have zero scratch/spills.
+- Both formats retain all 696 teacher-forced full-row hashes and six
+  per-schedule perplexities. The 540 normal-prefill rows also match byte for
+  byte, with exact mean NLL and perplexity. Total: 1,236 unchanged target rows.
+- All 128 fixed MTP stage hashes match the original rebuilt baseline, including
+  16 complete vocabulary rows. Isolated batching, image-ID and full/ragged
+  catch-up comparisons pass through 2048 rows. UD-Q4_K_XL also passes the
+  complete independent scalar MTP audit with unchanged limits.
+- Both original and candidate formats pass native session, persistent snapshot,
+  rollback and EOS checks. Coverage includes C2/C4/C6/C8 private state/RNG,
+  sampled rejection and residual correction, graph replay, 23 serving sampler
+  strategies, request budgets, cancellation and cache replay. Each candidate
+  passes 105 rollback prefixes/trunk continuations with normal Windows tuning
+  and separately with `GUFO_PLATFORM_TUNING=none`.
+- With the compatible BF16 projector and two synthetic 256×256 images, IQ4_XS
+  passes live/cold/snapshot/partial-image/cancelled continuation and greedy/seeded
+  replay. All 24 complete-vector hashes and perplexities match the baseline.
+
+Two additional baseline limitations remain explicit. The original IQ4_XS
+independent MTP attention audit fails relative RMS 0.0093689 against 0.002.
+The UD-Q4_K_XL two-image fixture fails its MTP stage-2 cached-versus-cold
+greedy/seeded decode assertion on both original and candidate builds. All 20
+complete-vector hashes and perplexities captured before that assertion match
+exactly; the full Q4 image replay suite is unqualified. No assertion or numerical
+limit was relaxed. These checks establish consistency with the original fork;
+they do not resolve its independent model/encoder quality gaps.
+
+Linux build/CPU/GPU execution remains unrun. Nix and rocprofv3 are unavailable
+on this host, so GPU timeline/launch-count profiling is also missing. Resource
+metadata and unprofiled wall timings do not replace those checks.
+
+Artifacts: `final-build-identities.json`, `final-comparison.json`,
+`final-quality/`, `final-operators.log`, `final-mtp-*.log`,
+`final-image-comparison.json`, `baseline-image-*.log`, `final-image-*.log` and
+`final-rollback-none-*.log` under ignored `build/pr518/`.
+
+## Release measurements
+
+One complete ABBA sequence per quantization records two baseline and two
+candidate runs. This bounded start follows the kernel workflow's repeat-only-
+to-resolve-noise rule; it replaces the review plan's proposed four full rounds.
+Flagged cells receive focused paired repeats before a retention decision.
+Builds, GPU tests and profilers run outside timing phases; model jobs are
+serialized. The early IQ4 CLI pilot remains raw evidence, excluded from the
+paired results. Its queued continuation was stopped before any HTTP work.
+
+CLI controls use pp2048/tg128 at d0/d32768, greedy seed 518, adaptive MTP max7
+and a max1 fixed-width control. Verbose generated-token hashes and draft counts
+are retained. HTTP uses context 4096, four sessions, thinking off, greedy seed
+518, a 128-output budget and private 2 GiB RAM/disk caches. Each C1/C2/C4 shape
+receives a full-request warmup. Per-request phase timings, completed counts,
+draft statistics, response hashes and observed SSE content-chunk gaps are kept.
+Identical concurrent peers are compared by latency rank, including the worst
+peer; their admission order is variable and every raw result remains available.
+
+The functional controls include streaming tool cancellation with cached/cold
+replay assertions, a one-output continuation, a two-output tool-history turn and
+disk restart. Restart must report a disk hit and positive cached tokens. The
+recorded disk tail reuses 1751 tokens, prefills 260 new tokens and emits six
+tokens before EOS (budget 16). These are local representative controls, not
+copies of upstream's private failed fixtures. Individual losses exceeding both
+5% and 3 ms remain review flags; throughput gains cannot hide them.
+
+### Measured decode result
+
+These are median rates from two release runs per build, at each mode/depth.
+The actual formats/artifacts/settings above are authoritative. Historical
+Linux/reference benchmark tables are unchanged.
+
+| Format / mode | Depth | Baseline tg128 (tok/s) | Candidate | Gain |
+| --- | ---: | ---: | ---: | ---: |
+| IQ4_XS AR | 0 | 27.35 | 28.03 | +2.5% |
+| IQ4_XS AR | 32768 | 25.15 | 26.16 | +4.0% |
+| IQ4_XS MTP | 0 | 42.45 | 43.34 | +2.1% |
+| IQ4_XS MTP | 32768 | 65.31 | 65.41 | +0.2% |
+| UD-Q4_K_XL AR | 0 | 27.89 | 28.87 | +3.5% |
+| UD-Q4_K_XL AR | 32768 | 25.52 | 26.87 | +5.3% |
+| UD-Q4_K_XL MTP | 0 | 35.95 | 38.44 | +6.9% |
+| UD-Q4_K_XL MTP | 32768 | 66.48 | 68.35 | +2.8% |
+
+All CLI generated-token hashes and HTTP response hashes match, with matching
+prompt/cache/prefill/completed-token counts. Adaptive draft counts are recorded
+separately. The max1 fixed-width controls also retain hashes, with tg gains
+1.2–4.6%. CLI prefill control medians vary from -1.3% to +1.3%. The near-zero
+IQ4 deep-MTP result is not claimed as a repeatable improvement.
+
+### Functional timing limits and retention status
+
+**The full functional-timing gate is not cleanly qualified.** The implementation
+and Windows numerical/state gates are complete; the group remains in this
+isolated review worktree. It is not a blanket recommendation to land every
+specialization based on decode throughput alone.
+
+The primary quartets flag 16 of 244 latency/rate cells at the unchanged 5% and
+3 ms threshold. Focused ABBA repeats use four distinct histories per server,
+first and steady one-output continuations, two-output tool turns, repeated C4
+cohorts and streaming controls. All focused outputs/work counts match. Most
+initial scalar short-turn losses do not reproduce in their pooled controls,
+but 17 of 320 focused cells remain flagged, including per-history cells.
+Five primary flags exceed the threshold in both adjacent pairs; two focused
+per-history IQ4 MTP inter-token gaps do likewise. These flags are retained in
+the artifact and are not averaged away or relabeled as passes.
+
+Stream logs separate server TTFT from client first-content delivery. Several
+remaining first-token differences occur in cache restore/admission or client
+delivery, with zero new prompt work. Those paths are unchanged by the kernel
+port. This identifies where the time occurs; it does not prove every observed
+loss is harmless noise. Native GPU timeline/host-cache profiling is unavailable
+here, so a clean broad functional-latency claim remains outstanding.
+
+A final IQ4 MTP ablation uses preserved original, DPP-only, pre-Q8 cached-norm
+and final binaries on the same four short histories. Final decode phases are
+46.3–47.5 ms against original 47.9–48.9 ms. The history-2 total token gap is
+127.4 ms original, 139.7 ms DPP-only, 130.4 ms pre-Q8 and 139.0 ms final; the
+late Q8 changes are not uniquely isolated as the cause. This bounded ablation
+does not establish a successful specialization-level latency gate.
+
+No inference tolerance, assertion, runtime format or public performance switch
+was changed to obtain these results. No main-checkout change, GUI deployment,
+push or new PR was performed. The preserved baseline remains available for
+rollback and further matched checks.
+
+[Portable identities, full row hashes and timing evidence](../models/qwen3.8-flash-next/artifacts/decode-pr518-stages01.json)
+retain primary/focused comparisons, every review flag and the ablation requests.
+Exact command argv/environment, logs, full-vector captures and runtime assets
+remain in ignored `build/pr518/`.
