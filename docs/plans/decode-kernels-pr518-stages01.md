@@ -58,7 +58,20 @@ will distinguish completed checks from remaining qualification.
 
 ## Stage 1 decisions and validation
 
-Pending completion. Each retained mechanism requires its operator checks and
-an exact matched-token comparison before its focused implementation commit.
-Final checks cover normal prefill, state/rejection/rollback, snapshots and
-matched release timings. Linux execution remains outstanding until recorded.
+### DPP transport
+
+Fresh production and operator builds pass. All 15 model/operator tests pass.
+The IQ4_XS and UD-Q4_K_XL teacher-forced captures retain all 696 complete raw
+vocabulary rows and exact per-schedule perplexities. The 57-kernel prefill
+resource contract passes. Additional metadata inspection of 38 decode/attention
+variants finds zero scratch or spills in both builds; several variants use
+fewer VGPRs. This resource result is not a speedup measurement.
+
+Artifacts: `dpp-quality/`, `dpp-operators.log`, `dpp-resources.log`,
+`dpp-decode-resources.json`, `dpp.patch` and `dpp-binary.json` under the evidence
+directory. The candidate is preserved as `baseline-bin/gufo-dpp.exe` beside
+the same runtime assets as the baseline.
+
+Remaining mechanisms and final checks are in progress. Final checks cover normal
+prefill, state/rejection/rollback, snapshots and matched release timings. Linux
+execution remains outstanding until recorded.
