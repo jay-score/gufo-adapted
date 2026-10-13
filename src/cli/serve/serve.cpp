@@ -915,6 +915,19 @@ int RunServe(std::span<const char* const> args) {
     // and the `queue_budget` line is emitted now so an absolute threshold
     // (`--log-level=error`) suppresses this INFO startup diagnostic with the
     // rest of the boot sequence instead of leaking it before SetLevel ran.
+#ifdef _WIN32
+    // The measured queue policy and cross-process census use Linux KFD.
+    // Missing sysfs on Windows says nothing about available hardware queues;
+    // retain the operator's setting or the runtime default until qualified.
+    const char* queue_cap = std::getenv("GPU_MAX_HW_QUEUES");
+    server::Logger::Info(
+        "gpu",
+        "event=queue_budget kind=" + subcommand +
+            " observed=unknown budget=unknown expected_max=unknown cap=" +
+            (queue_cap != nullptr && *queue_cap != '\0' ? "operator"
+                                                        : "runtime") +
+            " census=unavailable");
+#else
     const auto profile = subcommand == "llm" ? diagnostics::QueueProfile::kText
                          : (subcommand == "tts" || subcommand == "asr")
                              ? diagnostics::QueueProfile::kAudio
@@ -928,6 +941,7 @@ int RunServe(std::span<const char* const> args) {
     if (plan.may_exceed_budget) {
       server::Logger::Warn("gpu", diagnostics::DescribeQueuePressure(plan));
     }
+#endif
     // Deliberately emitted before the model opens: a load that fails or hangs
     // never reaches the INFO `event=listening` banner in HttpServer::run, so
     // this is the only record of the resolved options and the armed threshold.

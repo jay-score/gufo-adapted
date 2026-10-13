@@ -5,8 +5,8 @@ Stage one, the transport/host increments, and persistence foundations in the
 engine's **CPU CLI and selected host/server checks** natively on Windows x64.
 This is an integration milestone, not a supported Windows inference release.
 Native HIP builds, Windows GPU-budget admission, pinned-memory/transfer checks,
-and selected Flash-Next live checks now pass; wider runtime qualification and
-the GUI remain pending.
+and selected Flash-Next live checks now pass. The Windows queue-policy boundary
+is implemented; wider runtime qualification and the GUI remain pending.
 Windows CPU CI is implemented,
 with its first hosted run pending. Disk checkpoint persistence is deferred from
 the initial port. GGUF digest caching and private content tracing are enabled.
@@ -64,7 +64,7 @@ LLVM builds instead use the OpenMP library and DLL shipped with that compiler.
 ## Windows CPU CI
 
 The separate [Windows workflow](../.github/workflows/windows-cpu.yml) runs the
-bounded `windows-cpu` build and all 14 checks on `windows-2025`, on pull requests
+bounded `windows-cpu` build and all 15 checks on `windows-2025`, on pull requests
 and pushes to `main` or `feat/windows-cpu-compat`, and through manual dispatch.
 It retains build/configuration logs and CTest results; it does not publish
 executables. The existing Linux CI workflow is unchanged.
@@ -265,8 +265,8 @@ Windows CI, HIP, and the GUI remain pending.
 ## Persistence foundations and unresolved cache contract
 
 Validated on 2026-10-12 on local NTFS with the same native toolchain, building on
-host-integration commit `e20cc86a`. The bounded preset now contains **14 checks**,
-including `win32_filesystem_test`. All pass. This increment qualifies private
+host-integration commit `e20cc86a`. That increment's bounded preset contains
+**14 checks**, including `win32_filesystem_test`. All pass. This increment qualifies private
 file operations, tracing, and identity caching; it does **not** complete the
 checkpoint-persistence increment.
 
@@ -486,3 +486,66 @@ hashes, CMake toolchain configuration, and model file sizes/modification times.
 Full model-file hashes were not collected. Formatting and documentation checks
 pass. No production source change was needed, and the earlier inconclusive
 performance qualification remains unchanged.
+
+## Windows GPU queue policy
+
+The server's automatic queue planning is Linux-only. Its KFD cross-process
+census and measured text/audio caps do not establish a Windows policy: absent
+`/sys` files are not evidence that the GPU has no other queues. A 14-line Windows
+branch at the server's sole planning call leaves `GPU_MAX_HW_QUEUES` untouched.
+An inherited setting remains the operator's responsibility; otherwise HIP uses
+its runtime default. No Windows tuning option or duplicate planner is added.
+
+At INFO level Windows startup reports, for example:
+
+```text
+event=queue_budget kind=llm observed=unknown budget=unknown expected_max=unknown cap=runtime census=unavailable
+```
+
+A nonempty inherited setting reports `cap=operator`. The line intentionally
+does not predict resident queues, apply Linux's eight-queue budget, or issue
+Linux's power/clock warning. Help, invalid invocations and quieter log thresholds
+still suppress the startup diagnostic. Linux's queue implementation, measured
+caps and tests are unchanged.
+
+The new Windows-only `win32_queue_policy_test` exercises all five server
+modalities with absent, empty, numeric and nonnumeric inherited values, all four
+log thresholds, help and invalid addresses before model loading. It passes in
+the bounded CPU preset, which now has **15 checks**, all passing in 17.22 seconds.
+The unchanged Linux planner's synthetic KFD fixture test also passes when built
+on Windows; this is not a Linux-hosted CI qualification.
+The queue-policy test passes against the native HIP executable too, in 13.96
+seconds. Formatting, documentation and dependency checks pass.
+
+```powershell
+ctest --preset windows-cpu
+ctest --test-dir build/windows-gpu -R '^win32_queue_policy_test$' --output-on-failure
+```
+
+Selected Flash-Next AR/MTP live checks pass against the preceding WDDM binary
+using the supplied four-shard Q4_K_XL model, shared Q8 MTP sidecar and BF16
+projector, at 4,096 context tokens, one session and 2 GiB RAM cache. The unchanged
+`content-preserve0-sampled0` functional case covers seven generation requests,
+including two interrupted streams, RAM resume/replay and third-turn reuse.
+Seeded output, token counts and expected prefill/cache work match exactly; AR
+does not draft and MTP performs actual drafts. These checks also pass with an
+explicit inherited `GPU_MAX_HW_QUEUES=2` on the new binary.
+
+Per-request/phase timing comparisons retain the strict 5%/3 ms thresholds.
+Both default-policy pairs per mode, unchanged-baseline controls and the explicit
+operator-setting diagnostic use the same `gufo.exe` path and fresh processes.
+AR cancellation-handoff queue wait spans 15.05–38.52 ms on unchanged baseline
+controls and 27.93–38.26 ms on the default-policy candidate. The flagged MTP
+snapshot spans 7.55–16.16 ms on baseline controls and 15.12–18.43 ms on the
+candidate. Controls reproduce the stalls; observations overlap. No confirmed
+timing regression is established, but both modes remain **inconclusive and
+unqualified for performance**. The operator-setting diagnostic does not replace
+qualification of the runtime default or establish a Windows tuning policy.
+
+Evidence is retained under `build/windows-gpu/queues-20261012-202345`: build/CTest
+logs, commands, complete server and request measurements, all comparisons,
+source patch, binary hashes, CMake configuration and model size/mtime identity.
+Full model-file hashes were not collected. Windows queue residency, idle power,
+multiple GPU processes, broader model quality and other modalities' inference
+throughput remain unqualified. Linux-hosted checks remain pending. This change
+does not enable disk checkpoint persistence.

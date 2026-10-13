@@ -159,7 +159,11 @@ The official server also automatically plans GPU queues from Linux KFD sysfs.
 On Windows, missing sysfs is not evidence that no other process has queues.
 Keep that measured Linux policy on Linux; preserve explicit operator settings
 on Windows and use the runtime default until Windows measurements justify a
-policy. Report unavailable Linux diagnostics honestly.
+policy. Report unavailable Linux diagnostics honestly. This boundary is now
+implemented at the server's sole queue-planning call: Windows leaves
+`GPU_MAX_HW_QUEUES` untouched and logs unknown census/budget/expected counts.
+The Linux planner and its measured caps remain unchanged. See the
+[queue-policy record](../WINDOWS.md#windows-gpu-queue-policy).
 
 ### Tests and build targets
 
@@ -257,6 +261,9 @@ keep the existing `windows-port` branch available throughout qualification.
    the adapter selection, scope, native checks, and retained timing controls.
    The [pinned-memory record](../WINDOWS.md#windows-pinned-backing-and-transfers)
    identifies the native allocation, ownership and copy checks and their limits.
+   The Windows queue-policy boundary is implemented; all five server modalities
+   preserve inherited queue settings or the runtime default, without applying
+   the Linux KFD-based planner.
 
 4. **Qualification and maintenance handoff.** Run the official Linux hosted
    checks and formatting checks, Windows CPU checks, affected numerical-quality

@@ -113,4 +113,8 @@ if (BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/platform/win32_server_shutdown_test.py
       $<TARGET_FILE:http_server_test>)
   set_tests_properties(win32_server_shutdown_test PROPERTIES LABELS "cpu;windows;server" TIMEOUT 30)
+  add_test(NAME win32_queue_policy_test
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/platform/win32_queue_policy_test.py
+      $<TARGET_FILE:gufo>)
+  set_tests_properties(win32_queue_policy_test PROPERTIES LABELS "cpu;windows;server;diagnostics" TIMEOUT 30)
 endif()
