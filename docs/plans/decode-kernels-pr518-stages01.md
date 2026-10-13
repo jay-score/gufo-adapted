@@ -251,6 +251,48 @@ separately. The max1 fixed-width controls also retain hashes, with tg gains
 1.2–4.6%. CLI prefill control medians vary from -1.3% to +1.3%. The near-zero
 IQ4 deep-MTP result is not claimed as a repeatable improvement.
 
+### Supplementary batched and repetitive timing
+
+The primary HTTP series stops at C4. The Q8 reduce-scatter changes batched
+dispatch for two through eight inputs, and the review plan also asks for a
+repetitive MTP workload, so a second ABBA sequence per quantization adds them.
+Each mode uses a fresh 8-session server with the primary context, sampling,
+budget and private caches. Cohorts of identical peers run once to warm, then
+once for measurement. The mixed case reuses the primary prose/code prompt at
+C6/C8. The repetition case copies a fixed 40-function Python module at
+C1/C4/C8, with 97–99% MTP draft acceptance. C6/C8 execute as `batched-w6` and
+`batched-w8`. Harness: `extra_coverage.py`; results: `extra-comparison.json`.
+
+| Format / mode | Mixed C6 | Mixed C8 | Repetition C1 | Repetition C4 | Repetition C8 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| IQ4_XS AR | +3.5% | +3.7% | +3.9% | +3.5% | +4.2% |
+| IQ4_XS MTP | +2.9% | +3.8% | +2.4% | +6.9% | +3.3% |
+| UD-Q4_K_XL AR | +5.3% | +3.4% | +0.6% | +2.0% | +4.9% |
+| UD-Q4_K_XL MTP | +4.1% | +6.7% | +1.1% | +6.4% | +5.9% |
+
+These are median aggregate completed-token rates per cohort. Every response
+hash matches. Prompt, cached and completed counts and execution plans also
+match. Adaptive accepted-draft totals vary between runs of both builds.
+Mean inter-token latency is lower on the candidate in all 20 cohorts.
+
+The gate flags 37 of 452 cells; two exceed it in both adjacent pairs: IQ4 MTP
+repetition C4 and Q4 AR mixed C8 best-peer first token. Twenty-eight flags are
+first-token cells. Every measured request is a cache hit with zero prefill
+tokens, and the server restores peers one at a time, synchronizing the stream
+and copying a 172–179 MB snapshot for each, so the worst peer's first token
+follows the serialized restore sum. In all 20 cohorts, the candidate's change
+in worst-peer first-token time equals its change in summed restore time within
+2.0 ms. Restore sums vary in both directions between runs of one build, by up
+to 81 ms. The restore copy and admission code is unchanged by this port.
+Best-peer first-token cells also absorb client submission skew; for example,
+the baseline's last C4 peer arrived 11–14 ms late in both runs. The other nine
+flags are maximum inter-token gaps. In Q4 AR repetition C1/C4, one candidate
+run (3b) has a 58–67 ms stall, while the other candidate run beats both
+baseline runs. In IQ4 MTP repetition C4, all peers share one stall of 192 ms
+in both candidate runs, between the baseline runs' 164 and 199 ms. This
+attributes the first-token flags to restore/admission variance; it does not
+replace GPU timeline profiling.
+
 ### Functional timing limits and retention status
 
 **The full functional-timing gate is not cleanly qualified.** The implementation
@@ -265,8 +307,9 @@ cohorts and streaming controls. All focused outputs/work counts match. Most
 initial scalar short-turn losses do not reproduce in their pooled controls,
 but 17 of 320 focused cells remain flagged, including per-history cells.
 Five primary flags exceed the threshold in both adjacent pairs; two focused
-per-history IQ4 MTP inter-token gaps do likewise. These flags are retained in
-the artifact and are not averaged away or relabeled as passes.
+per-history IQ4 MTP inter-token gaps do likewise. The supplementary C6/C8 and
+repetition series adds 37 of 452 flagged cells, two in both pairs. These flags
+are retained in the artifact and are not averaged away or relabeled as passes.
 
 Stream logs separate server TTFT from client first-content delivery. Several
 remaining first-token differences occur in cache restore/admission or client
@@ -288,6 +331,7 @@ push or new PR was performed. The preserved baseline remains available for
 rollback and further matched checks.
 
 [Portable identities, full row hashes and timing evidence](../models/qwen3.8-flash-next/artifacts/decode-pr518-stages01.json)
-retain primary/focused comparisons, every review flag and the ablation requests.
-Exact command argv/environment, logs, full-vector captures and runtime assets
-remain in ignored `build/pr518/`.
+retain primary/focused/supplementary comparisons, every review flag and the
+ablation's per-request timings, counts and output hashes. Request bodies, raw
+responses, exact command argv/environment, logs, full-vector captures and
+runtime assets remain in ignored `build/pr518/`.
