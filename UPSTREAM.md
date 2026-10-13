@@ -37,6 +37,30 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-13 — Flash-Next decode load scheduling
+
+- Source: [gufo-org/gufo@6e52e0f8a30fa609b8e2a0a817c2e48b2875a963](https://github.com/gufo-org/gufo/commit/6e52e0f8a30fa609b8e2a0a817c2e48b2875a963),
+  [19cbf32fabea093c161fc018f9c36a0bfba8db0a](https://github.com/gufo-org/gufo/commit/19cbf32fabea093c161fc018f9c36a0bfba8db0a),
+  [773fcfb3147876c9cc52d8d53954f57c142d5544](https://github.com/gufo-org/gufo/commit/773fcfb3147876c9cc52d8d53954f57c142d5544),
+  and only the materialization helper from
+  [11827a9a809cab06ab447054b56c122770b3f25b](https://github.com/gufo-org/gufo/commit/11827a9a809cab06ab447054b56c122770b3f25b)
+  (PR #518).
+- Local: commit introducing this entry.
+- Adaptation: preload bounded small-GEMM, HC and MoE operands while keeping
+  the original product/add order and existing output layouts. Specialize the
+  residual register cache to complete 2560-element rows; ragged shapes keep
+  guarded reads instead of clamped unused residual reads. Preserve null-gamma
+  handling and the Windows HC-down/SiLU route. No producer Q8_1 fusion.
+- Areas: Flash-Next `kernels.hip.cpp` and projection operator fixtures.
+- Validation: fresh Windows production/operator builds and four affected GPU
+  tests pass, including independent projection/HC formulas and allocation-ended
+  ragged F32 rows. Both quantizations retain all 696 matched full-logit rows and
+  exact perplexity. All 57 prefill resource-contract kernels pass; 32 inspected
+  changed-family variants have zero scratch/spills. Final native/prefill/timing
+  qualification and Linux execution remain pending; see the
+  [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+- Status: retained in the implementation worktree pending final qualification.
+
 ### 2026-10-13 — Branch-free Flash-Next Q4 scale reads
 
 - Source: [gufo-org/gufo@a17f9ea148de29a6b2b95afed89a5411c530f799](https://github.com/gufo-org/gufo/commit/a17f9ea148de29a6b2b95afed89a5411c530f799)

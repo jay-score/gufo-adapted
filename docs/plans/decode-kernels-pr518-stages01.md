@@ -87,3 +87,19 @@ compiled operator checks provide the actual GPU validation.
 Artifacts: `q4-scales-quality/`, `q4-scales-operators.log`,
 `q4-scales-comparison.json`, `q4-scale-packing.json` and `q4-scales.patch`.
 The preserved candidate is `baseline-bin/gufo-q4-scales.exe`.
+
+### Small-kernel load scheduling
+
+HC, MoE and small projections issue bounded reads ahead of the unchanged sums.
+The residual register cache is limited to complete 2560-element rows; other
+geometries retain guarded reads. The existing fused HC-down/SiLU route remains
+in place. Only the materialization helper is reused from the producer-fusion
+commit; producer fusion itself is excluded.
+
+Four affected operator tests pass, including the new ragged F32 fixture and
+inputs ending at the allocation boundary for every tested batch width.
+Both quantizations retain all 696 complete matched logit rows and perplexities.
+The 57-kernel prefill resource contract and 32 inspected changed-family variants
+have zero scratch/spills. Artifacts: `loads-quality/`, `loads-operators.log`,
+`loads-comparison.json`, `loads-decode-resources.json`, `loads.patch` and the
+preserved `baseline-bin/gufo-loads.exe`.

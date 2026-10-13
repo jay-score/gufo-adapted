@@ -642,12 +642,15 @@ void CheckSmallProjection(q::WeightType type, unsigned rows, unsigned cols) {
        {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 16U, 31U, 32U, 33U, tokens}) {
     CheckHip(hipMemset(dy, 0xA5, batch.size() * sizeof(float)),
              "small output poison");
-    q::SmallGemm(dw, type, dx, dy, n, rows, cols, nullptr);
+    // Put every ragged shape at the allocation boundary so read-ahead
+    // cannot hide an out-of-range load in an unused input row.
+    const auto skip = std::size_t(tokens - n) * cols;
+    q::SmallGemm(dw, type, dx + skip, dy, n, rows, cols, nullptr);
     CheckHip(hipMemcpy(batch.data(), dy, batch.size() * sizeof(float),
                        hipMemcpyDeviceToHost),
              "small batch output");
-    if (std::memcmp(scalar.data(), batch.data(),
-                    std::size_t(n) * rows * sizeof(float)))
+    if (std::memcmp(scalar.data() + std::size_t(tokens - n) * rows,
+                    batch.data(), std::size_t(n) * rows * sizeof(float)))
       throw std::runtime_error("small projection changes with batch width");
     for (std::size_t i = std::size_t(n) * rows; i < batch.size(); ++i)
       if (std::bit_cast<std::uint32_t>(batch[i]) != 0xA5A5A5A5U)
@@ -834,6 +837,7 @@ int main() {
     CheckRoutedQ8Placement();
     CheckSmallProjection(q::WeightType::kF32, 513, 2560);
     CheckSmallProjection(q::WeightType::kF32, 96, 2560);
+    CheckSmallProjection(q::WeightType::kF32, 7, 131);
     CheckSmallProjection(q::WeightType::kBF16, 129, 2560);
     CheckSmallProjection(q::WeightType::kF16, 7, 131);
     CheckDecodeGrouping(64, 2560);
