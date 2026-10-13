@@ -37,6 +37,23 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-13 — Reduce-scatter for narrow batched Q8 decode
+
+- Source: [gufo-org/gufo@c1f01311318e6c677fd25c268b51a4e94ca324cc](https://github.com/gufo-org/gufo/commit/c1f01311318e6c677fd25c268b51a4e94ca324cc)
+  (PR #518), following the recorded DPP transport and few-row read-ahead.
+- Local: commit introducing this entry.
+- Adaptation: distribute the same descending 32-lane butterfly sums across
+  lanes for two through eight Q8 inputs, including gated projections. Keep
+  scalar dispatch, wide/ragged paths and separate wave64 expert routes intact.
+- Areas: Flash-Next `mmq/common.hpp` and `mmq/mmvq.hip.cpp`.
+- Validation: fresh Windows builds and the projection operator pass with strict
+  scalar/batched equality at widths 1–8 and wide/ragged controls. Both formats
+  retain all 696 complete matched target rows and exact perplexity. The compiled
+  prefill resource guard passes 57 kernels; 83 relevant decode variants have
+  zero scratch/spills. Final native/prefill/timing and Linux remain pending;
+  see the [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+- Status: retained in the implementation worktree pending final qualification.
+
 ### 2026-10-13 — Read ahead for few-row Q8 decode
 
 - Source: [gufo-org/gufo@0aa6f75af25639504a6aaaa14946d6f47f31f3dd](https://github.com/gufo-org/gufo/commit/0aa6f75af25639504a6aaaa14946d6f47f31f3dd)
