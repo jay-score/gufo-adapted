@@ -7,8 +7,8 @@ This is an integration milestone, not a supported Windows inference release.
 Native HIP builds, Windows GPU-budget admission, pinned-memory/transfer checks,
 and selected Flash-Next live checks now pass. The Windows queue-policy boundary
 is implemented; wider runtime qualification and the GUI remain pending.
-Windows CPU CI is implemented,
-with its first hosted run pending. Disk checkpoint persistence is deferred from
+Windows CPU CI is implemented; hosted results and the bounded-fixture correction
+are recorded below. Disk checkpoint persistence is deferred from
 the initial port. GGUF digest caching and private content tracing are enabled.
 
 ## Prerequisites and build
@@ -105,9 +105,23 @@ PowerShell 7.6.6:
   dependency checks pass.
 
 These results use the local host's VS/SDK and existing manifest dependencies.
-The first hosted run, including fresh dependency installation and the runner
-image's VS/SDK, remains pending. Linux, GPU/model, and performance qualification
-are not claimed by this increment.
+Linux, GPU/model, and performance qualification are not claimed by this increment.
+
+The [hosted run at `afb05c1c`](https://github.com/thomas9120/gufo-adapted/actions/runs/38328358834/job/115072200657)
+successfully configured and built, and passed 14 of 15 native checks.
+`win32_compat_test` reached its 30-second timeout. Its four-byte write beyond
+4 GiB used a regular Windows file, requiring allocation/zeroing of the gap and
+a full-file flush. The original test emitted no phase markers, so the hosted
+log cannot establish the exact stalled operation.
+
+The fixture now uses `FSCTL_SET_SPARSE`, retaining the same production
+`pwrite`/`pread`/`fsync` calls, 64-bit offset, logical-size and identity checks.
+It also checks zero-filled hole reads and physical allocation of at most 1 MiB.
+Flushed phase markers identify future stalls. No production filesystem behavior
+or CTest timeout changed. Focused repeats pass locally in 0.03–0.07 seconds;
+the full bounded suite passes. The correction awaits hosted verification.
+Logs are retained under `build/windows-ci/compat-timeout-20261012-204754`, including
+the original hosted artifacts and local build/CTest/format results.
 
 ## Scope and boundaries
 

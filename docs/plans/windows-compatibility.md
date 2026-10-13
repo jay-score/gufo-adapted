@@ -5,8 +5,9 @@ persistence foundations qualified, checkpoint-store port deferred
 on `feat/windows-cpu-compat`. The native Windows CPU CLI builds; the bounded
 preset includes host, HTTP, audio WebSocket, and console-shutdown checks. See
 [Windows status](../WINDOWS.md) for commands, provenance, validation, and
-remaining limitations. Windows CPU CI is implemented; its first hosted run is
-pending. Stage three is in progress: native HIP, WDDM admission, pinned-memory
+remaining limitations. Windows CPU CI is implemented; hosted compilation passes,
+and a bounded-test fixture correction awaits hosted verification. Stage three is
+in progress: native HIP, WDDM admission, pinned-memory
 checks and selected Flash-Next AR/MTP checks pass. Stage four and the GUI remain
 pending. Disk checkpoint persistence is outside the initial port's scope.
 Full GPU/model qualification remains pending.
@@ -233,7 +234,10 @@ keep the existing `windows-port` branch available throughout qualification.
    - **Windows CPU CI (implemented):** a separate workflow automates the
      qualified bounded suite with pinned standalone LLVM and the manifest's
      vcpkg baseline, preserving the existing Linux checks. Local validation
-     precedes the first hosted run.
+     precedes hosted qualification. Hosted compilation and 14 of 15 checks pass;
+     the large-offset compatibility fixture is now sparse to avoid allocating
+     and flushing 4 GiB during the bounded suite. Its timeout correction passes
+     locally; hosted verification remains pending.
 
 3. **Native HIP runtime.** Enable the production Windows build with the fork's
    pinned TheRock 10.0.0 as the initial reference toolchain. Verify its

@@ -1,16 +1,20 @@
 #include <dirent.h>
 #include <fcntl.h>
+#include <io.h>
 #include <spawn.h>
 #include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <windows.h>
+#include <winioctl.h>
 
 #include <array>
 #include <cassert>
 #include <cerrno>
 #include <filesystem>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 
@@ -20,6 +24,7 @@
 int main(int argc, char** argv) {
   if (argc == 2 && std::string(argv[1]) == "child token with spaces")
     return 23;
+  std::cout << "win32_compat_test: spawn/wait\n" << std::flush;
   pid_t child{};
   char token[] = "child token with spaces";
   char* arguments[]{argv[0], token, nullptr};
@@ -28,6 +33,7 @@ int main(int argc, char** argv) {
   int status{};
   assert(waitpid(child, &status, 0) == child);
   assert(WIFEXITED(status) && WEXITSTATUS(status) == 23);
+  std::cout << "win32_compat_test: directory operations\n" << std::flush;
   const auto path = std::filesystem::temp_directory_path() /
                     ("gufo-win32-" + std::to_string(getpid()));
   std::filesystem::remove_all(path);
@@ -54,11 +60,19 @@ int main(int argc, char** argv) {
   assert(file >= 0);
   const int contender = openat(root, "source", O_RDWR);
   assert(contender >= 0);
+  std::cout << "win32_compat_test: locks\n" << std::flush;
   assert(flock(file, LOCK_EX | LOCK_NB) == 0);
   assert(flock(contender, LOCK_EX | LOCK_NB) < 0 && errno == EWOULDBLOCK);
   assert(flock(file, LOCK_UN) == 0);
   assert(flock(contender, LOCK_EX | LOCK_NB) == 0);
   assert(close(contender) == 0);
+  std::cout << "win32_compat_test: sparse large-offset I/O\n" << std::flush;
+  // Exercise 64-bit offsets without zeroing/flushing 4 GiB on hosted disks.
+  // Keep production pwrite/pread/fsync unchanged; only this fixture is sparse.
+  const auto handle = reinterpret_cast<HANDLE>(_get_osfhandle(file));
+  DWORD returned{};
+  assert(DeviceIoControl(handle, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0,
+                         &returned, nullptr));
   constexpr off_t offset = (off_t{1} << 32) + 7;
   const std::array<char, 4> bytes{'g', 'u', 'f', 'o'};
   assert(pwrite(file, bytes.data(), bytes.size(), offset) == 4);
@@ -68,6 +82,14 @@ int main(int argc, char** argv) {
   assert(fsync(file) == 0);
   struct stat before{};
   assert(fstat(file, &before) == 0 && before.st_size == offset + 4);
+  FILE_STANDARD_INFO allocation{};
+  assert(GetFileInformationByHandleEx(handle, FileStandardInfo, &allocation,
+                                      sizeof(allocation)));
+  assert(allocation.AllocationSize.QuadPart <= 1024 * 1024);
+  read_bytes.fill(1);
+  assert(pread(file, read_bytes.data(), read_bytes.size(), offset - 4) == 4);
+  assert((read_bytes == std::array<char, 4>{}));
+  std::cout << "win32_compat_test: rename/enumeration\n" << std::flush;
   assert(gufo_rename_noreplace(root, "source", root, "target") == 0);
   const int replacement =
       openat(root, "source", O_RDWR | O_CREAT | O_EXCL, 0600);
@@ -90,6 +112,7 @@ int main(int argc, char** argv) {
   }
   assert(errno == 0 && found && found_unicode);
   assert(closedir(directory) == 0);
+  std::cout << "win32_compat_test: directory flush/cleanup\n" << std::flush;
   assert(fsync(root) == 0);  // Native writable directory handle flush.
   assert(close(replacement) == 0);
   assert(close(file) == 0);
