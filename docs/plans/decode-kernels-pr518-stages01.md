@@ -140,3 +140,15 @@ width, gated outputs and fallback widths. All 696 matched target logit rows and
 perplexities remain exact. Artifacts: `q8-ahead-quality/`,
 `q8-ahead-operators.log`, `q8-ahead-comparison.json` and the preserved
 `baseline-bin/gufo-q8-ahead.exe`.
+
+### Q8 reduce-scatter
+
+The narrow batched dispatch now distributes the original descending butterfly
+among lanes. The scalar, wide/ragged and wave64 expert routes remain unchanged.
+Fresh builds and strict projection operators pass for gated/ungated widths 1–8
+and wider controls. All 696 complete matched target rows and perplexities remain
+exact. The 57-kernel resource guard passes; inspection of 83 relevant decode
+variants finds zero scratch/spills (maximum 150 VGPRs). Artifacts:
+`scatter-quality/`, `scatter-operators.log`, `scatter-comparison.json`,
+`final-resources.log` and `final-decode-resources.json`. The complete release
+candidate is preserved as `baseline-bin/gufo-final.exe`.
