@@ -37,6 +37,22 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-13 — Read ahead for few-row Q8 decode
+
+- Source: [gufo-org/gufo@0aa6f75af25639504a6aaaa14946d6f47f31f3dd](https://github.com/gufo-org/gufo/commit/0aa6f75af25639504a6aaaa14946d6f47f31f3dd)
+  (PR #518).
+- Local: commit introducing this entry.
+- Adaptation: load twenty lane-local Q8 blocks ahead for complete long rows
+  with one input and at most 64 outputs. Preserve scalar products, FMA order,
+  original reduction and all other dispatch paths. No producer fusion.
+- Areas: Flash-Next `mmq/mmvq.hip.cpp` and projection operator fixtures.
+- Validation: fresh Windows release/operator builds and the expanded projection
+  test pass, including 4×10240 scalar-versus-batched outputs. All 696 complete
+  matched target logit rows and six perplexities remain exact on both formats.
+  Final prefill/native/timing and Linux coverage remain pending; see the
+  [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+- Status: retained in the implementation worktree pending final qualification.
+
 ### 2026-10-13 — Cached Flash-Next norms and MTP row reads
 
 - Source: [gufo-org/gufo@e1b20ba9e11540e817116ae196b51696cc80d71a](https://github.com/gufo-org/gufo/commit/e1b20ba9e11540e817116ae196b51696cc80d71a)
