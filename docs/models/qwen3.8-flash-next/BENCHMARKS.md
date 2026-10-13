@@ -12,10 +12,12 @@ October 13 Windows PR #518 stages 0/1 check: matched pp2048/tg128 release
 quartets give median AR decode gains **+2.5% / +4.0%** for IQ4_XS and
 **+3.5% / +5.3%** for UD-Q4_K_XL at depths 0 / 32768. Adaptive MTP gains
 are **+2.1% / +0.2%** and **+6.9% / +2.8%**, respectively. Full logits,
-perplexity and generated hashes match. First-token and short-gap review flags
-remain; **full functional timing is not cleanly qualified**. These are native
-Windows baseline/candidate comparisons with TheRock 10.0.0, not a refresh of
-the historical Linux/llama.cpp tables below.
+perplexity and generated hashes match. Supplementary HTTP cohorts add
+**+0.6–6.9%** aggregate output at C6/C8 and on a repetitive copy task at
+C1/C4/C8. First-token and short-gap review flags remain; **full functional
+timing is not cleanly qualified**. These are native Windows baseline/candidate
+comparisons with TheRock 10.0.0, not a refresh of the historical
+Linux/llama.cpp tables below.
 [Settings, individual timings, limits and evidence](../../plans/decode-kernels-pr518-stages01.md#release-measurements).
 
 September 29 Windows screenshot-cache check (separate from the throughput tables):

@@ -50,8 +50,9 @@ Use this entry format:
   scalar/batched equality at widths 1–8 and wide/ragged controls. Both formats
   retain all 696 complete matched target rows and exact perplexity. The compiled
   prefill resource guard passes 57 kernels; 83 relevant decode variants have
-  zero scratch/spills. Final native/prefill checks pass; functional timing and Linux remain unqualified;
-  see the [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+  zero scratch/spills. Final prefill/native checks pass; functional timing and
+  Linux remain unqualified; see the
+  [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
 - Status: held in the isolated implementation worktree. Windows numerical/state
   gates pass and decode gains are measured; full functional-latency and Linux
   qualification remain outstanding. Final evidence and limits are recorded in
@@ -69,8 +70,8 @@ Use this entry format:
 - Validation: fresh Windows release/operator builds and the expanded projection
   test pass, including 4×10240 scalar-versus-batched outputs. All 696 complete
   matched target logit rows and six perplexities remain exact on both formats.
-  Final prefill/native checks pass; functional timing and Linux remain unqualified; see the
-  [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+  Final prefill/native checks pass; functional timing and Linux remain
+  unqualified; see the [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
 - Status: held in the isolated implementation worktree. Windows numerical/state
   gates pass and decode gains are measured; full functional-latency and Linux
   qualification remain outstanding. Final evidence and limits are recorded in
@@ -94,8 +95,8 @@ Use this entry format:
   The original IQ4_XS independent scalar MTP oracle fails attention relative RMS
   0.0093689 against 0.002; its limits remain unchanged. The original UD-Q4_K_XL
   independent oracle passes. This is regression parity, not new IQ4 oracle
-  qualification. Final native/prefill checks pass; functional timing and Linux remain unqualified;
-  see the [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+  qualification. Final prefill/native checks pass; functional timing and Linux
+  remain unqualified; see the [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
 - Status: held in the isolated implementation worktree. Windows numerical/state
   gates pass and decode gains are measured; full functional-latency and Linux
   qualification remain outstanding. Final evidence and limits are recorded in
@@ -115,8 +116,8 @@ Use this entry format:
   allocation-boundary tails, every narrow width and grouped widths through 64.
   All 696 matched full-logit rows and perplexities remain exact across the two
   target quantizations. The 57-kernel prefill resource contract passes. Final
-  prefill/native state/timing checks and Linux execution remain pending; see the
-  [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
+  prefill/native checks pass; functional timing and Linux remain unqualified;
+  see the [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
 - Status: held in the isolated implementation worktree. Windows numerical/state
   gates pass and decode gains are measured; full functional-latency and Linux
   qualification remain outstanding. Final evidence and limits are recorded in
@@ -141,8 +142,8 @@ Use this entry format:
   tests pass, including independent projection/HC formulas and allocation-ended
   ragged F32 rows. Both quantizations retain all 696 matched full-logit rows and
   exact perplexity. All 57 prefill resource-contract kernels pass; 32 inspected
-  changed-family variants have zero scratch/spills. Final native/prefill/timing
-  qualification and Linux execution remain pending; see the
+  changed-family variants have zero scratch/spills. Final prefill/native checks
+  pass; functional timing and Linux remain unqualified; see the
   [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
 - Status: held in the isolated implementation worktree. Windows numerical/state
   gates pass and decode gains are measured; full functional-latency and Linux
@@ -164,8 +165,8 @@ Use this entry format:
   per-schedule perplexities match the `ab4d98189a6d` baseline across IQ4_XS and
   UD-Q4_K_XL. A separate CPU algebra check covers all 256 byte values in each
   scale-byte position plus 5,000 random packings (8,072 cases × four sub-blocks);
-  this supplements the compiled-kernel checks. Normal-prefill/native state,
-  matched timings and Linux execution remain pending; see the
+  this supplements the compiled-kernel checks. Final prefill/native checks pass;
+  functional timing and Linux remain unqualified; see the
   [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
 - Status: held in the isolated implementation worktree. Windows numerical/state
   gates pass and decode gains are measured; full functional-latency and Linux
@@ -188,8 +189,8 @@ Use this entry format:
   across scalar decode, verification widths 1–8 and eight-row prefill, with
   exact perplexity. All 57 prefill resource-contract kernels pass; the 38
   inspected decode/attention variants retain zero scratch and spills.
-  Normal-prefill capture, native state qualification, matched end-to-end timing
-  and Linux execution remain pending. See the
+  Final prefill/native checks pass; functional timing and Linux remain
+  unqualified. See the
   [implementation record](docs/plans/decode-kernels-pr518-stages01.md).
 - Status: held in the isolated implementation worktree. Windows numerical/state
   gates pass and decode gains are measured; full functional-latency and Linux
