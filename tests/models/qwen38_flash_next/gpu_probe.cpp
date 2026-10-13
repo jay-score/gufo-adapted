@@ -4,6 +4,7 @@
 // gpu_probe --model FIRST_SHARD.gguf --prompt TEXT [--reference]
 //           [--batch T] [--context N] [--dump logits.bin]
 // Independent predictor oracle: --mtp-model MTP.gguf --mtp-audit
+// Fixed-state predictor hashes: --mtp-model MTP.gguf --mtp-hashes
 // Full/tail predictor comparison: --mtp-model MTP.gguf --mtp-catchup-audit
 // MTP cost calibration: --mtp-model MTP.gguf --cost-audit C (0 = all)
 //                      [--depth N] (default: 0, 4096, 32768)
@@ -35,7 +36,7 @@ void AuditMtpCatchup(q::rocm::Executor& executor,
 void AuditMtp(q::rocm::Executor& executor, const q::rocm::DeviceModel& device,
               const q::ModelWeights& weights, const q::MtpWeights& mtp,
               const gufo::tokenization::QwenTokenizer& tokenizer,
-              const std::filesystem::path& path);
+              const std::filesystem::path& path, bool hashes_only);
 void AuditMtpCosts(q::rocm::Executor& executor,
                    const gufo::tokenization::QwenTokenizer& tokenizer,
                    std::span<const std::uint32_t> depths,
@@ -84,6 +85,7 @@ int main(int argc, char** argv) {
   std::string dump_path;
   std::string mtp_path;
   bool mtp_audit = false;
+  bool mtp_hashes = false;
   bool mtp_catchup_audit = false;
   bool reference = false;
   bool cost_audit = false;
@@ -102,6 +104,8 @@ int main(int argc, char** argv) {
       mtp_path = next();
     } else if (arg == "--mtp-audit") {
       mtp_audit = true;
+    } else if (arg == "--mtp-hashes") {
+      mtp_hashes = true;
     } else if (arg == "--mtp-catchup-audit") {
       mtp_catchup_audit = true;
     } else if (arg == "--cost-audit") {
@@ -151,12 +155,17 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "--model is required\n");
     return 2;
   }
-  if ((mtp_audit || mtp_catchup_audit || cost_audit) && mtp_path.empty()) {
+  if (mtp_hashes && (mtp_audit || mtp_catchup_audit || cost_audit)) {
+    std::fprintf(stderr, "MTP hashes cannot combine with other audits\n");
+    return 1;
+  }
+  if ((mtp_audit || mtp_hashes || mtp_catchup_audit || cost_audit) &&
+      mtp_path.empty()) {
     std::fprintf(stderr, "MTP audits require --mtp-model\n");
     return 2;
   }
-  if (cost_audit &&
-      (mtp_audit || mtp_catchup_audit || reference || !dump_path.empty())) {
+  if (cost_audit && (mtp_audit || mtp_hashes || mtp_catchup_audit ||
+                     reference || !dump_path.empty())) {
     std::fprintf(stderr, "--cost-audit cannot be combined with other probes\n");
     return 2;
   }
@@ -220,7 +229,7 @@ int main(int argc, char** argv) {
   q::rocm::Executor::Options options;
   options.max_batch = batch;
   options.max_logit_rows = std::min<std::uint32_t>(batch, 64);
-  if (mtp_audit || mtp_catchup_audit || cost_audit)
+  if (mtp_audit || mtp_hashes || mtp_catchup_audit || cost_audit)
     options.max_speculative = 8;
 
   if (cost_audit) {
@@ -246,16 +255,17 @@ int main(int argc, char** argv) {
       return 1;
     }
   }
-  if (mtp_audit || mtp_catchup_audit) {
+  if (mtp_audit || mtp_hashes || mtp_catchup_audit) {
     try {
       if (mtp_catchup_audit)
         AuditMtpCatchup(*executor, *device, *tokenizer);
       else
         AuditMtp(*executor, *device, *weights, *mtp_weights, *tokenizer,
-                 model_path);
+                 model_path, mtp_hashes);
       return 0;
     } catch (const std::exception& e) {
-      std::fprintf(stderr, "MTP oracle failed: %s\n", e.what());
+      std::fprintf(stderr, "%s failed: %s\n",
+                   mtp_hashes ? "MTP hash capture" : "MTP oracle", e.what());
       return 1;
     }
   }
