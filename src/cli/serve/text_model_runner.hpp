@@ -41,7 +41,7 @@ struct TextPreparedPrompt {
 };
 
 struct TextRunnerRamCacheOptions {
-  /// Zero preserves the automatic model budget; positive values lower its cap.
+  /// Zero preserves the automatic model budget; positive values replace it.
   std::size_t capacity_bytes{0};
 };
 

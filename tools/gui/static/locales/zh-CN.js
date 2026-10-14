@@ -1,8 +1,8 @@
 // English source strings remain the fallback. Placeholders are inserted as text.
 export const messages = {
-  "RAM snapshot limit (GiB)": "内存快照上限 (GiB)",
-  "cache_ram_gib": "内存快照上限",
-  "0 keeps automatic sizing. A positive limit caps retained RAM snapshots within the engine's memory budget. Lower limits may require more prompt processing. Model weights, live context and disk staging use separate memory. Restart Gufo to apply.": "0 保持自动设置。正值限制保留的内存快照，且不会超过引擎的内存预算。较低的上限可能需要重新处理更多提示内容。模型权重、当前上下文和磁盘暂存使用独立内存。重启 Gufo 后生效。",
+  "RAM cache size (GiB)": "内存缓存大小 (GiB)",
+  "cache_ram_gib": "内存缓存大小",
+  "0 sizes it automatically. Raise it if long chats keep reprocessing the whole prompt; Flash-Next at 262K needs about 16. Uses system RAM.": "0 表示自动设置。如果长对话总是重新处理整个提示，请调高此值；Flash-Next 在 262K 上下文下约需 16。占用系统内存。",
   "Gufo · Local launcher": "Gufo · 本地模型管理器",
   "Gufo owl": "Gufo 猫头鹰标志",
   "LOCAL LAUNCHER": "本地模型管理器",
