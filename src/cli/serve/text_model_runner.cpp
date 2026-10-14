@@ -377,8 +377,7 @@ ContinuationCache::SnapshotSupport MakeSnapshotSupport(
                            "event=snapshot_cache_above_automatic "
                            "capacity_bytes=" +
                                std::to_string(options.capacity_bytes) +
-                               " automatic_bytes=" +
-                               std::to_string(automatic));
+                               " automatic_bytes=" + std::to_string(automatic));
             }
             return options.capacity_bytes;
           },
