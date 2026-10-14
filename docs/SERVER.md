@@ -188,10 +188,15 @@ older disk checkpoints are not reused by this version.
 `SIGINT` and `SIGTERM` cancel active requests and drain accepted disk writes
 before exiting. `--cache-disk DIR` defaults to 8 GiB retained on disk.
 `--cache-ram-bytes 0` (the default) preserves the automatic retained-snapshot
-budget sampled after model/session allocation. A positive value caps retention
-at the smaller of that value and the model's automatic budget. For example,
-`--cache-ram-bytes 2147483648` caps retained snapshots at 2 GiB. The startup
-`snapshot_cache_configured` event reports the effective `capacity_bytes`.
+budget sampled after model/session allocation. A positive value replaces that
+budget and may raise or lower it. For example, `--cache-ram-bytes 2147483648`
+caps retained snapshots at 2 GiB. Raising it helps unified-memory hosts (such as
+Strix Halo), where little RAM reads as available after weights and context
+load; Flash-Next/MTP near 262K context needs about 16 GiB for two snapshots.
+A value above the automatic budget logs `snapshot_cache_above_automatic`; Gufo
+does not check that the RAM exists, so an oversized cap can push the system
+into swap or the pagefile. The startup `snapshot_cache_configured` event
+reports the effective `capacity_bytes`.
 This allocates nothing upfront and works with disk caching off. A snapshot that
 cannot fit is skipped without failing the request; live-session reuse remains
 available. Lower caps can cause more snapshot eviction and prompt reprocessing.
