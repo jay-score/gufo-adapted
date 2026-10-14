@@ -367,9 +367,20 @@ ContinuationCache::SnapshotSupport MakeSnapshotSupport(
             const auto resources = validated->runner->ResourceClaim();
             const auto automatic =
                 resources.retained_snapshot_capacity_bytes.value_or(0);
-            return options.capacity_bytes == 0
-                       ? automatic
-                       : std::min(options.capacity_bytes, automatic);
+            if (options.capacity_bytes == 0)
+              return automatic;
+            // An explicit cap replaces the automatic budget. Unified-memory
+            // hosts report little available RAM after model load, so the
+            // automatic budget can be far below what the user can spare.
+            if (options.capacity_bytes > automatic) {
+              Logger::Warn("cache",
+                           "event=snapshot_cache_above_automatic "
+                           "capacity_bytes=" +
+                               std::to_string(options.capacity_bytes) +
+                               " automatic_bytes=" +
+                               std::to_string(automatic));
+            }
+            return options.capacity_bytes;
           },
       .on_event = EmitSnapshotEvent,
   };

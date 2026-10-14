@@ -584,7 +584,7 @@ void PrintServeHelp(std::string_view program_name,
         "Scheduling", &max_buffered_output_bytes_total);
     parser.AddOption(
         "", "--cache-ram-bytes", "N",
-        "Retained RAM snapshot cap (default: 0 = auto; positive values lower "
+        "Retained RAM snapshot cap (default: 0 = auto; positive values replace "
         "the automatic budget)",
         "Cache", &cache_ram_bytes);
     parser.AddOption("", "--cache-disk", "DIR",
@@ -1057,7 +1057,7 @@ int RunServe(std::span<const char* const> args) {
         "Scheduling", &max_buffered_output_bytes_total);
     llm_parser.AddOption(
         "", "--cache-ram-bytes", "N",
-        "Retained RAM snapshot cap (default: 0 = auto; positive values lower "
+        "Retained RAM snapshot cap (default: 0 = auto; positive values replace "
         "the automatic budget)",
         "Cache", &cache_ram_bytes);
     llm_parser.AddOption("", "--cache-disk", "DIR",

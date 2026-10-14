@@ -1501,7 +1501,7 @@ void TestExplicitRamCapRetainsOnlyOneSnapshot() {
   retained.Invalidate();
 }
 
-void TestRamCapUsesPostAllocationModelBudget() {
+void TestRamCapOverridesPostAllocationModelBudget() {
   class ChangingBudgetRunner final : public SnapshotRunner {
   public:
     using SnapshotRunner::SnapshotRunner;
@@ -1512,15 +1512,24 @@ void TestRamCapUsesPostAllocationModelBudget() {
       return claim;
     }
   };
-  for (const std::size_t requested : {std::size_t{0}, std::size_t{4096}}) {
+  {
     auto stats = std::make_shared<FakeStats>();
     TextRunnerPool pool(std::make_shared<ChangingBudgetRunner>(stats), 1,
-                        std::nullopt, {.capacity_bytes = requested});
+                        std::nullopt, {});
     auto request = pool.Acquire({1, 2, 3});
     Expect(request.Prefill(3).decode_ready, "model-budget fixture completes");
     Expect(
         request.Commit().snapshot_bytes == 0 && stats->snapshot_captures == 0,
-        "automatic and oversized caps respect the post-state model budget");
+        "automatic cap respects the post-state model budget");
+  }
+  {
+    auto stats = std::make_shared<FakeStats>();
+    TextRunnerPool pool(std::make_shared<ChangingBudgetRunner>(stats), 1,
+                        std::nullopt, {.capacity_bytes = 4096});
+    auto request = pool.Acquire({1, 2, 3});
+    Expect(request.Prefill(3).decode_ready, "raised-cap fixture completes");
+    Expect(request.Commit().snapshot_bytes == sizeof(FakeSnapshot),
+           "explicit cap raises the post-state model budget");
   }
 }
 
@@ -1685,7 +1694,7 @@ int main() {
   TestResourceClaimsAreValidatedBeforeAllocation();
   TestExplicitRamCapRefusesSnapshotsButKeepsLiveReuse();
   TestExplicitRamCapRetainsOnlyOneSnapshot();
-  TestRamCapUsesPostAllocationModelBudget();
+  TestRamCapOverridesPostAllocationModelBudget();
   TestSnapshotForkAndUnsupportedCapabilities();
   TestSnapshotCacheBranchesOnePrefixIntoIndependentStates();
   std::ostringstream normal_log;
