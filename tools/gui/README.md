@@ -124,13 +124,17 @@ supplied by the client; it cannot recover reasoning omitted from the request.
 Chat Completions clients may override it with
 `chat_template_kwargs.preserve_thinking`.
 
-**More options → RAM snapshot limit (GiB)** defaults to 0 (automatic). A positive
-whole number passes `--cache-ram-bytes` and lowers retained snapshot capacity
-within the engine's automatic memory budget, independently of disk caching.
-Lower limits can require more prompt reprocessing. This does not cap model
-weights, live context or disk staging. The automatic default omits the new flag
-so existing executables still launch; setting a positive limit needs a rebuilt
-engine supporting the option.
+**Run settings → RAM cache size (GiB)** defaults to 0 (automatic). A positive
+whole number passes `--cache-ram-bytes` and replaces the engine's automatic
+retained-snapshot budget, independently of disk caching. Raise it when long
+chats miss the cache: on unified-memory machines (such as Strix Halo) the
+automatic budget can be only a few hundred MiB once the model has loaded.
+Flash-Next/MTP near 262K context needs about 16 GiB. Lower values can require
+more prompt reprocessing; values larger than your free RAM push the system into
+swap or the pagefile. This does not cap model weights, live context or disk
+staging. The automatic default omits the flag so existing executables still
+launch; raising the budget above the automatic one needs a rebuilt engine
+(older engines only lower it).
 
 **More options → Enable disk continuation cache** defaults to off. When enabled,
 the GUI passes `--cache-disk`, `--cache-disk-bytes`, and

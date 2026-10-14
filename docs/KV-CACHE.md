@@ -237,12 +237,13 @@ Three budgets, each able to bind first.
 
 | Limit | Default | Set by |
 | --- | --- | --- |
-| Retained snapshot bytes, RAM | `MemAvailable / 2` | `--cache-ram-bytes` (0 = auto; positive values lower the cap) |
+| Retained snapshot bytes, RAM | `MemAvailable / 2` | `--cache-ram-bytes` (0 = auto; positive values replace the cap) |
 | Disk bytes | 8 GiB | `--cache-disk-bytes` |
 | Disk staging bytes | smaller of `MemAvailable / 8` and the disk budget | `--cache-disk-staging-bytes` |
 
-An explicit RAM cap is clamped to the model's automatic budget; it does not
-raise that ceiling. It limits logical retained payload bytes conservatively,
+An explicit RAM cap replaces the model's automatic budget and may exceed it;
+values above it log a warning, since Gufo does not verify the RAM exists. It
+limits logical retained payload bytes conservatively,
 including shared prefixes, rather than total process committed memory. Live
 state, weights, disk staging and temporary save buffers remain separate.
 Snapshot format and disk files are unchanged. Returning the option to zero
