@@ -62,9 +62,6 @@ struct ModelOptions {
   /// Opt-in MTP draft policies. Verification is unchanged, so outputs keep
   /// the target distribution (greedy text is byte-identical); they change
   /// how many tokens a cycle proposes and how cheaply.
-  /// Sampled single-session drafting stops on a chain-survival estimate
-  /// from the draft head's own confidence instead of the length controller.
-  bool mtp_survival = false;
   /// Single-session prompt lookup: after an MTP draft, a match of 12+ tokens
   /// in the conversation proposes the tokens that followed it (PromptLookup).
   bool prompt_lookup = false;
@@ -221,7 +218,11 @@ public:
   [[nodiscard]] std::size_t AllocatedBytes() const noexcept;
   void ConfigureVision(std::shared_ptr<const qwen::vision::Prompt> prompt);
   /// A new request reusing cached context starts its own acceptance history.
-  void ResetDraftPolicy() noexcept { draft_length_.Reset(); }
+  void ResetDraftPolicy() noexcept {
+    draft_length_.Reset();
+    draft_stop_.Reset();
+    low_acceptance_.Reset();
+  }
 
   struct SpeculativeStats {
     std::uint64_t cycles{0};
@@ -236,7 +237,7 @@ public:
   }
 
   /// Compatibility version; bump on payload or inference arithmetic changes.
-  static constexpr std::uint32_t kSnapshotPayloadVersion = 17;
+  static constexpr std::uint32_t kSnapshotPayloadVersion = 18;
   /// Bytes a snapshot of the current context occupies.
   [[nodiscard]] std::uint64_t SnapshotBytes() const;
   /// Captures the whole context (tokens, device caches and recurrent
@@ -266,9 +267,12 @@ private:
             bool prefill = false);
   /// Trunk rows the draft block may still read: [hidden_base_, size).
   [[nodiscard]] std::uint32_t KeptHiddenRows() const noexcept;
+  /// A proposal returns its candidates, its greedy token, or both
+  /// (`token_with_candidates`, when a greedy draft stops on confidence).
   bool DraftCatchUp(std::int32_t next_token, bool propose,
                     std::string* error_msg,
-                    MtpCandidateLogits* candidates = nullptr);
+                    MtpCandidateLogits* candidates = nullptr,
+                    bool token_with_candidates = false);
   bool DraftReplay(std::int32_t next_token, std::vector<std::int32_t>* replay,
                    std::int32_t* hidden_row, std::string* error_msg) const;
   static bool DraftCatchUpBatch(std::span<const AdvanceRequest> requests,
@@ -287,6 +291,10 @@ private:
   static void AppendDraft(PendingDecode& pending);
   /// Prompt lookup: appends copied proposals up to `cap` chain tokens.
   bool AppendLookup(PendingDecode& pending, std::size_t cap);
+  /// Folds the latest proposal's confidence into a gated chain; true stops it.
+  static bool StopChain(PendingDecode& pending);
+  /// True when the next draft is not worth verifying.
+  bool StopCalibrated(PendingDecode& pending);
   bool FinishDecode(const DecodeRequest& request, const PendingDecode& pending,
                     std::string* error_msg);
 
@@ -302,6 +310,8 @@ private:
   std::vector<float> verify_logits_;
   std::uint32_t hidden_base_{0};  ///< first position whose hidden row is kept
   MtpLengthController draft_length_;
+  MtpConfidenceStop draft_stop_;
+  MtpLowAcceptance low_acceptance_;
   /// Index of tokens_ for ModelOptions::prompt_lookup.
   PromptLookup lookup_;
   SpeculativeStats stats_;

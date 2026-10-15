@@ -47,7 +47,7 @@ def build_command(values, *, check_files=False):
         command.extend(["--mmproj", settings["mmproj"]])
     command.extend(["--speculative", settings["speculative"]])
     if settings["speculative"] == "mtp":
-        for key in ("mtp_model", "draft_tokens", "mtp_policy", "mtp_draft_vocab"):
+        for key in ("mtp_model", "draft_tokens", "mtp_draft_vocab"):
             command.extend(["--" + key.replace("_", "-"), str(settings[key])])
         if settings["prompt_lookup"]:
             command.append("--prompt-lookup")
