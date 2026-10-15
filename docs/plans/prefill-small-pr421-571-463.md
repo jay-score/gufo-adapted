@@ -43,7 +43,11 @@ regression qualification, not new unquantized-model or GGUF conversion parity.
   selection operator, original resource guard and nine zero-scratch/spill dense
   F16 variants pass. Formatting passes. Final matched-model qualification is
   pending with the rest of the series.
-- Launch order, LDS stage, F16 tile and selector scratch: pending.
+- Launch order: fresh release/GPU builds and projection/attention/GDN/F16
+  replay operators pass (4/4), including ragged projection and fused epilogue
+  checks. All eleven dense F16 variants retain zero scratch/register spills;
+  the original resource guard and formatting pass.
+- LDS stage, F16 tile and selector scratch: pending.
 - Final matched logits/perplexity, state checks and timings: pending.
 
 ## Evidence and commands

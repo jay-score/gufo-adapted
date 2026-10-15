@@ -37,6 +37,22 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-15 — Group Flash-Next projection row tiles
+
+- Source: [gufo-org/gufo@0690047f6cd2bd86b7536c43e9c7fa353bddc2a2](https://github.com/gufo-org/gufo/commit/0690047f6cd2bd86b7536c43e9c7fa353bddc2a2)
+  (PR #421).
+- Local: commit introducing this entry.
+- Adaptation: reuse the existing row-group mapping for wide output, attention,
+  shared-expert down and fused SSM projections. Only launch order changes;
+  retain each output's K accumulation and all narrow/fallback routes.
+- Areas: Flash-Next `kernels.hip.cpp` dispatch and fused-epilogue guards.
+- Validation: fresh Windows release/GPU builds, projection/attention/GDN and
+  F16 library replay operators pass (4/4); formatting and resource checks pass,
+  including eleven zero-scratch/spill dense F16 variants. Final matched-model
+  and performance qualification is pending in the
+  [series record](docs/plans/prefill-small-pr421-571-463.md).
+- Status: implemented in the isolated worktree; final series qualification pending.
+
 ### 2026-10-15 — Bound eager Flash-Next selector grids
 
 - Source: [gufo-org/gufo@109a577da5feaffe669e88a6baa9c45e35c3a815](https://github.com/gufo-org/gufo/commit/109a577da5feaffe669e88a6baa9c45e35c3a815)
