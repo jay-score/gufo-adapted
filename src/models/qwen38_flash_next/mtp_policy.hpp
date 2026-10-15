@@ -186,49 +186,67 @@ inline constexpr float kMtpDraftChainConfidence = 0.6F;
 struct MtpLowAcceptanceState {
   float average;
   std::uint32_t cycles;
+  std::uint32_t probe_cycle{0};
 };
 
 // A greedy request that keeps less than one full-head draft per cycle is
 // drafting past what the head predicts for it: the chain gate trusts the
 // head's confidence, which is optimistic for some scripts (Thai, Japanese).
-// Such a request drafts one token per full-head cycle until its average
-// recovers. Small-head cycles count towards the average but are never capped.
+// Such a request normally drafts one token per full-head cycle. Periodic
+// uncapped probes let longer accepted prefixes raise the average again.
+// Small-head cycles count towards the average but are never capped.
 class MtpLowAcceptance {
 public:
   void Reset() noexcept {
     average_ = 1.2F;
     cycles_ = 0;
+    probe_cycle_ = 0;
   }
 
-  void Observe(std::size_t accepted) noexcept {
-    average_ = 0.98F * average_ + 0.02F * static_cast<float>(accepted);
+  void Observe(std::size_t accepted, bool full_head = true) noexcept {
+    // A capped cycle cannot measure the longer accepted prefix. Learn its
+    // length from uncapped cycles instead of feeding the cap back into it.
+    const bool capped = full_head && Low() && probe_cycle_ != 0;
+    if (!capped)
+      average_ = 0.98F * average_ + 0.02F * static_cast<float>(accepted);
     if (cycles_ < kWarmup)
       ++cycles_;
+    probe_cycle_ = Low() ? (probe_cycle_ + 1) % kProbeInterval : 0;
   }
 
-  /// Whether a full-head cycle should draft only its first token.
+  /// Whether acceptance calls for a cap on full-head drafting.
   [[nodiscard]] bool Low() const noexcept {
     return cycles_ >= kWarmup && average_ < 0.95F;
   }
 
+  /// Retry the normal confidence-gated width every seventeen low-acceptance
+  /// cycles; intervening full-head cycles keep only their first draft.
+  [[nodiscard]] std::uint32_t Choose(std::uint32_t budget) const noexcept {
+    return Low() && probe_cycle_ != 0 ? std::min(budget, 1U) : budget;
+  }
+
   [[nodiscard]] MtpLowAcceptanceState State() const noexcept {
-    return {.average = average_, .cycles = cycles_};
+    return {
+        .average = average_, .cycles = cycles_, .probe_cycle = probe_cycle_};
   }
 
   [[nodiscard]] bool Restore(const MtpLowAcceptanceState& state) noexcept {
     if (!std::isfinite(state.average) || state.average < 0.0F ||
         state.average > static_cast<float>(kMaxMtpDraftTokens) ||
-        state.cycles > kWarmup)
+        state.cycles > kWarmup || state.probe_cycle >= kProbeInterval)
       return false;
     average_ = state.average;
     cycles_ = state.cycles;
+    probe_cycle_ = state.probe_cycle;
     return true;
   }
 
 private:
   static constexpr std::uint32_t kWarmup = 15;
+  static constexpr std::uint32_t kProbeInterval = 17;
   float average_{1.2F};
   std::uint32_t cycles_{0};
+  std::uint32_t probe_cycle_{0};
 };
 
 inline constexpr std::size_t kMtpConfidenceBuckets = 9;

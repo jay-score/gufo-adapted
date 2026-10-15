@@ -50,7 +50,6 @@ struct SessionSnapshotHeader {
   std::uint32_t policy_concurrency;
   MtpConfidenceStopState draft_stop;
   MtpLowAcceptanceState low_acceptance;
-  std::uint32_t reserved{0};
 };
 static_assert(std::is_trivially_copyable_v<SessionSnapshotHeader>);
 
@@ -963,9 +962,10 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   pending->chain = {anchor};
   pending->draft = draft_token_;
   // A small-head cycle drafts cheaply enough to keep its full width.
+  // Full-head cycles retain bounded recovery probes while acceptance is low.
   pending->width =
-      confidence_stop && !pending->draft_subset && low_acceptance_.Low()
-          ? std::min<std::size_t>(width, 2)
+      confidence_stop && !pending->draft_subset
+          ? 1 + low_acceptance_.Choose(static_cast<std::uint32_t>(width - 1))
           : width;
   pending->base = base;
   pending->speculative = true;
@@ -1161,7 +1161,7 @@ bool Session::FinishDecode(const DecodeRequest& request,
   if (pending.calibrated_stop)
     draft_stop_.Observe(mtp_accepted, result->stop ? mtp_accepted : mtp_drafts);
   if (pending.confidence_stop)
-    low_acceptance_.Observe(mtp_accepted);
+    low_acceptance_.Observe(mtp_accepted, !pending.draft_subset);
 
   // The next call knows the next sampled anchor. Defer draft catch-up until
   // then, retaining this session's target hidden rows across interleaving.

@@ -43,7 +43,10 @@ draft head's own confidence (`mtp_policy.hpp`, from upstream PR #603):
 
 - Greedy, one session: stop before the draft at which the product of the drafts'
   top-1 probabilities falls below 0.6; the first draft is always kept. After 15
-  cycles, a request keeping fewer than 0.95 drafts per cycle drafts one token.
+  cycles, a request keeping fewer than 0.95 drafts per cycle normally drafts one
+  token over the full head, retrying the normal confidence-gated width every
+  seventeen low-acceptance cycles so it can recover. Capped cycles do not lower
+  the learned accepted length. Small-head cycles keep their full width.
 - Sampled, or greedy with `--sessions` above 1: stop when the next draft's
   acceptance, learned per confidence bucket from the request's committed
   accept/reject prefix, no longer pays for its share of the cycle-cost table.
