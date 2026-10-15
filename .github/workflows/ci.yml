@@ -87,6 +87,8 @@ jobs:
           python tests/tools/windows_update_test.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/tools/windows_vcpkg_path_test.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/tools/windows_entrypoints_test.py
 
   build-and-test:
     name: CPU contracts & repository checks
