@@ -47,7 +47,10 @@ regression qualification, not new unquantized-model or GGUF conversion parity.
   replay operators pass (4/4), including ragged projection and fused epilogue
   checks. All eleven dense F16 variants retain zero scratch/register spills;
   the original resource guard and formatting pass.
-- LDS stage, F16 tile and selector scratch: pending.
+- Attention LDS stage: fresh release/GPU builds, projection and attention
+  operators pass (2/2). Formatting and the original resource guard pass;
+  eleven dense F16 variants have zero scratch/register spills.
+- F16 tile and selector scratch: pending.
 - Final matched logits/perplexity, state checks and timings: pending.
 
 ## Evidence and commands
