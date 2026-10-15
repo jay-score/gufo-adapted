@@ -65,7 +65,7 @@ $speculative = switch ($Draft) {
   "off" { @() }
 }
 if ($Draft -ne "off" -and $Mode -eq "serve") {
-  if ($DraftVocab) { $speculative += @("--mtp-draft-vocab", "latin") }
+  if ($DraftVocab) { $speculative += @("--mtp-draft-vocab", "prefix") }
   if ($Lookup) { $speculative += "--prompt-lookup" }
 }
 

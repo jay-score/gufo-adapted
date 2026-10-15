@@ -184,9 +184,11 @@ public:
     std::uint32_t max_logit_rows{1};
     /// Longest speculative batch; bounds the recurrent snapshot storage.
     std::uint32_t max_speculative{1};
-    /// Optional draft vocabulary: token ids the MTP draft head may propose
-    /// (it scores only these rows of the output head). Empty = every token.
-    std::vector<std::int32_t> draft_vocab;
+    /// Optional MTP small head (draft_vocab.hpp): a draft that asks for it
+    /// scores output rows [0, draft_prefix) in place plus `draft_specials`
+    /// (token ids at or above the prefix). 0 = drafts score the full head.
+    std::uint32_t draft_prefix{0};
+    std::vector<std::int32_t> draft_specials;
   };
 
   ~Executor();
@@ -258,6 +260,8 @@ public:
     std::int32_t* token{nullptr};
     MtpCandidateLogits* candidates{nullptr};
     MtpTrace* trace{nullptr};  ///< final-row diagnostic; disables graph capture
+    /// Score the small head (Options::draft_prefix) when the executor has one.
+    bool draft_subset{false};
   };
   struct MtpHeadItem {
     Session* session;
@@ -454,9 +458,13 @@ private:
                   std::uint32_t n_tokens, std::string* error_msg) const;
   bool MoeBatch(const DeviceLayer& l, const float* x, float* out,
                 std::uint32_t rows, std::string* error) const;
-  /// Selects the greedy token or compact candidates from full MTP logits.
+  /// Selects the greedy token or compact candidates from the MTP logits of
+  /// the full head, or of the small head when `subset`.
   bool MtpHead(const DeviceMixer& head, const float* res, bool token,
-               bool candidates, std::string* error_msg) const;
+               bool candidates, bool subset, std::string* error_msg) const;
+  [[nodiscard]] bool UseDraftSubset(bool requested) const noexcept {
+    return requested && !draft_prefix_.empty();
+  }
   /// Enqueues one trunk batch (control and token upload through logits).
   bool ForwardBody(Session& session, std::uint32_t n, std::uint32_t n_logits,
                    bool download_logits, bool speculative, bool sparse,
@@ -465,7 +473,8 @@ private:
                    std::string* error_msg) const;
   bool MtpBody(Session& session, std::uint32_t n, std::uint32_t pos, bool token,
                bool candidates, std::string* error_msg, std::uint32_t pool_grid,
-               const float* hidden_source, MtpTrace* trace) const;
+               const float* hidden_source, MtpTrace* trace,
+               bool subset = false) const;
   /// Runs `body` eagerly, or as the session's captured graph for `key`
   /// when `graph` is set. A prefix may leave its work queued so the host
   /// can wait for disk reads while the GPU computes it.
@@ -610,11 +619,13 @@ private:
   mutable std::uint32_t routed_tile_rows_{48};  ///< token rows per tile
   mutable int routed_tile_cols_{0};
   float* logits_host_{nullptr};
-  /// Options::draft_vocab: the draft head scores only these output rows (a copy
-  /// of the selected rows of the output head); draft_ids_ maps a subset row
-  /// back to its token id. Empty = the full vocabulary.
-  DeviceTensor draft_head_{};
-  std::int32_t* draft_ids_{nullptr};
+  /// Options::draft_prefix: the small head's leading output rows (a view of
+  /// the output head, not a copy) and a copy of the special-token rows above
+  /// them. Small-head logits are the prefix rows then the special rows;
+  /// draft_special_ids_ maps a row past the prefix back to its token id.
+  DeviceTensor draft_prefix_{};
+  DeviceTensor draft_specials_{};
+  std::int32_t* draft_special_ids_{nullptr};
   std::int32_t* mtp_token_host_{nullptr};
   MtpCandidateLogits* mtp_candidates_host_{nullptr};
   /// max_logit_rows candidate lists for VerifyCandidates.

@@ -23,6 +23,7 @@
 #include "qfn_mmq.h"
 #include "src/core/hip/snapshot_transfer.hpp"
 #include "src/core/platform/tuning.hpp"
+#include "src/models/qwen38_flash_next/draft_vocab.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
 
 namespace gufo::models::qwen38_flash_next::rocm {
@@ -547,53 +548,60 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
     // Final selection consumes intermediate IDs before writing its scores.
     // Pack those scores behind the 64 returned IDs for one host transfer.
     s.mtp_scores = reinterpret_cast<float*>(s.mtp_ids + kMtpCandidates);
-    // Options::draft_vocab (optional): the draft head proposes only from
-    // these tokens, reading that fraction of the output head per draft
-    // step. Verification still uses the full head, so the output
+    // Options::draft_prefix (optional): a draft may score the output
+    // head's leading rows in place plus a copy of the special-token rows
+    // above them. Verification still uses the full head, so the output
     // distribution is unchanged; only acceptance can drop when the target
-    // wants a token outside the list.
-    if (!options.draft_vocab.empty()) {
+    // wants a token the small head leaves out.
+    if (options.draft_prefix != 0) {
       const DeviceTensor& out = model.output();
-      std::vector<std::int32_t> ids;
-      for (const std::int32_t id : options.draft_vocab) {
-        if (id >= 0 && static_cast<std::uint32_t>(id) < out.rows) {
-          ids.push_back(id);
-        }
-      }
-      std::sort(ids.begin(), ids.end());
-      ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
-      if (ids.size() < kMtpCandidates || out.type != GgmlType::kQ8_0 ||
-          out.experts != 1 || out.cols % 32 != 0) {
+      const auto& specials = options.draft_specials;
+      const bool valid_specials =
+          specials.size() <= kMtpDraftMaxSpecials &&
+          std::all_of(specials.begin(), specials.end(), [&](std::int32_t id) {
+            return id >= 0 &&
+                   static_cast<std::uint32_t>(id) >= options.draft_prefix &&
+                   static_cast<std::uint32_t>(id) < out.rows;
+          });
+      if (options.draft_prefix < kMtpCandidates ||
+          options.draft_prefix >= out.rows || !valid_specials ||
+          out.type != GgmlType::kQ8_0 || out.experts != 1 ||
+          out.cols % 32 != 0) {
         AssignError(error_msg,
-                    "the draft vocabulary needs at least 64 valid token ids "
-                    "and a Q8_0 output head");
+                    "the draft prefix needs a Q8_0 output head, at least 64 "
+                    "rows and special tokens above it");
         return nullptr;
       }
-      const std::size_t row_bytes = std::size_t{out.cols} / 32 * 34;
-      auto* rows =
-          Alloc<std::uint8_t>(a, ids.size() * row_bytes + 256, error_msg);
-      auto* map = Alloc<std::int32_t>(a, ids.size(), error_msg);
-      if (rows == nullptr || map == nullptr ||
-          !Check(hipMemcpy(map, ids.data(), ids.size() * sizeof(std::int32_t),
-                           hipMemcpyHostToDevice),
-                 "draft vocabulary ids", error_msg)) {
-        return nullptr;
+      e->draft_prefix_ = out;
+      e->draft_prefix_.rows = options.draft_prefix;
+      if (!specials.empty()) {
+        const std::size_t row_bytes = std::size_t{out.cols} / 32 * 34;
+        auto* rows = Alloc<std::uint8_t>(a, specials.size() * row_bytes + 256,
+                                         error_msg);
+        auto* map = Alloc<std::int32_t>(a, specials.size(), error_msg);
+        if (rows == nullptr || map == nullptr ||
+            !Check(hipMemcpy(map, specials.data(),
+                             specials.size() * sizeof(std::int32_t),
+                             hipMemcpyHostToDevice),
+                   "draft special ids", error_msg)) {
+          return nullptr;
+        }
+        GatherRows(out.data, rows, map,
+                   static_cast<std::uint32_t>(specials.size()), row_bytes,
+                   e->stream_);
+        if (!Check(hipStreamSynchronize(e->stream_), "draft special rows",
+                   error_msg)) {
+          return nullptr;
+        }
+        e->draft_specials_ = out;
+        e->draft_specials_.data = rows;
+        e->draft_specials_.rows = static_cast<std::uint32_t>(specials.size());
+        e->draft_special_ids_ = map;
       }
-      GatherRows(out.data, rows, map, static_cast<std::uint32_t>(ids.size()),
-                 row_bytes, e->stream_);
-      if (!Check(hipStreamSynchronize(e->stream_), "draft vocabulary rows",
-                 error_msg)) {
-        return nullptr;
-      }
-      e->draft_head_ = out;
-      e->draft_head_.data = rows;
-      e->draft_head_.rows = static_cast<std::uint32_t>(ids.size());
-      e->draft_ids_ = map;
       std::fprintf(stderr,
-                   "qwen38_flash_next: draft vocabulary %zu of %u tokens "
-                   "(%.0f MB)\n",
-                   ids.size(), out.rows,
-                   static_cast<double>(ids.size() * row_bytes) / 1e6);
+                   "qwen38_flash_next: draft prefix %u of %u tokens plus %zu "
+                   "special\n",
+                   options.draft_prefix, out.rows, specials.size());
     }
     if (!Check(hipHostMalloc(&e->mtp_token_host_, sizeof(std::int32_t),
                              ResultHostFlags()),
@@ -1928,30 +1936,36 @@ bool Executor::CopyTrunkHidden(const Session& session, std::span<float> hidden,
 }
 
 bool Executor::MtpHead(const DeviceMixer& head, const float* res, bool token,
-                       bool candidates, std::string* error_msg) const {
-  // A draft vocabulary scores its subset rows; selected rows map back to
-  // token ids before the host reads them.
-  const bool subset = draft_ids_ != nullptr;
-  const DeviceTensor& output = subset ? draft_head_ : model_->output();
+                       bool candidates, bool subset,
+                       std::string* error_msg) const {
+  // The small head's logits are the prefix rows then the special rows;
+  // selected rows past the prefix map back to token ids before the host
+  // reads them.
+  subset = UseDraftSubset(subset);
+  const std::uint32_t prefix = draft_prefix_.rows;
+  const std::uint32_t rows =
+      subset ? prefix + draft_specials_.rows : model_->output().rows;
+  const bool remap = subset && !draft_specials_.empty();
   if (!HcMix(head, res, false, s_.mixed, nullptr, 1, error_msg) ||
-      !Dense(output, s_.mixed, s_.logits, 1, error_msg)) {
+      !Dense(subset ? draft_prefix_ : model_->output(), s_.mixed, s_.logits, 1,
+             error_msg) ||
+      (remap &&
+       !Dense(draft_specials_, s_.mixed, s_.logits + prefix, 1, error_msg))) {
     return false;
   }
+  const auto count = std::min<std::uint32_t>(rows, kMtpCandidates);
   if (candidates) {
     MtpTopCandidates(s_.logits, s_.mtp_ids, s_.mtp_scratch_ids, s_.mtp_scores,
-                     output.rows, stream_);
-    if (subset) {
-      RemapIds(s_.mtp_ids,
-               static_cast<std::uint32_t>(
-                   std::min<std::size_t>(output.rows, kMtpCandidates)),
-               draft_ids_, stream_);
+                     rows, stream_);
+    if (remap) {
+      RemapDraftIds(s_.mtp_ids, count, prefix, draft_special_ids_, stream_);
     }
   }
   if (token) {
-    Argmax(s_.logits, s_.mtp_argmax, s_.mtp_token, 1, output.rows, stream_);
-    if (subset) {
-      RemapIds(reinterpret_cast<std::uint32_t*>(s_.mtp_token), 1, draft_ids_,
-               stream_);
+    Argmax(s_.logits, s_.mtp_argmax, s_.mtp_token, 1, rows, stream_);
+    if (remap) {
+      RemapDraftIds(reinterpret_cast<std::uint32_t*>(s_.mtp_token), 1, prefix,
+                    draft_special_ids_, stream_);
     }
     if (!CopyPinned(s_.mtp_token, mtp_token_host_, sizeof(std::int32_t),
                     hipMemcpyDeviceToHost, stream_, "draft token download",
@@ -1960,7 +1974,6 @@ bool Executor::MtpHead(const DeviceMixer& head, const float* res, bool token,
     }
   }
   if (candidates) {
-    const auto count = std::min<std::size_t>(output.rows, kMtpCandidates);
     static_assert(offsetof(MtpCandidateLogits, logits) ==
                   kMtpCandidates * sizeof(std::uint32_t));
     const auto bytes =
@@ -3053,6 +3066,8 @@ bool Executor::MtpForward(Session& session,
   const auto complete = (pos + n) / c.compress_ratio;
   const auto pool = sparse ? complete - session.mtp_.blocks : 0;
   const auto graph_pool = n / c.compress_ratio + 1;
+  const bool subset = UseDraftSubset(output.draft_subset) &&
+                      (output.token != nullptr || output.candidates != nullptr);
   const bool graph = output.trace == nullptr && hidden_source == nullptr &&
                      n <= kVecBatch && pool <= graph_pool &&
                      pos + 1 >= session.VisionLayout().PrefixLength();
@@ -3062,11 +3077,12 @@ bool Executor::MtpForward(Session& session,
       (std::uint64_t{1} << 40) |
       (std::uint64_t{output.token != nullptr} << 41) |
       (std::uint64_t{output.candidates != nullptr} << 43) |
-      (std::uint64_t{sparse} << 44);
+      (std::uint64_t{sparse} << 44) | (std::uint64_t{subset} << 45);
   const auto body = [&] {
     return MtpBody(session, n, pos, output.token != nullptr,
                    output.candidates != nullptr, error_msg,
-                   graph ? graph_pool : pool, hidden_source, output.trace);
+                   graph ? graph_pool : pool, hidden_source, output.trace,
+                   subset);
   };
   // With Tuning::flag_waits a draft step waits on a completion flag instead
   // of synchronizing the stream (see Wait).
@@ -3090,7 +3106,7 @@ bool Executor::MtpForward(Session& session,
 bool Executor::MtpBody(Session& session, std::uint32_t n, std::uint32_t pos,
                        bool token, bool candidates, std::string* error_msg,
                        std::uint32_t pool_grid, const float* hidden_source,
-                       MtpTrace* trace) const {
+                       MtpTrace* trace, bool subset) const {
   const Config& c = config();
   const DeviceLayer& l = model_->mtp();
   const std::uint32_t hc_dim = c.HcDim();
@@ -3213,7 +3229,7 @@ bool Executor::MtpBody(Session& session, std::uint32_t n, std::uint32_t pos,
     return false;
   }
   return (!token && !candidates) ||
-         MtpHead(l.nextn_head, last, token, candidates, error_msg);
+         MtpHead(l.nextn_head, last, token, candidates, subset, error_msg);
 }
 
 }  // namespace gufo::models::qwen38_flash_next::rocm
