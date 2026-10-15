@@ -119,7 +119,7 @@ The original checkout and its executable remain untouched. The executable's
 the later explanatory comment and documentation do not change its behavior.
 
 Many activation buffers scale with maximum batch capacity, so the larger limit
-increases scratch reservation. Incremental memory versus 2048 is unmeasured. Linux,
+increases scratch reservation. Peak Windows commit is unmeasured. Linux,
 MTP serving latency, sustained mixed-arrival fairness and GPU timeline profiling
 remain unqualified. No #470 prefetch is included.
 
@@ -133,27 +133,3 @@ The portable [artifact](../models/qwen3.8-flash-next/artifacts/prefill-chunk-409
 retains binary/model/toolchain identities, individual native observations,
 quality hashes and the bounded HTTP results. Raw captures, command records and
 logs remain under ignored `build/prefill-4096/`.
-
-## Brief memory check
-
-A current-build-only IQ4_XS AR run uses pp4096/tg16, depth 0, context 4097,
-one repetition plus the benchmark's untimed prefill warmup. No older build is
-run for comparison. The successful sample lasts 28.5 seconds, with Windows
-process/system memory and GPU Process Memory PDH counters sampled every 200 ms.
-
-- GPU committed peak: **64.989 GiB**, comprising **64.615 GiB dedicated** and
-  **0.374 GiB shared** in Windows accounting.
-- Process private commit peak: **1.188 GiB**; peak working set **1.165 GiB**.
-- System-wide commit: **27.576 GiB before launch**, **93.895 GiB peak**.
-  This includes other applications and the driver, and is not Gufo-only memory.
-- Lowest OS-reported available physical memory: **11.549 GiB**. This is
-  OS-visible available memory, not all memory available to the UMA GPU.
-  Dedicated/shared GPU labels are Windows accounting on UMA.
-
-These counters overlap; do not add GPU/process figures to system-wide commit.
-They describe the whole model/runtime run, not the incremental cost of chunk
-4096. Buffered stdout prevents a reliable separate load/prefill peak. This is
-a short-context AR check, without MTP or a vision request; larger contexts and
-other serving configurations are not measured. No code or binary changes are
-made for this check. Raw samples and logs are in `build/prefill-4096/memory-*`;
-the compact summary is in the portable artifact above.
