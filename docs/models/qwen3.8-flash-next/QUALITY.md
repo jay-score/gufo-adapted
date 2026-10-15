@@ -56,7 +56,7 @@ and residual correction, plus 23 serving sampler configurations in AR/MTP.
 Formatting and the compiled resource guard pass. This isolated worktree keeps
 4096 for trials. All 46 paired IQ4_XS AR HTTP responses also match text and
 counts at C1/C2/C4/C6/C8, seeded-sampled C1 and image C1, with zero prompt reuse
-and 16 output tokens each. Linux, peak Windows commit and broader serving latency remain
+and 16 output tokens each. Linux, larger-context/MTP memory and broader serving latency remain
 unqualified. [Measurements, identities and scope](../../plans/prefill-chunk-4096.md).
 
 ### Windows selected upstream prefill changes
