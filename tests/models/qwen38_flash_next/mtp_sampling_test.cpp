@@ -433,15 +433,72 @@ void CheckLowAcceptance() {
   for (unsigned i = 0; i < 64; ++i)
     low.Observe(0);
   Require(low.Low(), "a request rejecting its drafts was not capped");
-  for (unsigned i = 0; i < 64; ++i)
-    low.Observe(3);
-  Require(!low.Low(), "a recovered request stayed capped");
   low.Reset();
   for (unsigned i = 0; i < 14; ++i)
     low.Observe(0);
   Require(!low.Low(), "a request was capped before its warmup");
   low.Observe(0);
   Require(low.Low(), "a rejecting request was not capped after its warmup");
+  low.Observe(7, false);
+  Require(!low.Low() && low.Choose(7) == 7,
+          "an uncapped small-head cycle could not lift low acceptance");
+}
+
+void CheckLowAcceptanceRecovery() {
+  struct RecoveryCase {
+    unsigned available, successes, period;
+    bool recovers;
+  };
+  for (const auto test : {RecoveryCase{0, 7, 8, false},
+                          {1, 7, 8, false},
+                          {2, 7, 8, true},
+                          {7, 7, 8, true},
+                          {2, 1, 2, true},
+                          {7, 1, 4, true}}) {
+    for (unsigned offset = 0; offset < test.period; ++offset) {
+      qfn::MtpLowAcceptance low, restored_low;
+      for (unsigned i = 0; i < 15; ++i) {
+        low.Observe(0);
+      }
+      Require(low.Low(),
+              "the recovery fixture did not enter the one-draft cap");
+      Require(restored_low.Restore(low.State()),
+              "the capped request did not restore");
+      unsigned probes = 0;
+      for (unsigned cycle = 0; cycle < 4096; ++cycle) {
+        // Follow the engine's cap: a capped cycle cannot supply more than
+        // one accept. Even a 7/8 first-draft acceptance rate cannot lift
+        // that average above 0.95 without observing the longer prefix.
+        const unsigned drafted = low.Choose(7);
+        Require(drafted == restored_low.Choose(7),
+                "restoring a capped request changed its recovery schedule");
+        for (unsigned budget = 0; budget <= 7; ++budget)
+          Require(low.Choose(budget) <= budget,
+                  "a recovery probe exceeded the remaining draft budget");
+        probes += drafted > 1;
+        const unsigned accepted =
+            (cycle + offset) % test.period < test.successes
+                ? std::min(drafted, test.available)
+                : 0;
+        low.Observe(accepted);
+        restored_low.Observe(accepted);
+        if (cycle == 13) {
+          // Resume in the middle of the bounded delay between probes.
+          Require(restored_low.Restore(low.State()),
+                  "a delayed recovery probe did not restore");
+        }
+      }
+      if (test.recovers) {
+        Require(!low.Low() && probes > 2048,
+                "the one-draft cap hid recovered multi-draft acceptance");
+      } else {
+        Require(low.Low() && probes > 0 && probes < 512,
+                "unsuccessful recovery probes were absent or unbounded");
+      }
+      low.Reset();
+      Require(!low.Low(), "a new request retained the recovery cap");
+    }
+  }
 }
 
 void CheckStopPolicyRestore() {
@@ -491,7 +548,9 @@ void CheckStopPolicyRestore() {
   bad.milliseconds = 0.0F;
   Require(!restored.Restore(bad), "a half-initialized stop policy restored");
   Require(!restored_low.Restore({.average = -1.0F, .cycles = 0}) &&
-              !restored_low.Restore({.average = 1.0F, .cycles = 16}),
+              !restored_low.Restore({.average = 1.0F, .cycles = 16}) &&
+              !restored_low.Restore(
+                  {.average = 0.5F, .cycles = 15, .probe_cycle = 17}),
           "a corrupt low-acceptance state restored");
 }
 
@@ -545,6 +604,7 @@ int main() {
     CheckConfidenceStop();
     CheckSampledConfidenceStop();
     CheckLowAcceptance();
+    CheckLowAcceptanceRecovery();
     CheckStopPolicyRestore();
     CheckDraftVocabWindow();
     CheckCompactProposals();

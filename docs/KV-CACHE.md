@@ -47,8 +47,9 @@ cancellation interrupts capture.
 The persistent payload remains complete. Version 17 rejects older Flash-Next
 checkpoints computed before the MTP catch-up attention boundary correction;
 version 18 adds the MTP draft-stop policies' learned state, so a restored
-sampled continuation drafts as the original would have. Native
-restore reads the blocks directly; disk export streams them in payload order without
+sampled continuation drafts as the original would have. Version 19 also saves
+the low-acceptance recovery probe position for deterministic greedy continuation.
+Native restore reads the blocks directly; disk export streams them in payload order without
 a contiguous temporary. `CopyTo` writes into caller-owned contiguous storage.
 Requesting the model diagnostic's `bytes()` view materializes and retains a contiguous copy lazily. First captures and captures whose preceding
 checkpoint has expired still copy the complete device state. GPU restore also
