@@ -41,7 +41,7 @@ Use this entry format:
 
 - Source: [gufo-org/gufo@5a0a0ed75009ad56f9eee7cdd92f3b1752dfee64](https://github.com/gufo-org/gufo/commit/5a0a0ed75009ad56f9eee7cdd92f3b1752dfee64)
   (PR #463), following the eager-grid adaptation below.
-- Local: commit introducing this entry.
+- Local: `250b7a2194af146bc2dd8fdf952d55eeab658fc6`.
 - Adaptation: cap shared scores at 20 MiB for the model's 262K context while
   retaining captured decode capacity. Compact eager score strides to populated
   context and reuse the allocation across bounded selector chunks. Preserve the
@@ -51,15 +51,17 @@ Use this entry format:
 - Validation: fresh Windows release/GPU builds and full/bounded/compact mask
   equality pass, retaining independent F64 scores and tie ordering. Formatting,
   original resource guard and twelve scratch/spill-free dense F16 variants
-  pass. Final matched-model/state/performance qualification is pending in the
+  pass. Final matched-model/state checks pass; measured throughput remains
+  inconclusive. See the
   [series record](docs/plans/prefill-small-pr421-571-463.md).
-- Status: implemented in the isolated worktree; final series qualification pending.
+- Status: retained in the isolated worktree; Windows numerical/state checks
+  pass. No native speedup is established; Linux CI remains unrun.
 
 ### 2026-10-15 — Wider Flash-Next F16 router tiles
 
 - Source: [gufo-org/gufo@e8a75023f13fdfb8d77ff39efdf0da3b2c6f0fd5](https://github.com/gufo-org/gufo/commit/e8a75023f13fdfb8d77ff39efdf0da3b2c6f0fd5)
   (PR #571).
-- Local: commit introducing this entry.
+- Local: `7a564c32a374a68f836be2198b0f27c0756e126b`.
 - Adaptation: use the existing GEMM template's 128-by-128 tile for unquantized
   F16 projections of at least 1024 tokens. Keep its two K16 chains and the
   original narrow route. No other #571 kernels or fusions are imported.
@@ -67,15 +69,17 @@ Use this entry format:
 - Validation: fresh Windows release/GPU builds, projection/F16 replay/GDN
   operators pass (3/3), including exact wide/narrow split output and independent
   F64 checks. Formatting, original resource guard and twelve scratch/spill-free
-  dense F16 variants pass. Final model/performance qualification is pending in
-  the [series record](docs/plans/prefill-small-pr421-571-463.md).
-- Status: implemented in the isolated worktree; final series qualification pending.
+  dense F16 variants pass. Final model/state checks pass; measured throughput
+  remains inconclusive. See the
+  [series record](docs/plans/prefill-small-pr421-571-463.md).
+- Status: retained in the isolated worktree; Windows numerical/state checks
+  pass. No native speedup is established; Linux CI remains unrun.
 
 ### 2026-10-15 — Smaller Flash-Next attention projection stage
 
 - Source: [gufo-org/gufo@9e0426620ba1c7f02aafac1b846276f2f9b9e361](https://github.com/gufo-org/gufo/commit/9e0426620ba1c7f02aafac1b846276f2f9b9e361)
   (PR #421), following the row-tile ordering adaptation below.
-- Local: commit introducing this entry.
+- Local: `dec9932e92d5cb92cea2d0c8fd287a58d2cf12ac`.
 - Adaptation: stage one K block in the fused attention projection, reducing
   LDS from 48 to 24 KiB without changing the K16 accumulation order. Keep SSM
   and output projection staging unchanged.
@@ -83,15 +87,17 @@ Use this entry format:
 - Validation: fresh Windows release/GPU builds, projection and attention
   operators pass (2/2), including ragged fused Q/K/V outputs. Formatting,
   original resource guard and eleven scratch/spill-free dense F16 variants
-  pass. Final matched-model and performance qualification is pending in the
+  pass. Final matched-model/state checks pass; measured throughput remains
+  inconclusive. See the
   [series record](docs/plans/prefill-small-pr421-571-463.md).
-- Status: implemented in the isolated worktree; final series qualification pending.
+- Status: retained in the isolated worktree; Windows numerical/state checks
+  pass. No native speedup is established; Linux CI remains unrun.
 
 ### 2026-10-15 — Group Flash-Next projection row tiles
 
 - Source: [gufo-org/gufo@0690047f6cd2bd86b7536c43e9c7fa353bddc2a2](https://github.com/gufo-org/gufo/commit/0690047f6cd2bd86b7536c43e9c7fa353bddc2a2)
   (PR #421).
-- Local: commit introducing this entry.
+- Local: `73fa2bbfe673e78609586b349af22ccfd1ec3f08`.
 - Adaptation: reuse the existing row-group mapping for wide output, attention,
   shared-expert down and fused SSM projections. Only launch order changes;
   retain each output's K accumulation and all narrow/fallback routes.
@@ -99,15 +105,16 @@ Use this entry format:
 - Validation: fresh Windows release/GPU builds, projection/attention/GDN and
   F16 library replay operators pass (4/4); formatting and resource checks pass,
   including eleven zero-scratch/spill dense F16 variants. Final matched-model
-  and performance qualification is pending in the
+  and state checks pass; measured throughput remains inconclusive. See the
   [series record](docs/plans/prefill-small-pr421-571-463.md).
-- Status: implemented in the isolated worktree; final series qualification pending.
+- Status: retained in the isolated worktree; Windows numerical/state checks
+  pass. No native speedup is established; Linux CI remains unrun.
 
 ### 2026-10-15 — Bound eager Flash-Next selector grids
 
 - Source: [gufo-org/gufo@109a577da5feaffe669e88a6baa9c45e35c3a815](https://github.com/gufo-org/gufo/commit/109a577da5feaffe669e88a6baa9c45e35c3a815)
   (PR #421).
-- Local: commit introducing this entry.
+- Local: `2f9a071ea7b843ed9e3aaefd0adfdf01657a8210`.
 - Adaptation: bound eager prefill score grids by the complete live blocks;
   captured decode keeps its maximum grid and score stride. Preserve the fork's
   MTP catch-up mask range. Omit the other #421 kernels from this improvement.
@@ -116,9 +123,11 @@ Use this entry format:
 - Validation: fresh Windows release/GPU builds, bounded/full-grid operator
   equality and repository formatting pass. The existing resource contract and
   nine dense F16 variants remain scratch/spill-free. Final matched-model
-  logits/perplexity, state and performance qualification is pending; see the
+  logits/perplexity and state checks pass; measured throughput remains
+  inconclusive. See the
   [series record](docs/plans/prefill-small-pr421-571-463.md).
-- Status: implemented in the isolated worktree; final series qualification pending.
+- Status: retained in the isolated worktree; Windows numerical/state checks
+  pass. No native speedup is established; Linux CI remains unrun.
 
 ### 2026-10-13 — Reduce-scatter for narrow batched Q8 decode
 

@@ -191,9 +191,12 @@ unless an integrated entry explicitly records a pass.
   `text_model_runner_test`, real-model concurrency/growth/history edits,
   cancellation, cache pressure, image identity and speculative rollback,
   exact matched-logit/perplexity checks, Linux `pr`.
-- [ ] [PR #421 — Flash prefill/indexer kernels](https://github.com/gufo-org/gufo/commit/653a31830447be5068a448a0284e43669d52f436) (**Defer** landing; investigate performance).
-  Fits Flash-Next/gfx1151, but qualify the algorithm-4438 BF16 gate, WMMA
-  intrinsics and LDS synchronization on TheRock 10.0.0. Require Windows
+- [ ] [PR #421 — Flash prefill/indexer kernels](https://github.com/gufo-org/gufo/commit/653a31830447be5068a448a0284e43669d52f436) (**Partly adapted**; remaining pieces deferred).
+  The eager selector grid, projection launch order and smaller attention LDS
+  stage are implemented in the [focused prefill series](docs/plans/prefill-small-pr421-571-463.md).
+  The algorithm-4438 BF16 gate and LDS-only synchronization remain outside that
+  series. Qualify their WMMA intrinsics and synchronization on TheRock 10.0.0.
+  Require Windows
   `dense_gemm_bench`/`attn_bench` sweeps, GPU operator tests, exact full logits
   and perplexity with pinned IQ4_XS/MTP/BF16 projector artifacts, separate
   speculative rejection coverage and matched end-to-end timings. Linux
