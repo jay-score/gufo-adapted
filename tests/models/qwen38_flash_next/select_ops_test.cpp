@@ -117,11 +117,40 @@ bool Run(std::uint32_t n_tokens, std::uint32_t start_pos, std::uint32_t seed,
       Download(d_mask, static_cast<std::size_t>(n_tokens) * mask_words);
   const auto scores =
       Download(d_scores, static_cast<std::size_t>(n_tokens) * max_blocks);
+  // Compare the bounded eager grid with the full decode grid on fresh output,
+  // including deep/ragged ranges, threshold ties and the sparse boundary.
+  CheckHip(hipMemset(d_mask, 0xA5, mask.size() * sizeof(std::uint32_t)),
+           "reset selection mask");
+  CheckHip(hipMemset(d_scores, 0xFF, scores.size() * sizeof(float)),
+           "reset selection scores");
   q::SelectBlocks(d_q, d_blocks, d_mask, d_scores, n_tokens, d_pos, 0, kHeads,
-                  kDim, kRatio, kBudget, mask_words, max_blocks, nullptr);
+                  kDim, kRatio, kBudget, mask_words, max_blocks, nullptr,
+                  (start_pos + n_tokens) / kRatio);
   if (Download(d_mask, mask.size()) != mask) {
     throw std::runtime_error("selection replay changed the mask");
   }
+  // Reuse an exactly-sized score buffer across ragged query chunks with a
+  // compact stride, while retaining absolute positions and causal masks.
+  constexpr std::uint32_t chunk = 31;
+  const auto compact_stride = ((start_pos + n_tokens) / kRatio + 31) / 32 * 32;
+  float* d_chunk_scores = nullptr;
+  CheckHip(hipMalloc(&d_chunk_scores, std::size_t{std::min(chunk, n_tokens)} *
+                                          compact_stride * sizeof(float)),
+           "chunk score allocation");
+  CheckHip(hipMemset(d_mask, 0xA5, mask.size() * sizeof(std::uint32_t)),
+           "reset chunked selection mask");
+  for (std::uint32_t first = 0; first < n_tokens; first += chunk) {
+    const auto count = std::min(chunk, n_tokens - first);
+    q::SelectBlocks(d_q + std::size_t{first} * kHeads * kDim, d_blocks,
+                    d_mask + std::size_t{first} * mask_words, d_chunk_scores,
+                    count, d_pos, first, kHeads, kDim, kRatio, kBudget,
+                    mask_words, compact_stride, nullptr,
+                    (start_pos + first + count) / kRatio);
+  }
+  if (Download(d_mask, mask.size()) != mask) {
+    throw std::runtime_error("chunked selection changed the mask");
+  }
+  CheckHip(hipFree(d_chunk_scores), "free chunk scores");
 
   double worst_score = 0.0;
   std::size_t mismatches = 0;

@@ -44,6 +44,31 @@ embedding bytes but do not resolve this gap. [Evidence](artifacts/vision-parity.
 
 ## Reproduce
 
+### Windows selected upstream prefill changes
+
+October 15, 2026: selected #421/#571/#463 changes on native Windows/gfx1151,
+TheRock 10.0.0/clang 23, UD-IQ4_XS and UD-Q4_K_XL with their shared Q8_0 MTP
+sidecars. Both builds use the same extended diagnostic over three prose/code
+fixtures and 96/1023/1024/2048/4096/32768-token prefixes in AR/MTP modes.
+All **648 complete vocabulary rows (160,911,360 F32 values)** and both complete
+capture files are byte-identical; continuation NLL and perplexity are exact.
+
+Both formats pass full session, serialized snapshot and all 105-prefix rollback
+checks, including private C2/C4/C6/C8 state/RNG, sampled rejection/residual
+correction, fresh loads and 23 serving sampler strategies. Independent operators
+retain their existing F64 limits. The original compiled resource contract and
+all twelve dense F16 variants have zero scratch/register spills.
+
+All 92 paired HTTP responses also retain text and token counts: greedy
+C1/C2/C4/C6/C8, seeded-sampled C1 and a real 256-by-256 image with the BF16
+projector, in AR and full-head MTP modes. Each request emits 128 tokens and
+reuses zero prompt tokens. This is functional parity; HTTP latency is not
+fully qualified by one paired campaign.
+
+This is regression/state qualification, not new unquantized-teacher,
+conversion or encoder parity. Linux CI and GPU timeline profiling are unrun.
+[Commands, identities, results and limits](../../plans/prefill-small-pr421-571-463.md).
+
 ### Windows PR #518 local decode kernels
 
 October 13, 2026: stages 0/1 on native Windows/gfx1151 with TheRock 10.0.0,
