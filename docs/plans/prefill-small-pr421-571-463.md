@@ -50,7 +50,12 @@ regression qualification, not new unquantized-model or GGUF conversion parity.
 - Attention LDS stage: fresh release/GPU builds, projection and attention
   operators pass (2/2). Formatting and the original resource guard pass;
   eleven dense F16 variants have zero scratch/register spills.
-- F16 tile and selector scratch: pending.
+- F16 router tile: fresh release/GPU builds and projection/F16 replay/GDN
+  operators pass (3/3). The existing F16 check compares a 2048-token projection
+  with 1025/1023-token pieces exactly and retains its independent F64 bounds.
+  Formatting, original resource guard and twelve scratch/spill-free dense
+  F16 variants pass.
+- Selector scratch: pending.
 - Final matched logits/perplexity, state checks and timings: pending.
 
 ## Evidence and commands

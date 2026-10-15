@@ -37,6 +37,22 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-15 — Wider Flash-Next F16 router tiles
+
+- Source: [gufo-org/gufo@e8a75023f13fdfb8d77ff39efdf0da3b2c6f0fd5](https://github.com/gufo-org/gufo/commit/e8a75023f13fdfb8d77ff39efdf0da3b2c6f0fd5)
+  (PR #571).
+- Local: commit introducing this entry.
+- Adaptation: use the existing GEMM template's 128-by-128 tile for unquantized
+  F16 projections of at least 1024 tokens. Keep its two K16 chains and the
+  original narrow route. No other #571 kernels or fusions are imported.
+- Areas: Flash-Next `kernels.hip.cpp` unquantized projection dispatch.
+- Validation: fresh Windows release/GPU builds, projection/F16 replay/GDN
+  operators pass (3/3), including exact wide/narrow split output and independent
+  F64 checks. Formatting, original resource guard and twelve scratch/spill-free
+  dense F16 variants pass. Final model/performance qualification is pending in
+  the [series record](docs/plans/prefill-small-pr421-571-463.md).
+- Status: implemented in the isolated worktree; final series qualification pending.
+
 ### 2026-10-15 — Smaller Flash-Next attention projection stage
 
 - Source: [gufo-org/gufo@9e0426620ba1c7f02aafac1b846276f2f9b9e361](https://github.com/gufo-org/gufo/commit/9e0426620ba1c7f02aafac1b846276f2f9b9e361)
