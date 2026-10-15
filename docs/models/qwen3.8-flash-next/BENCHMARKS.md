@@ -8,6 +8,15 @@ llama.cpp uses `b11069` for AR and `6fcaa16f` for MTP.
 
 Positive gain favors Gufo.
 
+October 15 Windows selected #421/#571/#463 check: the 2048-token chunk remains
+unchanged. Native ABBA prefill differences are **-0.81% to +0.41%**, and decode
+means are **-1.25% to -0.43%**, within observed between-arm variation. This does
+not establish a speedup or strict latency non-regression. Selector score scratch
+falls **128 to 20 MiB** and compiled attention LDS **48 to 24 KiB**; all 648
+matched full-logit rows and both perplexities remain exact. These are native
+Windows controls, not a refresh of the historical HTTP/llama.cpp tables below.
+[Point values, identities, method and limits](../../plans/prefill-small-pr421-571-463.md).
+
 October 13 Windows PR #518 stages 0/1 check: matched pp2048/tg128 release
 quartets give median AR decode gains **+2.5% / +4.0%** for IQ4_XS and
 **+3.5% / +5.3%** for UD-Q4_K_XL at depths 0 / 32768. Adaptive MTP gains
