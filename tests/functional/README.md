@@ -81,6 +81,21 @@ python3 -m unittest discover -s tests/functional -p test_report.py
 ```
 
 
+The startup-loading runner polls health, readiness and generation from process
+start. Every answer during the load must be 503 `Loading model`, `/health`
+included, and the real server must answer all three after the listener handoff:
+
+```sh
+nix develop -c python3 tests/functional/startup_loading.py \
+  --output /tmp/startup-loading -- \
+  /path/to/production/gufo serve llm --model /path/to/model.gguf \
+  --cache-disk /tmp/startup-loading-disk
+```
+
+It fails if no loading answer was observed, so an instant load is not a pass.
+`observations.json` keeps every probe with its time; this check stays outside
+hosted model CI and `--suite all`.
+
 Device-loss process tests use a separate opt-in runner because each lost-device
 case must terminate its server. Build its CMake-owned preload helper, then run
 against a production binary and one explicitly selected model/mode:
