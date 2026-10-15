@@ -176,8 +176,9 @@ Restart the launcher after updating its code to load the new panel.
 - `gui.ps1 -Config C:\path\launcher.json` uses another settings file.
 - `gui.ps1 -NoBrowser` starts without opening a browser.
 - More options exposes disk caching, sessions, penalties and Flash-Next MTP options. MTP
-  options are passed only when MTP is enabled. Latin draft vocabulary is
-  intended for English/code; prompt lookup targets single-session use.
+  options are passed only when MTP is enabled. The default common-tokens
+  draft vocabulary falls back to the full one on other text; prompt lookup
+  targets single-session use.
 - DFlash2 uses the engine's adaptive defaults. MTP options, including its draft
   token cap, are not passed to DFlash2. If Qwen3.8-27B reports `MTP HTTP decoding
   requires a Qwen Flash-Next model`, select DFlash2 and choose its draft in the

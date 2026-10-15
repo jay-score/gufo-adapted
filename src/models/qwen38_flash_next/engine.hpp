@@ -17,6 +17,7 @@
 #include "src/models/qwen/vision/encoder.hpp"
 #include "src/models/qwen/vision/prompt.hpp"
 #include "src/models/qwen38_flash_next/config.hpp"
+#include "src/models/qwen38_flash_next/draft_vocab.hpp"
 #include "src/models/qwen38_flash_next/mtp_policy.hpp"
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
 #include "src/models/qwen38_flash_next/prompt_lookup.hpp"
@@ -38,14 +39,14 @@ class Session;
 class HostSnapshot;
 }  // namespace rocm
 
-/// Tokens the MTP draft head may propose.
+/// Output rows the MTP draft head scores.
 enum class DraftVocabulary {
   kFull,
-  /// Special tokens plus every token whose text is ASCII (English, code,
-  /// numbers, markup and the unaccented pieces of Latin-script languages)
-  /// or ASCII with common typographic marks: about half of the vocabulary,
-  /// so each draft step reads half of the output head.
-  kLatinText,
+  /// Default. The output head's first kMtpDraftVocab rows, read in place, plus
+  /// the special tokens (draft_vocab.hpp): about 40% of the head per draft
+  /// step. A request whose recent tokens fall outside them (another script)
+  /// drafts over the full head until they settle again.
+  kPrefix,
 };
 
 struct ModelOptions {
@@ -65,7 +66,7 @@ struct ModelOptions {
   /// Single-session prompt lookup: after an MTP draft, a match of 12+ tokens
   /// in the conversation proposes the tokens that followed it (PromptLookup).
   bool prompt_lookup = false;
-  DraftVocabulary draft_vocabulary = DraftVocabulary::kFull;
+  DraftVocabulary draft_vocabulary = DraftVocabulary::kPrefix;
 };
 
 class Session;
@@ -130,6 +131,10 @@ private:
   std::unique_ptr<rocm::Executor> executor_;
   std::shared_ptr<qwen::vision::Encoder> vision_;
   MtpBatchController batch_policy_;
+  /// DraftVocabulary::kPrefix is in effect: drafts may use the small head.
+  bool draft_subset_{false};
+  /// Prefix and special tokens: always in the small head.
+  [[nodiscard]] bool InDraftSubset(std::int32_t token) const;
 
   friend class Session;
 };
@@ -231,6 +236,8 @@ public:
     /// Of drafted/accepted: proposals copied from the context.
     std::uint64_t lookup{0};
     std::uint64_t lookup_accepted{0};
+    /// Cycles whose drafts scored the small head (DraftVocabulary::kPrefix).
+    std::uint64_t small_head_cycles{0};
   };
   [[nodiscard]] const SpeculativeStats& Statistics() const noexcept {
     return stats_;
@@ -269,10 +276,12 @@ private:
   [[nodiscard]] std::uint32_t KeptHiddenRows() const noexcept;
   /// A proposal returns its candidates, its greedy token, or both
   /// (`token_with_candidates`, when a greedy draft stops on confidence).
+  /// `draft_subset` scores it with the small head.
   bool DraftCatchUp(std::int32_t next_token, bool propose,
                     std::string* error_msg,
                     MtpCandidateLogits* candidates = nullptr,
-                    bool token_with_candidates = false);
+                    bool token_with_candidates = false,
+                    bool draft_subset = false);
   bool DraftReplay(std::int32_t next_token, std::vector<std::int32_t>* replay,
                    std::int32_t* hidden_row, std::string* error_msg) const;
   static bool DraftCatchUpBatch(std::span<const AdvanceRequest> requests,
@@ -314,6 +323,14 @@ private:
   MtpLowAcceptance low_acceptance_;
   /// Index of tokens_ for ModelOptions::prompt_lookup.
   PromptLookup lookup_;
+  /// Which head this request's drafts use (DraftVocabulary::kPrefix), a
+  /// function of tokens_ alone.
+  MtpDraftVocab draft_vocab_;
+  bool draft_vocab_stale_{false};
+  /// After tokens_ is replaced: the window restarts from it.
+  void ForgetDraftVocab() noexcept { draft_vocab_stale_ = true; }
+  /// Brings the window up to the committed tokens.
+  void SyncDraftVocab();
   SpeculativeStats stats_;
   std::shared_ptr<const qwen::vision::Prompt> image_prompt_;
   [[nodiscard]] std::span<const std::uint8_t> ImageIdentityBefore(
