@@ -8,6 +8,16 @@ llama.cpp uses `b11069` for AR and `6fcaa16f` for MTP.
 
 Positive gain favors Gufo.
 
+October 15 Windows chunk-size follow-up: internal prefill chunks 2048 → 4096
+improve native C1 AR **pp4096 by 18.79% / 18.57% for IQ4_XS** and
+**6.51% / 6.95% for UD-Q4_K_XL** at empty / 32K context. Matched ABBA release
+runs retain exact logits/perplexity; pp2048 controls vary by less than 1%.
+This worktree keeps 4096 for trials. These native fixed-pattern measurements
+do not refresh the historical HTTP/llama.cpp tables below. A paired 4498-token
+IQ4_XS HTTP C1 fixture stays **863.85 → 864.95 tok/s**; the server's existing
+2048-token checkpoint grid can split the larger internal capacity.
+[Actual rates, arm spreads, identities and limits](../../plans/prefill-chunk-4096.md).
+
 October 15 Windows selected #421/#571/#463 check: the 2048-token chunk remains
 unchanged. Native ABBA prefill differences are **-0.81% to +0.41%**, and decode
 means are **-1.25% to -0.43%**, within observed between-arm variation. This does

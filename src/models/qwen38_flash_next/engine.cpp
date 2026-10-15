@@ -23,9 +23,9 @@
 namespace gufo::models::qwen38_flash_next {
 namespace {
 
-// gfx1151 pp4096 at depths 0/4096: the 512/1024/2048/4096 sweep favored
-// 2048; larger chunks used more scratch without improving throughput.
-constexpr std::uint32_t kPrefillChunkTokens = 2048;
+// Larger chunks improve long-prompt throughput on native gfx1151.
+// Measurements and serving limits: docs/plans/prefill-chunk-4096.md.
+constexpr std::uint32_t kPrefillChunkTokens = 4096;
 
 void AssignError(std::string* error_msg, std::string_view message) {
   if (error_msg != nullptr) {
