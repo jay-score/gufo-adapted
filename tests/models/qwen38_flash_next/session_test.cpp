@@ -476,6 +476,9 @@ void CheckBatchFailureIsolation(const std::shared_ptr<qfn::Model>& model) {
                "and sampling replay\n";
 }
 
+/// --draft-prefix: drafts may use the small head (DraftVocabulary::kPrefix).
+bool g_draft_prefix = false;
+
 void CheckBatchedSessions(const std::shared_ptr<qfn::Model>& model) {
   std::string error;
   std::size_t sampled_rejections = 0;
@@ -564,6 +567,7 @@ void CheckBatchedSessions(const std::shared_ptr<qfn::Model>& model) {
                         batch_samplers[i].rng_state() &&
                     a.cycles == b.cycles && a.drafted == b.drafted &&
                     a.accepted == b.accepted &&
+                    a.small_head_cycles == b.small_head_cycles &&
                     std::equal(serial[i]->Tokens().begin(),
                                serial[i]->Tokens().end(),
                                batched[i]->Tokens().begin(),
@@ -621,6 +625,21 @@ void CheckBatchedSessions(const std::shared_ptr<qfn::Model>& model) {
             "batched snapshot state differs: " + std::to_string(i));
   }
   std::cout << "batch independent_state_exact=1\n" << std::flush;
+  if (g_draft_prefix) {
+    // Member 1 samples at temperature 2, so most of its tokens fall outside
+    // the prefix and it drafts over the full head beside small-head peers.
+    bool small = false;
+    bool full = false;
+    std::cout << "batch small_head_cycles";
+    for (const auto& session : batched) {
+      const auto stats = session->Statistics();
+      small = small || stats.small_head_cycles > 0;
+      full = full || stats.small_head_cycles < stats.cycles;
+      std::cout << ' ' << stats.small_head_cycles << '/' << stats.cycles;
+    }
+    std::cout << '\n' << std::flush;
+    Require(small && full, "batched drafts did not mix small and full heads");
+  }
 }
 
 void CheckExecutionModes(const std::shared_ptr<qfn::Model>& model) {
@@ -803,6 +822,9 @@ void CheckServingSampling(const std::shared_ptr<qfn::Model>& model) {
 }
 
 int main(int argc, char** argv) {
+  g_draft_prefix =
+      argc > 5 && std::string_view(argv[argc - 1]) == "--draft-prefix";
+  argc -= g_draft_prefix ? 1 : 0;
   const bool capture_prefill =
       argc == 7 && std::string_view(argv[5]) == "--capture-prefill-logits";
   const bool batch_only =
@@ -817,14 +839,18 @@ int main(int argc, char** argv) {
       std::string_view(argv[3]) != "--mtp-model") {
     std::cerr << "Usage: session_test --model FIRST.gguf --mtp-model MTP.gguf "
                  "[--batch-only | --prefill-only | --sampling-only | "
-                 "--capture-prefill-logits OUTPUT]\n";
+                 "--capture-prefill-logits OUTPUT] [--draft-prefix]\n";
     return 77;
   }
   try {
     std::string error;
     auto model = qfn::Model::Load(
         argv[2],
-        {.max_context = 6145, .mtp_model_path = argv[4], .max_draft_tokens = 7},
+        {.max_context = 6145,
+         .mtp_model_path = argv[4],
+         .max_draft_tokens = 7,
+         .draft_vocabulary = g_draft_prefix ? qfn::DraftVocabulary::kPrefix
+                                            : qfn::DraftVocabulary::kFull},
         &error);
     Require(model != nullptr, error);
     if (capture_prefill) {
@@ -1007,7 +1033,11 @@ int main(int argc, char** argv) {
     model.reset();
     model = qfn::Model::Load(
         argv[2],
-        {.max_context = 6145, .mtp_model_path = argv[4], .max_draft_tokens = 7},
+        {.max_context = 6145,
+         .mtp_model_path = argv[4],
+         .max_draft_tokens = 7,
+         .draft_vocabulary = g_draft_prefix ? qfn::DraftVocabulary::kPrefix
+                                            : qfn::DraftVocabulary::kFull},
         &error);
     Require(model != nullptr, error);
     std::reverse(replays.begin(), replays.end());

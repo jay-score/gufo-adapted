@@ -42,7 +42,7 @@ DEFAULTS = {
     "presence_penalty": 0.0,
     "speculative": "off",
     "draft_tokens": 7,
-    "mtp_draft_vocab": "full",
+    "mtp_draft_vocab": "prefix",
     "prompt_lookup": False,
 }
 INTEGER_LIMITS = {
@@ -60,7 +60,7 @@ FLOAT_LIMITS = {
 }
 ENUMS = {"model_family": tuple(MODEL_FAMILIES), "think": ("auto", "on", "off"),
          "reasoning_effort": REASONING_LEVELS, "speculative": tuple(SPECULATIVE_MODES),
-         "mtp_draft_vocab": ("full", "latin")}
+         "mtp_draft_vocab": ("prefix", "full")}
 
 # Fields older launchers saved; validate_settings migrates them.
 LEGACY_FIELDS = {"mtp", "mtp_policy"}
@@ -85,6 +85,9 @@ def validate_settings(values):
         if type(mtp) is not bool:
             raise ValueError("mtp: expected a checkbox value.")
         values.setdefault("speculative", "mtp" if mtp else "off")
+    # The prefix draft head replaced the Latin-text one.
+    if values.get("mtp_draft_vocab") == "latin":
+        values = dict(values, mtp_draft_vocab="prefix")
     result = DEFAULTS | values
     for key, default in DEFAULTS.items():
         value = result[key]

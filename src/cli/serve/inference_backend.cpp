@@ -3022,8 +3022,8 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
                 std::clamp<std::size_t>(session_count, 1, 8)),
             .prompt_lookup = speculative_config.prompt_lookup,
             .draft_vocabulary =
-                speculative_config.mtp_latin_draft_vocabulary
-                    ? models::qwen38_flash_next::DraftVocabulary::kLatinText
+                speculative_config.mtp_prefix_draft_vocabulary
+                    ? models::qwen38_flash_next::DraftVocabulary::kPrefix
                     : models::qwen38_flash_next::DraftVocabulary::kFull,
         },
         &load_error);
