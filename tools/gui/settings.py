@@ -42,7 +42,6 @@ DEFAULTS = {
     "presence_penalty": 0.0,
     "speculative": "off",
     "draft_tokens": 7,
-    "mtp_policy": "length",
     "mtp_draft_vocab": "full",
     "prompt_lookup": False,
 }
@@ -61,8 +60,10 @@ FLOAT_LIMITS = {
 }
 ENUMS = {"model_family": tuple(MODEL_FAMILIES), "think": ("auto", "on", "off"),
          "reasoning_effort": REASONING_LEVELS, "speculative": tuple(SPECULATIVE_MODES),
-         "mtp_policy": ("length", "survival"),
          "mtp_draft_vocab": ("full", "latin")}
+
+# Fields older launchers saved; validate_settings migrates them.
+LEGACY_FIELDS = {"mtp", "mtp_policy"}
 
 
 def settings_path():
@@ -71,8 +72,12 @@ def settings_path():
 
 
 def validate_settings(values):
-    if not isinstance(values, dict) or set(values) - DEFAULTS.keys() - {"mtp"}:
+    if not isinstance(values, dict) or set(values) - DEFAULTS.keys() - LEGACY_FIELDS:
         raise ValueError("Settings must contain only the supported launcher fields.")
+    # MTP drafting now always stops on the draft's confidence; a saved
+    # draft policy is ignored without rewriting saved settings on load.
+    if "mtp_policy" in values:
+        values = {key: value for key, value in values.items() if key != "mtp_policy"}
     # Migrate the original MTP checkbox without rewriting saved settings on load.
     if "mtp" in values:
         values = dict(values)

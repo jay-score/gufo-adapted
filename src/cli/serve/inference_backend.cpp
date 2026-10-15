@@ -3020,7 +3020,6 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
             .vision_model_path = vision_model_path,
             .decode_concurrency = static_cast<std::uint32_t>(
                 std::clamp<std::size_t>(session_count, 1, 8)),
-            .mtp_survival = speculative_config.mtp_survival,
             .prompt_lookup = speculative_config.prompt_lookup,
             .draft_vocabulary =
                 speculative_config.mtp_latin_draft_vocabulary

@@ -16,7 +16,6 @@ def main():
     assert shells[0], "Windows PowerShell is required"
     switches = {
         "-DraftVocab": ["--mtp-draft-vocab", "latin"],
-        "-Survival": ["--mtp-policy", "survival"],
         "-Lookup": ["--prompt-lookup"],
     }
     count = 0
