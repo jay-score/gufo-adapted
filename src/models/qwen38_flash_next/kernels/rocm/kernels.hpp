@@ -423,7 +423,8 @@ void SelectBlocks(const float* q, const __half* blocks, std::uint32_t* mask,
                   const std::uint32_t* start_pos, std::uint32_t first_token,
                   std::uint32_t heads, std::uint32_t dim, std::uint32_t ratio,
                   std::uint32_t budget, std::uint32_t mask_words,
-                  std::uint32_t max_blocks, hipStream_t stream);
+                  std::uint32_t max_blocks, hipStream_t stream,
+                  std::uint32_t live_blocks = 0);
 
 /// Per-token attention (decode and narrow batches). With `partials`
 /// (n_tokens * heads * splits * (d + 2) floats) the key tiles are split

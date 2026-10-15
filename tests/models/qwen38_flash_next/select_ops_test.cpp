@@ -117,8 +117,15 @@ bool Run(std::uint32_t n_tokens, std::uint32_t start_pos, std::uint32_t seed,
       Download(d_mask, static_cast<std::size_t>(n_tokens) * mask_words);
   const auto scores =
       Download(d_scores, static_cast<std::size_t>(n_tokens) * max_blocks);
+  // Compare the bounded eager grid with the full decode grid on fresh output,
+  // including deep/ragged ranges, threshold ties and the sparse boundary.
+  CheckHip(hipMemset(d_mask, 0xA5, mask.size() * sizeof(std::uint32_t)),
+           "reset selection mask");
+  CheckHip(hipMemset(d_scores, 0xFF, scores.size() * sizeof(float)),
+           "reset selection scores");
   q::SelectBlocks(d_q, d_blocks, d_mask, d_scores, n_tokens, d_pos, 0, kHeads,
-                  kDim, kRatio, kBudget, mask_words, max_blocks, nullptr);
+                  kDim, kRatio, kBudget, mask_words, max_blocks, nullptr,
+                  (start_pos + n_tokens) / kRatio);
   if (Download(d_mask, mask.size()) != mask) {
     throw std::runtime_error("selection replay changed the mask");
   }
