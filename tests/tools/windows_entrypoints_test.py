@@ -175,8 +175,13 @@ class Stub {
 
     def test_build_stages_nested_runtime_files_and_skips_unchanged_files(self):
         self.prepare_build()
+        source = self.rock / "bin/amdhip64_7.dll"
+        nested = self.rock / "bin/rocblas/nested [test]/kernel.bin"
         for shell in self.shells:
             with self.subTest(shell=shell):
+                # Each shell starts with the original data, before the mutations below.
+                source.write_bytes(b"runtime")
+                nested.write_bytes(b"kernel")
                 result = self.run_script(shell, "build.ps1", *self.build_arguments)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual((self.build / "rocblas/nested [test]/kernel.bin").read_bytes(), b"kernel")
@@ -201,11 +206,9 @@ class Stub {
                                         capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 # Same-size changes with a new timestamp and size-only changes must copy.
-                source = self.rock / "bin/amdhip64_7.dll"
                 source.write_bytes(b"changed")
                 timestamp = (self.build / source.name).stat().st_mtime + 10
                 os.utime(source, (timestamp, timestamp))
-                nested = self.rock / "bin/rocblas/nested [test]/kernel.bin"
                 old_time = nested.stat().st_mtime
                 nested.write_bytes(b"larger kernel")
                 os.utime(nested, (old_time, old_time))
