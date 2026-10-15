@@ -428,16 +428,20 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
         *error_msg = "GGUF metadata key exceeds limits";
       return false;
     }
+    const auto metadata_error = [&](std::string_view reason) {
+      if (error_msg)
+        *error_msg = "GGUF metadata key '" + std::string(key) +
+                     "': " + std::string(reason);
+      return false;
+    };
     std::uint32_t val_type_raw = 0;
     if (!ReadPod(data_, size_, offset, val_type_raw)) {
-      if (error_msg != nullptr) {
-        *error_msg = "Failed to read metadata type for key " + std::string(key);
-      }
-      return false;
+      return metadata_error("Truncated value type");
     }
 
     if (val_type_raw > static_cast<std::uint32_t>(GgufValueType::kFloat64))
-      return false;
+      return metadata_error("Unknown value type " +
+                            std::to_string(val_type_raw));
     const auto val_type = static_cast<GgufValueType>(val_type_raw);
     GgufMetadataValue meta_val;
     meta_val.type = val_type;
@@ -446,7 +450,7 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
       case GgufValueType::kUint8: {
         std::uint8_t v = 0;
         if (!ReadPod(data_, size_, offset, v)) {
-          return false;
+          return metadata_error("Truncated value");
         }
         meta_val.value = static_cast<std::uint64_t>(v);
         break;
@@ -454,7 +458,7 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
       case GgufValueType::kInt8: {
         std::int8_t v = 0;
         if (!ReadPod(data_, size_, offset, v)) {
-          return false;
+          return metadata_error("Truncated value");
         }
         meta_val.value = static_cast<std::int64_t>(v);
         break;
@@ -462,7 +466,7 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
       case GgufValueType::kUint16: {
         std::uint16_t v = 0;
         if (!ReadPod(data_, size_, offset, v)) {
-          return false;
+          return metadata_error("Truncated value");
         }
         meta_val.value = static_cast<std::uint64_t>(v);
         break;
@@ -470,7 +474,7 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
       case GgufValueType::kInt16: {
         std::int16_t v = 0;
         if (!ReadPod(data_, size_, offset, v)) {
-          return false;
+          return metadata_error("Truncated value");
         }
         meta_val.value = static_cast<std::int64_t>(v);
         break;
@@ -478,7 +482,7 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
       case GgufValueType::kUint32: {
         std::uint32_t v = 0;
         if (!ReadPod(data_, size_, offset, v)) {
-          return false;
+          return metadata_error("Truncated value");
         }
         meta_val.value = static_cast<std::uint64_t>(v);
         break;
@@ -486,7 +490,7 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
       case GgufValueType::kInt32: {
         std::int32_t v = 0;
         if (!ReadPod(data_, size_, offset, v)) {
-          return false;
+          return metadata_error("Truncated value");
         }
         meta_val.value = static_cast<std::int64_t>(v);
         break;
@@ -494,33 +498,34 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
       case GgufValueType::kFloat32: {
         float v = 0.0F;
         if (!ReadPod(data_, size_, offset, v)) {
-          return false;
+          return metadata_error("Truncated value");
         }
         meta_val.value = static_cast<double>(v);
         break;
       }
       case GgufValueType::kBool: {
         std::uint8_t v = 0;
-        if (!ReadPod(data_, size_, offset, v) || v > 1) {
-          return false;
-        }
+        if (!ReadPod(data_, size_, offset, v))
+          return metadata_error("Truncated boolean value");
+        if (v > 1)
+          return metadata_error("Invalid boolean value");
         meta_val.value = (v != 0);
         break;
       }
       case GgufValueType::kString: {
         std::string_view s;
         if (!ReadString(data_, size_, offset, s)) {
-          return false;
+          return metadata_error("Truncated value");
         }
         if (!charge(s.size(), 1))
-          return false;
+          return metadata_error("String exceeds memory limits");
         meta_val.value = s;
         break;
       }
       case GgufValueType::kUint64: {
         std::uint64_t v = 0;
         if (!ReadPod(data_, size_, offset, v)) {
-          return false;
+          return metadata_error("Truncated value");
         }
         meta_val.value = v;
         break;
@@ -528,7 +533,7 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
       case GgufValueType::kInt64: {
         std::int64_t v = 0;
         if (!ReadPod(data_, size_, offset, v)) {
-          return false;
+          return metadata_error("Truncated value");
         }
         meta_val.value = v;
         break;
@@ -536,7 +541,7 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
       case GgufValueType::kFloat64: {
         double v = 0.0;
         if (!ReadPod(data_, size_, offset, v)) {
-          return false;
+          return metadata_error("Truncated value");
         }
         meta_val.value = v;
         break;
@@ -546,19 +551,21 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
         std::uint64_t array_len = 0;
         if (!ReadPod(data_, size_, offset, item_type_raw) ||
             !ReadPod(data_, size_, offset, array_len)) {
-          return false;
+          return metadata_error("Truncated array header");
         }
         if (item_type_raw >
                 static_cast<std::uint32_t>(GgufValueType::kFloat64) ||
             item_type_raw == static_cast<std::uint32_t>(GgufValueType::kArray))
-          return false;
+          return metadata_error("Invalid array item type " +
+                                std::to_string(item_type_raw));
         constexpr std::size_t item_bytes[] = {1, 1, 2, 2, 4, 4, 4,
                                               1, 8, 0, 8, 8, 8};
         if (offset > size_ ||
-            array_len > (size_ - offset) / item_bytes[item_type_raw] ||
-            !charge(array_len,
+            array_len > (size_ - offset) / item_bytes[item_type_raw])
+          return metadata_error("Array length exceeds remaining data");
+        if (!charge(array_len,
                     item_type_raw == 8 ? sizeof(std::string_view) : 8))
-          return false;
+          return metadata_error("Array exceeds memory limits");
         const auto item_type = static_cast<GgufValueType>(item_type_raw);
         if (item_type == GgufValueType::kString) {
           std::vector<std::string_view> str_arr;
@@ -566,10 +573,10 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
           for (std::uint64_t a = 0; a < array_len; ++a) {
             std::string_view s;
             if (!ReadString(data_, size_, offset, s)) {
-              return false;
+              return metadata_error("Truncated value");
             }
             if (!charge(s.size(), 1))
-              return false;
+              return metadata_error("Array string exceeds memory limits");
             str_arr.push_back(s);
           }
           meta_val.value = std::move(str_arr);
@@ -577,7 +584,7 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
                    item_type == GgufValueType::kFloat64) {
           const auto bytes = item_type == GgufValueType::kFloat32 ? 4U : 8U;
           if (offset > size_ || array_len > (size_ - offset) / bytes)
-            return false;
+            return metadata_error("Truncated value");
           std::vector<double> values;
           values.reserve(array_len);
           for (std::uint64_t a = 0; a < array_len; ++a) {
@@ -585,10 +592,10 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
             if (item_type == GgufValueType::kFloat32) {
               float scalar = 0;
               if (!ReadPod(data_, size_, offset, scalar))
-                return false;
+                return metadata_error("Truncated value");
               value = scalar;
             } else if (!ReadPod(data_, size_, offset, value)) {
-              return false;
+              return metadata_error("Truncated value");
             }
             values.push_back(value);
           }
@@ -606,27 +613,29 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
             if (item_type == GgufValueType::kUint8) {
               std::uint8_t val8 = 0;
               if (!ReadPod(data_, size_, offset, val8))
-                return false;
+                return metadata_error("Truncated value");
               val = val8;
             } else if (item_type == GgufValueType::kUint16) {
               std::uint16_t val16 = 0;
               if (!ReadPod(data_, size_, offset, val16))
-                return false;
+                return metadata_error("Truncated value");
               val = val16;
             } else if (item_type == GgufValueType::kUint32) {
               std::uint32_t val32 = 0;
               if (!ReadPod(data_, size_, offset, val32)) {
-                return false;
+                return metadata_error("Truncated value");
               }
               val = val32;
             } else if (item_type == GgufValueType::kBool) {
               std::uint8_t boolean = 0;
-              if (!ReadPod(data_, size_, offset, boolean) || boolean > 1)
-                return false;
+              if (!ReadPod(data_, size_, offset, boolean))
+                return metadata_error("Truncated array boolean");
+              if (boolean > 1)
+                return metadata_error("Invalid array boolean");
               val = boolean;
             } else {
               if (!ReadPod(data_, size_, offset, val)) {
-                return false;
+                return metadata_error("Truncated value");
               }
             }
             u_arr.push_back(val);
@@ -643,21 +652,21 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
             if (item_type == GgufValueType::kInt8) {
               std::int8_t val8 = 0;
               if (!ReadPod(data_, size_, offset, val8))
-                return false;
+                return metadata_error("Truncated value");
               val = val8;
             } else if (item_type == GgufValueType::kInt16) {
               std::int16_t val16 = 0;
               if (!ReadPod(data_, size_, offset, val16))
-                return false;
+                return metadata_error("Truncated value");
               val = val16;
             } else if (item_type == GgufValueType::kInt32) {
               std::int32_t val32 = 0;
               if (!ReadPod(data_, size_, offset, val32)) {
-                return false;
+                return metadata_error("Truncated value");
               }
               val = val32;
             } else if (!ReadPod(data_, size_, offset, val)) {
-              return false;
+              return metadata_error("Truncated value");
             }
             i_arr.push_back(val);
           }
@@ -665,7 +674,7 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
         } else {
           // Every scalar item type is decoded above; never store an array
           // entry without its values.
-          return false;
+          return metadata_error("Unsupported array item type");
         }
         break;
       }
@@ -674,16 +683,12 @@ bool GgufReader::ParseHeaders(std::string* error_msg) {
     if (key == "general.alignment") {
       const auto* value = std::get_if<std::uint64_t>(&meta_val.value);
       if (!value || !std::has_single_bit(*value) || *value > UINT32_MAX) {
-        if (error_msg)
-          *error_msg = "Invalid GGUF alignment";
-        return false;
+        return metadata_error("Invalid GGUF alignment");
       }
       alignment_ = *value;
     }
     if (!metadata_.emplace(key, std::move(meta_val)).second) {
-      if (error_msg)
-        *error_msg = "Duplicate GGUF metadata key";
-      return false;
+      return metadata_error("Duplicate GGUF metadata key");
     }
   }
 
