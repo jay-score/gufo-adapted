@@ -142,9 +142,8 @@ def check(url, results, literal=False, images=False):
                                  # Responses also accepts images in tool output.
                                  'content': result_text}]
             signatures = []
-            # Responses currently has no cache_prompt override. Chat cold
-            # controls cover the shared runner; Responses still checks retries.
-            for phase in (('warm', 'retry') if responses else ('warm', 'retry', 'cold')):
+            # Both APIs accept cache_prompt=False for a cold replay control.
+            for phase in ('warm', 'retry', 'cold'):
                 current = deepcopy(replay)
                 if phase == 'cold':
                     current['cache_prompt'] = False
