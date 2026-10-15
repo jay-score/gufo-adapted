@@ -476,6 +476,83 @@ void TestMalformedGgufRejection() {
   Expect(r2 == nullptr, "Truncated buffer rejected");
 }
 
+void TestMetadataErrors() {
+  using gufo::core::GgufReader;
+  using gufo::core::GgufValueType;
+  constexpr std::string_view key = "broken.metadata";
+  const std::size_t type_offset = 24 + 8 + key.size();
+  const std::size_t value_offset = type_offset + 4;
+  const auto patch = [](auto& bytes, std::size_t offset, auto value) {
+    std::memcpy(bytes.data() + offset, &value, sizeof(value));
+  };
+  const auto rejects = [&](const auto& bytes, std::string_view reason) {
+    std::string error = "previous error";
+    Expect(!GgufReader::OpenMemory(bytes.data(), bytes.size(), &error),
+           "Malformed metadata is rejected");
+    Expect(error.find(key) != std::string::npos &&
+               error.find(reason) != std::string::npos,
+           "Metadata error names the key and reason: " + error);
+    Expect(!GgufReader::OpenMemory(bytes.data(), bytes.size()),
+           "Malformed metadata is rejected without an error output");
+  };
+
+  GgufBuilder scalar;
+  scalar.AddMetadataUint64(key, 0);
+  const auto original = scalar.Build();
+  for (std::uint32_t type = 0; type <= 12; ++type) {
+    if (type == static_cast<std::uint32_t>(GgufValueType::kArray))
+      continue;
+    auto bytes = original;
+    patch(bytes, type_offset, type);
+    const std::size_t widths[] = {1, 1, 2, 2, 4, 4, 4, 1, 8, 0, 8, 8, 8};
+    bytes.resize(value_offset + widths[type] - 1);
+    rejects(bytes, "Truncated");
+  }
+  auto bytes = original;
+  bytes.resize(value_offset - 1);
+  rejects(bytes, "Truncated value type");
+  bytes = original;
+  patch(bytes, type_offset, std::uint32_t{0x108});
+  rejects(bytes, "Unknown value type 264");
+  const auto path =
+      std::filesystem::temp_directory_path() / "gufo-invalid-metadata.gguf";
+  WriteBinaryFile(path, bytes);
+  std::string error;
+  const auto reader = GgufReader::OpenFile(path, &error);
+  std::filesystem::remove(path);
+  Expect(!reader && error.find(key) != std::string::npos &&
+             error.find("Unknown value type 264") != std::string::npos,
+         "File-backed metadata errors retain the key and reason");
+
+  bytes = original;
+  patch(bytes, type_offset, static_cast<std::uint32_t>(GgufValueType::kBool));
+  bytes[value_offset] = 2;
+  rejects(bytes, "Invalid boolean");
+
+  GgufBuilder array;
+  array.AddMetadataArray<std::uint8_t>(key, GgufValueType::kBool, {0, 1});
+  const auto array_bytes = array.Build();
+  bytes = array_bytes;
+  bytes.resize(value_offset + 11);
+  rejects(bytes, "Truncated array header");
+  for (std::uint32_t type : {9U, 13U}) {
+    bytes = array_bytes;
+    patch(bytes, value_offset, type);
+    rejects(bytes, "Invalid array item type");
+  }
+  bytes = array_bytes;
+  patch(bytes, value_offset + 4, UINT64_MAX);
+  rejects(bytes, "Array length exceeds remaining data");
+  bytes = array_bytes;
+  bytes[value_offset + 12] = 2;
+  rejects(bytes, "Invalid array boolean");
+  bytes = array_bytes;
+  patch(bytes, value_offset,
+        static_cast<std::uint32_t>(GgufValueType::kString));
+  patch(bytes, value_offset + 12, UINT64_MAX);
+  rejects(bytes, "Truncated value");
+}
+
 void TestHostileHeaders() {
   const auto rejects = [](const std::vector<std::uint8_t>& bytes) {
     std::string error;
@@ -685,6 +762,7 @@ int main() {
   TestQuantizationLabel();
   TestMalformedGgufRejection();
   TestHostileHeaders();
+  TestMetadataErrors();
   std::cout << "All GgufReader tests passed successfully!\n";
   return 0;
 }
