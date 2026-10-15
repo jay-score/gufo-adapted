@@ -962,5 +962,43 @@
     "GPU timeline profiling unavailable/unrun.",
     "No Linux execution; local Windows experiment, not merged to the original checkout.",
     "Logit/PPL checks are regression consistency, not an independent unquantized teacher."
-  ]
+  ],
+  "memory_check": {
+    "context": 4097,
+    "chunk": 4096,
+    "model": "UD-IQ4_XS",
+    "mode": "AR",
+    "sample_period_seconds": 0.2,
+    "before": {
+      "system_commit": 29609160704,
+      "physical_available": 14191878144,
+      "physical_total": 33981009920
+    },
+    "peaks": {
+      "working_set": 1250136064,
+      "peak_working_set": 1251115008,
+      "private_commit": 1275998208,
+      "gpu_shared": 401915904,
+      "gpu_dedicated": 69379313664,
+      "gpu_committed": 69781229568,
+      "system_commit": 100819341312
+    },
+    "minimum_physical_available": 12401115136,
+    "phase_limit": "Buffered stdout prevents a reliable load/prefill split; use whole-run peaks including loading, prefill warmup and timed work.",
+    "elapsed_seconds": 28.496009399998,
+    "exit": 0,
+    "prompt_tokens": 4096,
+    "output_tokens": 16,
+    "depth": 0,
+    "native_repetitions": 1,
+    "native_untimed_warmup": true,
+    "sample_count": 141,
+    "baseline_comparison": false,
+    "counter_sources": [
+      "GetProcessMemoryInfo",
+      "GetPerformanceInfo",
+      "GPU Process Memory PDH counters"
+    ],
+    "interpretation": "Windows dedicated/shared GPU labels on UMA; counters overlap and must not be added to system commit. Whole-run sampled peaks include model/runtime, loading and prefill. No incremental chunk overhead or larger-context/MTP peak claim."
+  }
 }
