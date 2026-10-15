@@ -15,7 +15,7 @@ def main():
     shells = [shutil.which(name) for name in ("powershell.exe", "pwsh.exe")]
     assert shells[0], "Windows PowerShell is required"
     switches = {
-        "-DraftVocab": ["--mtp-draft-vocab", "prefix"],
+        "-FullDraftVocab": ["--mtp-draft-vocab", "full"],
         "-Lookup": ["--prompt-lookup"],
     }
     count = 0

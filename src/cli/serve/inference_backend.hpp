@@ -48,7 +48,7 @@ struct TextSpeculativeConfig {
       speculative::DFlashDraftPolicy::kAdaptive};
   /// Qwen3.8-Flash-Next MTP opt-ins (see its ModelOptions); all off by
   /// default.
-  bool mtp_prefix_draft_vocabulary{false};
+  bool mtp_prefix_draft_vocabulary{true};
   bool prompt_lookup{false};
 };
 

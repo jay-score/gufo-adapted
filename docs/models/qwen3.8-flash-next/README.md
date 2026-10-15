@@ -53,16 +53,17 @@ costs. Every policy reads only committed history, so seeded sampling replays.
 Each request keeps private caches, rollback and RNG. See
 [MTP qualification](QUALITY.md).
 
-Two opt-in MTP options change only what the draft side proposes; verification
-is unchanged, so sampled outputs keep the target distribution and greedy text is
-byte-identical. Prompt lookup applies to single-session decoding (measured on
+Two MTP options change only what the draft side proposes; verification is
+unchanged, so sampled outputs keep the target distribution and greedy text is
+byte-identical. The prefix head is the default (`--mtp-draft-vocab full`
+restores the full head); prompt lookup is opt-in. Prompt lookup applies to single-session decoding (measured on
 Windows, sampled, thinking on, 3 seeds per prompt, against the length
 controller that preceded the confidence stop); the prefix head was measured
 against `full` at one session on the confidence stop:
 
 | Option | What it does | Measured |
 | --- | --- | --- |
-| `--mtp-draft-vocab prefix` | Drafts score the output head's first 98,304 rows in place (no copy; prefix ids are token ids) plus a 33-row copy of the special tokens above them, 40% of the head per draft step. A cycle drafts over the full head when its anchor, or more than one of the last 32 committed tokens, is outside them, so other scripts draft as before. Single and batched heads; `latin` is an accepted alias | Story, code, explain, edit: greedy +10-15% (texts identical, same acceptance), sampled +10-19%; Chinese: same acceptance as `full` (falls back), +1% |
+| `--mtp-draft-vocab prefix` (default) | Drafts score the output head's first 98,304 rows in place (no copy; prefix ids are token ids) plus a 33-row copy of the special tokens above them, 40% of the head per draft step. A cycle drafts over the full head when its anchor, or more than one of the last 32 committed tokens, is outside them, so other scripts draft as before. Single and batched heads; `latin` is an accepted alias | Story, code, explain, edit: greedy +10-15% (texts identical, same acceptance), sampled +10-19%; Chinese: same acceptance as `full` (falls back), +1% |
 | `--prompt-lookup` | After each kept MTP draft, a match of 12+ tokens in the conversation proposes the tokens that followed it (point-mass proposals, exact under rejection sampling). Shorter matches propose nothing: an ungated 3-token rule lost 6-8% at temperature 1 | File-editing replies +10% sampled; log quoting +23% greedy; prose unchanged. Timings report `lookup_n` / `lookup_n_accepted` |
 
 The official template defaults to thinking on, `xhigh` effort and preserving

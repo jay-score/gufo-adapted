@@ -42,10 +42,10 @@ class HostSnapshot;
 /// Output rows the MTP draft head scores.
 enum class DraftVocabulary {
   kFull,
-  /// The output head's first kMtpDraftVocab rows, read in place, plus the
-  /// special tokens (draft_vocab.hpp): about 40% of the head per draft step.
-  /// A request whose recent tokens fall outside them (another script) drafts
-  /// over the full head until they settle again.
+  /// Default. The output head's first kMtpDraftVocab rows, read in place, plus
+  /// the special tokens (draft_vocab.hpp): about 40% of the head per draft
+  /// step. A request whose recent tokens fall outside them (another script)
+  /// drafts over the full head until they settle again.
   kPrefix,
 };
 
@@ -66,7 +66,7 @@ struct ModelOptions {
   /// Single-session prompt lookup: after an MTP draft, a match of 12+ tokens
   /// in the conversation proposes the tokens that followed it (PromptLookup).
   bool prompt_lookup = false;
-  DraftVocabulary draft_vocabulary = DraftVocabulary::kFull;
+  DraftVocabulary draft_vocabulary = DraftVocabulary::kPrefix;
 };
 
 class Session;
