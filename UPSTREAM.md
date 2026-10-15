@@ -37,6 +37,22 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-15 — Smaller Flash-Next attention projection stage
+
+- Source: [gufo-org/gufo@9e0426620ba1c7f02aafac1b846276f2f9b9e361](https://github.com/gufo-org/gufo/commit/9e0426620ba1c7f02aafac1b846276f2f9b9e361)
+  (PR #421), following the row-tile ordering adaptation below.
+- Local: commit introducing this entry.
+- Adaptation: stage one K block in the fused attention projection, reducing
+  LDS from 48 to 24 KiB without changing the K16 accumulation order. Keep SSM
+  and output projection staging unchanged.
+- Areas: Flash-Next `kernels.hip.cpp` fused attention template and dispatch.
+- Validation: fresh Windows release/GPU builds, projection and attention
+  operators pass (2/2), including ragged fused Q/K/V outputs. Formatting,
+  original resource guard and eleven scratch/spill-free dense F16 variants
+  pass. Final matched-model and performance qualification is pending in the
+  [series record](docs/plans/prefill-small-pr421-571-463.md).
+- Status: implemented in the isolated worktree; final series qualification pending.
+
 ### 2026-10-15 — Group Flash-Next projection row tiles
 
 - Source: [gufo-org/gufo@0690047f6cd2bd86b7536c43e9c7fa353bddc2a2](https://github.com/gufo-org/gufo/commit/0690047f6cd2bd86b7536c43e9c7fa353bddc2a2)
