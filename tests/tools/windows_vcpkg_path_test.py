@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 @unittest.skipUnless(os.name == "nt", "Windows scripts require Windows")
 class WindowsVcpkgPathTest(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="gufo vcpkg ")
+        temporary = tempfile.TemporaryDirectory(prefix="gufo vcpkg [test] ")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
         # A copy of the scripts in a fake checkout, so it reads this test's

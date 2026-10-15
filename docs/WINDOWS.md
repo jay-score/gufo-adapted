@@ -106,7 +106,8 @@ powershell -ExecutionPolicy Bypass -File tools\windows\build.ps1 -Preset gpu-tes
 `build.ps1` imports the MSVC environment, configures with TheRock clang and the
 vcpkg toolchain, builds, and copies the ROCm and vcpkg runtime DLLs plus the
 hipBLASLt/rocBLAS kernel libraries next to `gufo.exe`, so `build\release` runs
-outside the developer shell. Local MSVC runtime DLLs are staged as well. If CMake
+outside the developer shell. Runtime files with matching size and modification
+time are reused on rebuild. Local MSVC runtime DLLs are staged as well. If CMake
 selects Visual Studio's LLVM OpenMP library, its matching `libomp140.x86_64.dll`
 is copied for local source-build use. **Do not redistribute this build folder**:
 that OpenMP DLL comes from `debug_nonredist`; a public binary release needs a

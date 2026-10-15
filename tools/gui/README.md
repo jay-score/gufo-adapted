@@ -20,7 +20,8 @@ You can still launch from a terminal and pass options:
 ```
 
 The first run creates `build/gui-env` and installs Flask and Waitress. Subsequent
-runs reuse it; a changed requirements file triggers a dependency update. The
+runs reuse it; changed requirements or a failed package import trigger a dependency
+reinstall. The launcher verifies imports before marking the environment ready. The
 launcher opens at **http://127.0.0.1:8090**. Keep its terminal open.
 
 1. Choose your **models folder**, then select a main GGUF. Browse into subfolders
