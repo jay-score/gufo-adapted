@@ -37,6 +37,23 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-15 — Bound eager Flash-Next selector grids
+
+- Source: [gufo-org/gufo@109a577da5feaffe669e88a6baa9c45e35c3a815](https://github.com/gufo-org/gufo/commit/109a577da5feaffe669e88a6baa9c45e35c3a815)
+  (PR #421).
+- Local: commit introducing this entry.
+- Adaptation: bound eager prefill score grids by the complete live blocks;
+  captured decode keeps its maximum grid and score stride. Preserve the fork's
+  MTP catch-up mask range. Omit the other #421 kernels from this improvement.
+- Areas: Flash-Next executor and selection kernel/interface; cleared-output
+  selection regression and a 32K extension of the existing logit diagnostic.
+- Validation: fresh Windows release/GPU builds, bounded/full-grid operator
+  equality and repository formatting pass. The existing resource contract and
+  nine dense F16 variants remain scratch/spill-free. Final matched-model
+  logits/perplexity, state and performance qualification is pending; see the
+  [series record](docs/plans/prefill-small-pr421-571-463.md).
+- Status: implemented in the isolated worktree; final series qualification pending.
+
 ### 2026-10-13 — Reduce-scatter for narrow batched Q8 decode
 
 - Source: [gufo-org/gufo@c1f01311318e6c677fd25c268b51a4e94ca324cc](https://github.com/gufo-org/gufo/commit/c1f01311318e6c677fd25c268b51a4e94ca324cc)

@@ -326,12 +326,13 @@ void CapturePrefillLogits(const std::shared_ptr<qfn::Model>& model,
           "A triangle has three sides. Continue red, green, blue. "}) {
       const auto pattern = model->Tokenize(text);
       Require(!pattern.empty(), "empty prefill capture fixture");
-      for (const unsigned prefix : {96U, 1023U, 1024U, 2048U, 4096U}) {
+      // Include populated deep context as well as prefill dispatch boundaries.
+      for (const unsigned prefix : {96U, 1023U, 1024U, 2048U, 4096U, 32768U}) {
         std::vector<std::int32_t> tokens(prefix + 8);
         for (std::size_t i = 0; i < tokens.size(); ++i)
           tokens[i] = pattern[i % pattern.size()];
         std::string error;
-        auto session = model->CreateSession(mode, 6145, &error);
+        auto session = model->CreateSession(mode, 40960, &error);
         Require(
             session && session->Sync(std::span(tokens).first(prefix), &error),
             error);
@@ -846,7 +847,7 @@ int main(int argc, char** argv) {
     std::string error;
     auto model = qfn::Model::Load(
         argv[2],
-        {.max_context = 6145,
+        {.max_context = capture_prefill ? 40960U : 6145U,
          .mtp_model_path = argv[4],
          .max_draft_tokens = 7,
          .draft_vocabulary = g_draft_prefix ? qfn::DraftVocabulary::kPrefix
