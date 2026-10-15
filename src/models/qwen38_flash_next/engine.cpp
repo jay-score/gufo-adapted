@@ -33,62 +33,6 @@ void AssignError(std::string* error_msg, std::string_view message) {
   }
 }
 
-/// DraftVocabulary::kLatinText: special tokens, tokens whose bytes are
-/// printable ASCII (or tab / newline / carriage return), and tokens that are
-/// complete UTF-8 made of ASCII plus common typographic marks. Pieces of
-/// multi-byte characters (most CJK, Cyrillic, accented letters) are left out.
-std::vector<std::int32_t> LatinTextVocabulary(
-    const tokenization::QwenTokenizer& tokenizer) {
-  constexpr char32_t kTypographic[] = {
-      0x2014, 0x2013, 0x201C, 0x201D, 0x2018, 0x2019, 0x2026, 0x2022, 0x2192,
-      0x2190, 0x2248, 0x00D7, 0x00F7, 0x00B1, 0x00B0, 0x00B7, 0x00E9};
-  const auto ascii = [](unsigned char b) {
-    return (b >= 0x20 && b < 0x7F) || b == '\t' || b == '\n' || b == '\r';
-  };
-  std::vector<std::int32_t> ids;
-  for (std::size_t id = 0; id < tokenizer.GetVocabSize(); ++id) {
-    const auto token = static_cast<tokenization::TokenId>(id);
-    if (tokenizer.IsSpecialToken(token)) {
-      ids.push_back(static_cast<std::int32_t>(id));
-      continue;
-    }
-    const std::string text = tokenizer.DecodeTokenCopy(token);
-    bool keep = !text.empty();
-    for (std::size_t i = 0; keep && i < text.size();) {
-      const auto b = static_cast<unsigned char>(text[i]);
-      if (b < 0x80) {
-        keep = ascii(b);
-        ++i;
-        continue;
-      }
-      // A complete 2- or 3-byte UTF-8 sequence for an allowed mark.
-      const std::size_t length = (b & 0xE0) == 0xC0   ? 2
-                                 : (b & 0xF0) == 0xE0 ? 3
-                                                      : 0;
-      if (length == 0 || i + length > text.size()) {
-        keep = false;
-        break;
-      }
-      char32_t cp = length == 2 ? (b & 0x1F) : (b & 0x0F);
-      for (std::size_t j = 1; j < length; ++j) {
-        const auto c = static_cast<unsigned char>(text[i + j]);
-        if ((c & 0xC0) != 0x80) {
-          keep = false;
-          break;
-        }
-        cp = (cp << 6) | (c & 0x3F);
-      }
-      keep = keep && std::find(std::begin(kTypographic), std::end(kTypographic),
-                               cp) != std::end(kTypographic);
-      i += length;
-    }
-    if (keep) {
-      ids.push_back(static_cast<std::int32_t>(id));
-    }
-  }
-  return ids;
-}
-
 constexpr std::array<char, 8> kSessionSnapshotMagic{'Q', 'F', 'N', 'S',
                                                     'E', 'S', 'S', '1'};
 
@@ -203,9 +147,22 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
                 exec.max_batch, std::uint64_t{options.max_draft_tokens} + 1))
           : 1;
   exec.max_speculative = exec.max_logit_rows;
-  if (m->mtp_weights_ &&
-      options.draft_vocabulary == DraftVocabulary::kLatinText) {
-    exec.draft_vocab = LatinTextVocabulary(*m->tokenizer_);
+  if (m->mtp_weights_ && options.draft_vocabulary == DraftVocabulary::kPrefix &&
+      m->device_->output().rows > kMtpDraftVocab) {
+    std::vector<std::int32_t> specials;
+    for (std::uint32_t id = kMtpDraftVocab; id < m->device_->output().rows;
+         ++id) {
+      if (m->tokenizer_->IsSpecialToken(
+              static_cast<tokenization::TokenId>(id))) {
+        specials.push_back(static_cast<std::int32_t>(id));
+      }
+    }
+    // A vocabulary with more special tokens drafts over the full head.
+    if (specials.size() <= kMtpDraftMaxSpecials) {
+      exec.draft_prefix = kMtpDraftVocab;
+      exec.draft_specials = std::move(specials);
+      m->draft_subset_ = true;
+    }
   }
   m->executor_ =
       rocm::Executor::Create(*m->device_, m->ngram_.get(), exec, error_msg);
@@ -265,6 +222,12 @@ std::uint32_t Model::PrefillCapacity() const noexcept {
 
 bool Model::HasMtp() const noexcept {
   return device_->has_mtp();
+}
+
+bool Model::InDraftSubset(std::int32_t token) const {
+  return token >= 0 && (static_cast<std::uint32_t>(token) < kMtpDraftVocab ||
+                        tokenizer_->IsSpecialToken(
+                            static_cast<tokenization::TokenId>(token)));
 }
 
 std::string Model::ModelName() const {
@@ -330,6 +293,7 @@ void Session::Reset() {
   session_->Reset();
   tokens_.clear();
   lookup_.Clear();
+  ForgetDraftVocab();
   hidden_base_ = 0;
   draft_length_.Reset();
   draft_stop_.Reset();
@@ -495,6 +459,9 @@ bool Session::RestoreSnapshotImpl(
   valid_ = false;
   rocm::Executor::SnapshotInfo info;
   const auto remaining = ContextSize() - header.token_count;
+  // Keep rollback scratch for the longer of the two draft heads' choices.
+  if (model_->draft_subset_)
+    restored_policy.SetDraftSaving(kMtpDraftSmallHeadSavingMs);
   const auto next_drafts =
       MtpEnabled() ? restored_policy.Choose(remaining ? remaining - 1 : 0,
                                             header.token_count)
@@ -518,6 +485,7 @@ bool Session::RestoreSnapshotImpl(
   }
   tokens_ = std::move(tokens);
   lookup_.Clear();
+  ForgetDraftVocab();
   logits_ = std::move(logits);
   anchor_candidates_valid_ = false;
   hidden_base_ = info.position - info.hidden_rows;
@@ -593,10 +561,22 @@ bool Session::DraftReplay(std::int32_t next_token,
   return true;
 }
 
+void Session::SyncDraftVocab() {
+  if (!model_->draft_subset_ || !MtpEnabled())
+    return;
+  if (draft_vocab_stale_ || draft_vocab_.scanned() > tokens_.size()) {
+    draft_vocab_.Reset();
+    draft_vocab_stale_ = false;
+  }
+  draft_vocab_.CatchUp(
+      tokens_, [&](std::int32_t token) { return model_->InDraftSubset(token); },
+      nullptr);
+}
+
 bool Session::DraftCatchUp(std::int32_t next_token, bool propose,
                            std::string* error_msg,
                            MtpCandidateLogits* candidates,
-                           bool token_with_candidates) {
+                           bool token_with_candidates, bool draft_subset) {
   std::vector<std::int32_t> replay;
   std::int32_t hidden_row = 0;
   if (!DraftReplay(next_token, &replay, &hidden_row, error_msg))
@@ -609,7 +589,8 @@ bool Session::DraftCatchUp(std::int32_t next_token, bool propose,
           {.token = propose && (candidates == nullptr || token_with_candidates)
                         ? &draft_token_
                         : nullptr,
-           .candidates = candidates},
+           .candidates = candidates,
+           .draft_subset = draft_subset},
           error_msg)) {
     return false;
   }
@@ -773,6 +754,7 @@ struct Session::PendingDecode {
   std::uint32_t lookup{0};
   bool confidence_stop{false};  ///< greedy chain that stops on confidence
   bool chain_gate{false};       ///< one session: stop on confidence product
+  bool draft_subset{false};     ///< this cycle drafts through the small head
   bool calibrated_stop{false};  ///< drafts stop on calibrated confidence
   float chain_confidence{1.0F};
 };
@@ -887,6 +869,14 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   const std::size_t room = ContextSize() - tokens_.size();
   const std::size_t cap =
       std::min<std::size_t>({max_tokens, room, exec.max_speculative()});
+  // A cycle that will draft small pays less per draft. The anchor is not
+  // sampled yet; the window alone decides, from committed tokens only.
+  if (!batch_drafts && MtpEnabled() && cap > 1) {
+    SyncDraftVocab();
+    draft_length_.SetDraftSaving(model_->draft_subset_ && draft_vocab_.Quiet()
+                                     ? kMtpDraftSmallHeadSavingMs
+                                     : 0.0F);
+  }
   // Greedy output does not depend on the width. A greedy cycle that is not
   // in a jointly planned batch drafts to the limit and stops on each
   // proposal's confidence instead, alone or beside sampled requests.
@@ -953,10 +943,15 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   pending->confidence_stop = confidence_stop;
   pending->chain_gate = chain_gate;
   pending->calibrated_stop = calibrated_stop;
+  SyncDraftVocab();
+  pending->draft_subset = model_->draft_subset_ &&
+                          draft_vocab_.Fits(anchor, [&](std::int32_t token) {
+                            return model_->InDraftSubset(token);
+                          });
   if (!defer_head &&
       !DraftCatchUp(anchor, true, error_msg,
                     sampled || confidence_stop ? &pending->candidates : nullptr,
-                    confidence_stop)) {
+                    confidence_stop, pending->draft_subset)) {
     return false;
   }
   // A cycle-local proposal stream needs no pending RNG state in snapshots.
@@ -967,9 +962,11 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   pending->draft_sampler->Accept(static_cast<sampling::TokenId>(anchor));
   pending->chain = {anchor};
   pending->draft = draft_token_;
-  pending->width = confidence_stop && low_acceptance_.Low()
-                       ? std::min<std::size_t>(width, 2)
-                       : width;
+  // A small-head cycle drafts cheaply enough to keep its full width.
+  pending->width =
+      confidence_stop && !pending->draft_subset && low_acceptance_.Low()
+          ? std::min<std::size_t>(width, 2)
+          : width;
   pending->base = base;
   pending->speculative = true;
   pending->sampled = sampled;
@@ -987,7 +984,9 @@ bool Session::PrepareDecode(const DecodeRequest& request,
     lookup_.Extend(tokens_);
   }
   if (calibrated_stop)
-    draft_stop_.Begin(base, 0.0F, concurrency);
+    draft_stop_.Begin(base,
+                      pending->draft_subset ? kMtpDraftSmallHeadSavingMs : 0.0F,
+                      concurrency);
   if (!defer_head) {
     while (pending->chain.size() < pending->width) {
       if (StopChain(*pending))
@@ -1003,7 +1002,8 @@ bool Session::PrepareDecode(const DecodeRequest& request,
               *session_, std::span<const std::int32_t>(&pending->draft, 1), -1,
               {.token = sampled ? nullptr : &pending->draft,
                .candidates =
-                   sampled || confidence_stop ? &pending->candidates : nullptr},
+                   sampled || confidence_stop ? &pending->candidates : nullptr,
+               .draft_subset = pending->draft_subset},
               error_msg)) {
         return false;
       }
@@ -1144,6 +1144,7 @@ bool Session::FinishDecode(const DecodeRequest& request,
   tokens_.insert(tokens_.end(), chain.begin(), chain.begin() + keep);
   result->tokens.assign(chain.begin(), chain.begin() + keep);
   stats_.cycles += 1;
+  stats_.small_head_cycles += pending.draft_subset;
   stats_.drafted += k - 1;
   stats_.accepted += keep - 1;
   // Copied proposals trail the MTP drafts; the length controller sees only
@@ -1397,7 +1398,8 @@ bool Session::DecodeBatchImpl(std::span<const DecodeRequest> requests,
             {requests[i].session->session_.get(),
              {.token = p.sampled ? nullptr : &p.draft,
               .candidates =
-                  p.sampled || p.confidence_stop ? &p.candidates : nullptr}});
+                  p.sampled || p.confidence_stop ? &p.candidates : nullptr,
+              .draft_subset = p.draft_subset}});
       }
     }
     if (heads.empty())

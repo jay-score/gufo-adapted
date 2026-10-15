@@ -542,8 +542,9 @@ void PrintServeHelp(std::string_view program_name,
                      &min_draft_tokens);
     parser.AddOption(
         "", "--mtp-draft-vocab", "VOCAB",
-        "Qwen3.8-Flash-Next draft head vocabulary: full, or latin (special and "
-        "ASCII/Latin-script text tokens; half the output head per draft step) "
+        "Qwen3.8-Flash-Next draft head vocabulary: full, or prefix (the first "
+        "98,304 tokens plus special tokens, read in place; falls back to the "
+        "full head while recent text leaves them; latin is an alias) "
         "(default: full)",
         "Speculative", &mtp_draft_vocab);
     parser.AddFlag(
@@ -1006,8 +1007,9 @@ int RunServe(std::span<const char* const> args) {
                          &min_draft_tokens);
     llm_parser.AddOption(
         "", "--mtp-draft-vocab", "VOCAB",
-        "Qwen3.8-Flash-Next draft head vocabulary: full, or latin (special and "
-        "ASCII/Latin-script text tokens; half the output head per draft step) "
+        "Qwen3.8-Flash-Next draft head vocabulary: full, or prefix (the first "
+        "98,304 tokens plus special tokens, read in place; falls back to the "
+        "full head while recent text leaves them; latin is an alias) "
         "(default: full)",
         "Speculative", &mtp_draft_vocab);
     llm_parser.AddFlag(
@@ -1152,11 +1154,13 @@ int RunServe(std::span<const char* const> args) {
       std::cerr << "Error: --model <PATH> is required\n";
       return 2;
     }
-    if (mtp_draft_vocab != "full" && mtp_draft_vocab != "latin") {
-      std::cerr << "Error: --mtp-draft-vocab is full or latin\n";
+    // `latin` named the copied ASCII subset this prefix head replaced.
+    if (mtp_draft_vocab != "full" && mtp_draft_vocab != "prefix" &&
+        mtp_draft_vocab != "latin") {
+      std::cerr << "Error: --mtp-draft-vocab is full or prefix\n";
       return 2;
     }
-    speculative_config.mtp_latin_draft_vocabulary = mtp_draft_vocab == "latin";
+    speculative_config.mtp_prefix_draft_vocabulary = mtp_draft_vocab != "full";
     speculative_config.prompt_lookup = prompt_lookup;
     std::string err;
     ModelLoadLog load_log("text", model);

@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "src/models/qwen38_flash_next/draft_vocab.hpp"
 #include "src/models/qwen38_flash_next/mtp_policy.hpp"
 #include "tests/models/qwen27b/sampling_cases.hpp"
 
@@ -494,6 +495,46 @@ void CheckStopPolicyRestore() {
           "a corrupt low-acceptance state restored");
 }
 
+void CheckDraftVocabWindow() {
+  constexpr std::int32_t kRare = 200000;
+  constexpr std::int32_t kSpecial = 248044;
+  const auto common = [](std::int32_t id) {
+    return (id >= 0 && static_cast<std::uint32_t>(id) < qfn::kMtpDraftVocab) ||
+           id == kSpecial;
+  };
+  qfn::MtpDraftVocab vocab;
+  std::vector<std::int32_t> tokens(40, 17);
+  tokens.push_back(kSpecial);
+  vocab.CatchUp(tokens, common, nullptr);
+  Require(
+      vocab.Quiet() && vocab.Fits(17, common) && vocab.Fits(kSpecial, common),
+      "prefix and special tokens left the small head");
+  Require(!vocab.Fits(kRare, common), "a rare anchor drafted small");
+  // One rare token is tolerated; a second within the window is not.
+  tokens.push_back(kRare);
+  tokens.insert(tokens.end(), 5, 17);
+  vocab.CatchUp(tokens, common, nullptr);
+  Require(vocab.Fits(17, common), "a lone rare token left the small head");
+  tokens.push_back(kRare + 1);
+  vocab.CatchUp(tokens, common, nullptr);
+  Require(!vocab.Quiet() && !vocab.Fits(17, common),
+          "two recent rare tokens kept the small head");
+  // The window clears once the earlier miss is kMtpDraftVocabWindow back.
+  while (!vocab.Quiet()) {
+    tokens.push_back(17);
+    vocab.CatchUp(tokens, common, nullptr);
+    Require(tokens.size() < 48 + qfn::kMtpDraftVocabWindow,
+            "the miss window never cleared");
+  }
+  Require(vocab.Fits(17, common), "the cleared window kept the full head");
+  // The decision is a function of the token history alone.
+  qfn::MtpDraftVocab replay;
+  replay.CatchUp(tokens, common, nullptr);
+  Require(replay.scanned() == vocab.scanned() &&
+              replay.Quiet() == vocab.Quiet() && replay.rare().empty(),
+          "a replayed history chose another head");
+}
+
 int main() {
   try {
     CheckVerificationBoundaries();
@@ -505,6 +546,7 @@ int main() {
     CheckSampledConfidenceStop();
     CheckLowAcceptance();
     CheckStopPolicyRestore();
+    CheckDraftVocabWindow();
     CheckCompactProposals();
     CheckSampledOutputFrequencies();
     const std::array<float, 5> logits{0.3F, -0.2F, 1.1F, 0.7F, -1.0F};

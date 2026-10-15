@@ -52,9 +52,17 @@ void SignalDone(std::uint32_t* flag, std::uint32_t value, hipStream_t stream);
 /// into consecutive rows of `dst`.
 void GatherRows(const void* src, void* dst, const std::int32_t* ids,
                 std::uint32_t rows, std::size_t row_bytes, hipStream_t stream);
-/// ids[i] = map[ids[i]] for i < count (subset index -> token id).
-void RemapIds(std::uint32_t* ids, std::uint32_t count, const std::int32_t* map,
-              hipStream_t stream);
+/// Small draft head rows back to token ids, for i < count (at most 64):
+/// ids[i] >= prefix (a table row) becomes table[ids[i] - prefix]; prefix
+/// rows are already token ids.
+void RemapDraftIds(std::uint32_t* ids, std::uint32_t count,
+                   std::uint32_t prefix, const std::int32_t* table,
+                   hipStream_t stream);
+/// Full-vocabulary logits to the small-head layout, in place: row prefix + i
+/// becomes logits[table[i]] for i < n (at most 1024, one block).
+void GatherDraftLogits(float* logits, const std::int32_t* table,
+                       std::uint32_t prefix, std::uint32_t n,
+                       hipStream_t stream);
 
 /// GGUF type ids the runtime accepts for the small-matrix and lookup paths.
 enum class WeightType : std::uint32_t {

@@ -5905,11 +5905,25 @@ __global__ void GatherRowsKernel(const std::uint32_t* __restrict__ src,
   }
 }
 
-__global__ void RemapIdsKernel(std::uint32_t* ids, std::uint32_t count,
-                               const std::int32_t* map) {
+__global__ void RemapDraftIdsKernel(std::uint32_t* ids, std::uint32_t count,
+                                    std::uint32_t prefix,
+                                    const std::int32_t* table) {
   const std::uint32_t i = threadIdx.x;
-  if (i < count) {
-    ids[i] = static_cast<std::uint32_t>(map[ids[i]]);
+  if (i < count && ids[i] >= prefix) {
+    ids[i] = static_cast<std::uint32_t>(table[ids[i] - prefix]);
+  }
+}
+
+__global__ void GatherDraftLogitsKernel(float* logits,
+                                        const std::int32_t* table,
+                                        std::uint32_t prefix, std::uint32_t n) {
+  // One block: every read finishes before any write, so the table rows can
+  // overwrite the logits they are gathered from.
+  const std::uint32_t i = threadIdx.x;
+  const float value = i < n ? logits[table[i]] : 0.0F;
+  __syncthreads();
+  if (i < n) {
+    logits[prefix + i] = value;
   }
 }
 }  // namespace
@@ -5924,10 +5938,21 @@ void GatherRows(const void* src, void* dst, const std::int32_t* ids,
                      static_cast<std::uint32_t*>(dst), ids, row_bytes / 4);
 }
 
-void RemapIds(std::uint32_t* ids, std::uint32_t count, const std::int32_t* map,
-              hipStream_t stream) {
-  hipLaunchKernelGGL(RemapIdsKernel, dim3(1), dim3(64), 0, stream, ids, count,
-                     map);
+void RemapDraftIds(std::uint32_t* ids, std::uint32_t count,
+                   std::uint32_t prefix, const std::int32_t* table,
+                   hipStream_t stream) {
+  hipLaunchKernelGGL(RemapDraftIdsKernel, dim3(1), dim3(64), 0, stream, ids,
+                     count, prefix, table);
+}
+
+void GatherDraftLogits(float* logits, const std::int32_t* table,
+                       std::uint32_t prefix, std::uint32_t n,
+                       hipStream_t stream) {
+  if (n == 0) {
+    return;
+  }
+  hipLaunchKernelGGL(GatherDraftLogitsKernel, dim3(1), dim3(n), 0, stream,
+                     logits, table, prefix, n);
 }
 
 void CopyMapped(const void* src, void* dst, std::size_t bytes,
