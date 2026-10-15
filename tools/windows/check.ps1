@@ -4,7 +4,7 @@
 #   powershell -ExecutionPolicy Bypass -File tools\windows\check.ps1
 param(
   [string]$Rocm = "C:\TheRock\build",
-  [string]$Vcpkg = "C:\vcpkg",
+  [string]$Vcpkg = "",
   [string]$Ninja = "C:\tools\ninja\ninja.exe",
   [string]$Python = "python"
 )
@@ -80,6 +80,10 @@ if ($pythonCommand -and $pythonCommand.Source -notmatch '\\WindowsApps\\python[0
 Report "Python for GUI" $pythonOk "$pythonVersion" "run setup-windows.bat or install 64-bit Python 3.10+"
 
 # The build installs the libraries from the pinned manifest automatically.
+if (-not $Vcpkg) {
+  . "$PSScriptRoot\find-vcpkg.ps1"
+  $Vcpkg = Find-Vcpkg (Resolve-Path "$PSScriptRoot\..\..").Path
+}
 if (Test-Path "$Vcpkg\vcpkg.exe") {
   Report "vcpkg" $true $Vcpkg
   Note "vcpkg packages" "build.ps1 installs the pinned vcpkg.json dependencies under build\vcpkg_installed"

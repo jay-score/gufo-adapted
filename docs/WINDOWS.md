@@ -89,7 +89,7 @@ checkout's `build\release\gufo.exe` in the GUI before restarting Gufo.
 | Piece | Default location | Notes |
 | --- | --- | --- |
 | TheRock ROCm 10.0.0 (Windows, gfx1151) | `C:\TheRock\build` | [`therock-dist-windows-gfx1151-10.0.0.tar.gz`](https://stable.repo.amd.com/rocm/core/tarball/therock-dist-windows-gfx1151-10.0.0.tar.gz), SHA-256 `1293927b06b3b8d4bd7e0265823fb998bc9e0d83c68f33dcfa5d32663b30ce38`; extract so that `C:\TheRock\build\bin` exists. Its clang compiles C, C++ and HIP |
-| vcpkg | `C:\vcpkg` | Run `bootstrap-vcpkg.bat`; CMake installs the dependencies pinned by `vcpkg.json` |
+| vcpkg | `C:\vcpkg` | Run `bootstrap-vcpkg.bat`; CMake installs the dependencies pinned by `vcpkg.json`. Without `-Vcpkg`, `build.ps1` and `check.ps1` use the checkout setup recorded, then `VCPKG_ROOT`, then `C:\vcpkg` |
 | Visual Studio Build Tools | any | "Desktop development with C++": MSVC STL + Windows SDK only; tested with VS 18 (MSVC 14.51) |
 | CMake 3.21+ and Ninja | `PATH`, or Ninja at `C:\tools\ninja` | |
 | Dedicated GPU memory | AMD Software > Performance > Tuning > Variable Graphics Memory | 96 GB for Qwen3.8-Flash-Next at 256K context; see [Memory](#memory) |

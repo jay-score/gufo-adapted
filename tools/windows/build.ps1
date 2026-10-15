@@ -5,7 +5,8 @@
 #   - TheRock 10.0.0 for Windows gfx1151, extracted to C:\TheRock\build:
 #     https://stable.repo.amd.com/rocm/core/tarball/therock-dist-windows-gfx1151-10.0.0.tar.gz
 #     (SHA-256 1293927b06b3b8d4bd7e0265823fb998bc9e0d83c68f33dcfa5d32663b30ce38)
-#   - bootstrapped vcpkg at C:\vcpkg (dependencies are pinned in vcpkg.json)
+#   - bootstrapped vcpkg (dependencies are pinned in vcpkg.json): -Vcpkg, else
+#     the checkout setup-windows.bat recorded, else VCPKG_ROOT, else C:\vcpkg
 #   - Visual Studio Build Tools (MSVC STL + Windows SDK; the compiler is TheRock clang)
 #   - CMake 3.21+, and ninja on PATH or at C:\tools\ninja\ninja.exe
 #
@@ -15,7 +16,7 @@ param(
   [string]$Preset = "release",
   [string]$Target = "",
   [string]$Rocm = "C:\TheRock\build",
-  [string]$Vcpkg = "C:\vcpkg",
+  [string]$Vcpkg = "",
   [string]$Ninja = "C:\tools\ninja\ninja.exe",
   [int]$Jobs = 0,
   [switch]$Reconfigure,
@@ -48,6 +49,11 @@ if (-not (Test-Path $Ninja)) {
   $onPath = Get-Command ninja -ErrorAction SilentlyContinue
   if (-not $onPath) { throw "ninja not found at $Ninja or on PATH (see tools\windows\check.ps1)" }
   $Ninja = $onPath.Source
+}
+
+if (-not $Vcpkg) {
+  . "$PSScriptRoot\find-vcpkg.ps1"
+  $Vcpkg = Find-Vcpkg $root
 }
 
 # Import the MSVC developer environment (headers, libs, link.exe).
