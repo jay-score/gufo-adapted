@@ -44,6 +44,21 @@ embedding bytes but do not resolve this gap. [Evidence](artifacts/vision-parity.
 
 ## Reproduce
 
+### Windows 4096-token internal chunk default
+
+October 15, 2026: on top of the selected upstream prefill changes, raising the
+internal limit from 2048 to 4096 retains all **648 complete vocabulary rows**
+and both whole capture files, continuation NLL and perplexity exactly for
+UD-IQ4_XS and UD-Q4_K_XL. The unchanged diagnostic covers three fixtures,
+AR/MTP and prefixes through 32K. Both full session suites pass chunk splits,
+private C2/C4/C6/C8 state, snapshot recovery, fresh loads, sampled p/q rejection
+and residual correction, plus 23 serving sampler configurations in AR/MTP.
+Formatting and the compiled resource guard pass. 4096 is now the fork
+default. All 46 paired IQ4_XS AR HTTP responses also match text and
+counts at C1/C2/C4/C6/C8, seeded-sampled C1 and image C1, with zero prompt reuse
+and 16 output tokens each. Linux, multi-session memory and broader serving
+latency remain unqualified. [Measurements, identities and scope](../../plans/prefill-chunk-4096.md).
+
 ### Windows selected upstream prefill changes
 
 October 15, 2026: selected #421/#571/#463 changes on native Windows/gfx1151,
