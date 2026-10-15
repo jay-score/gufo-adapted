@@ -55,7 +55,12 @@ regression qualification, not new unquantized-model or GGUF conversion parity.
   with 1025/1023-token pieces exactly and retains its independent F64 bounds.
   Formatting, original resource guard and twelve scratch/spill-free dense
   F16 variants pass.
-- Selector scratch: pending.
+- Selector scratch: fresh release/GPU builds and full/bounded/compact selector
+  masks pass. The compact fixture reuses an exactly-sized buffer over 31-row
+  chunks, including 131K positions and ties, and clears masks before comparing.
+  Formatting, original resource guard and twelve scratch/spill-free dense
+  F16 variants pass. The score buffer is 20 MiB instead of 128 MiB at the
+  model's 262K context; this is not a process committed-memory measurement.
 - Final matched logits/perplexity, state checks and timings: pending.
 
 ## Evidence and commands

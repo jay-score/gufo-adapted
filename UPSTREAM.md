@@ -37,6 +37,24 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-15 — Bound Flash-Next selector score scratch
+
+- Source: [gufo-org/gufo@5a0a0ed75009ad56f9eee7cdd92f3b1752dfee64](https://github.com/gufo-org/gufo/commit/5a0a0ed75009ad56f9eee7cdd92f3b1752dfee64)
+  (PR #463), following the eager-grid adaptation below.
+- Local: commit introducing this entry.
+- Adaptation: cap shared scores at 20 MiB for the model's 262K context while
+  retaining captured decode capacity. Compact eager score strides to populated
+  context and reuse the allocation across bounded selector chunks. Preserve the
+  fork's MTP mask range; omit final normalization/output pruning from #463.
+- Areas: Flash-Next executor allocation/selection and a cleared-output,
+  exactly-sized compact-score regression at deep and ragged positions.
+- Validation: fresh Windows release/GPU builds and full/bounded/compact mask
+  equality pass, retaining independent F64 scores and tie ordering. Formatting,
+  original resource guard and twelve scratch/spill-free dense F16 variants
+  pass. Final matched-model/state/performance qualification is pending in the
+  [series record](docs/plans/prefill-small-pr421-571-463.md).
+- Status: implemented in the isolated worktree; final series qualification pending.
+
 ### 2026-10-15 — Wider Flash-Next F16 router tiles
 
 - Source: [gufo-org/gufo@e8a75023f13fdfb8d77ff39efdf0da3b2c6f0fd5](https://github.com/gufo-org/gufo/commit/e8a75023f13fdfb8d77ff39efdf0da3b2c6f0fd5)
