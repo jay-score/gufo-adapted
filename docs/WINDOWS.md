@@ -278,10 +278,11 @@ the BIOS or AMD Software reserves; `hipMalloc` succeeds up to ~110 GiB on a
 - Weights beyond the carve-out are also slower to read: the decode
   matrix-vector kernels run 6-22% slower on them.
 
-Qwen3.8-Flash-Next at 256K context needs ~89 GiB of device memory (weights,
-KV cache, recurrent state, scratch). With a 96 GB carve-out all of it is
-dedicated: the load takes ~30 s and decode runs at full speed. A 64 GB
-carve-out works, but the load takes ~2 minutes and decode is slower.
+Qwen3.8-Flash-Next at 256K context needs ~91 GiB of device memory (weights,
+KV cache, recurrent state, scratch for 4096-token prefill chunks). With a
+96 GB carve-out all of it is dedicated: the load takes ~30 s and decode runs
+at full speed. A 64 GB carve-out works, but the load takes ~2 minutes and
+decode is slower.
 
 ## Test status
 

@@ -476,8 +476,8 @@ Use this entry format:
   measurements and retained attention limitations. Linux build/CI, other
   models/quantizations and sustained arrival-load measurements are unrun.
 - Status: scheduling retained. A later independent
-  [4096-token chunk experiment](docs/plans/prefill-chunk-4096.md) changes this
-  worktree's engine limit; no additional #470 prefetch code is imported.
+  [4096-token chunk experiment](docs/plans/prefill-chunk-4096.md) makes 4096
+  the fork's engine default; no additional #470 prefetch code is imported.
 
 ### 2026-10-08 — Flash-Next attention at the sparse budget
 

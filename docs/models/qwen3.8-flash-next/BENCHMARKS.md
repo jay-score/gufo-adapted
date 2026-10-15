@@ -8,11 +8,12 @@ llama.cpp uses `b11069` for AR and `6fcaa16f` for MTP.
 
 Positive gain favors Gufo.
 
-October 15 Windows chunk-size follow-up: internal prefill chunks 2048 → 4096
+October 15 Windows chunk-size default: internal prefill chunks 2048 → 4096
 improve native C1 AR **pp4096 by 18.79% / 18.57% for IQ4_XS** and
 **6.51% / 6.95% for UD-Q4_K_XL** at empty / 32K context. Matched ABBA release
 runs retain exact logits/perplexity; pp2048 controls vary by less than 1%.
-This worktree keeps 4096 for trials. These native fixed-pattern measurements
+4096 is now the fork default. GPU memory rises by a fixed **~1.36 GiB**; 262K
+context with MTP peaks at 90.8 GiB, within a 96 GiB carve-out. These native fixed-pattern measurements
 do not refresh the historical HTTP/llama.cpp tables below. A paired 4498-token
 IQ4_XS HTTP C1 fixture stays **863.85 → 864.95 tok/s**; the server's existing
 2048-token checkpoint grid can split the larger internal capacity.
