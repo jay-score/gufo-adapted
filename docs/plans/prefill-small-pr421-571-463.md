@@ -4,6 +4,10 @@ Worktree branch: `perf/upstream-prefill-small-pr421-571-463`, based on
 `6985ca53b04d0115cde735812d86662bde529e9d`. Official review tip:
 `f6ca085a5091eed23541cde6fa1ff282cbd4c68b` (October 15, 2026).
 
+This campaign kept the original 2048-token chunk. The subsequent independent
+[4096-token experiment](prefill-chunk-4096.md) records the later fork-default
+chunk-size change and measurements.
+
 ## Scope and acceptance
 
 Apply only the eager selector grid, dense projection launch order and attention
