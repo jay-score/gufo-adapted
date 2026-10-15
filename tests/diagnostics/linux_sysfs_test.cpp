@@ -1,5 +1,9 @@
 #include "src/core/diagnostics/linux_sysfs.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -57,6 +61,24 @@ void TestWindowsHostFallback() {
   const auto memory = sysfs.QueryMemInfo();
   Expect(cpu && !cpu->model_name.empty() && cpu->logical_cores > 0,
          "Default Windows proc root supplies native CPU data");
+  Expect(cpu->physical_cores > 0 && cpu->physical_cores <= cpu->logical_cores,
+         "Windows supplies a physical core count within the logical count");
+  // The legacy API provides an independent check on single-group hosts.
+  if (GetActiveProcessorGroupCount() == 1) {
+    DWORD bytes = 0;
+    GetLogicalProcessorInformation(nullptr, &bytes);
+    std::vector<SYSTEM_LOGICAL_PROCESSOR_INFORMATION> records(
+        bytes / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION));
+    Expect(GetLogicalProcessorInformation(records.data(), &bytes),
+           "Read native topology for comparison");
+    std::uint32_t cores = 0;
+    for (const auto& record : records) {
+      if (record.Relationship == RelationProcessorCore)
+        ++cores;
+    }
+    Expect(cpu->physical_cores == cores,
+           "Physical cores match native topology independently of SMT");
+  }
   Expect(memory && memory->total_bytes > 0 &&
              memory->available_bytes <= memory->total_bytes &&
              memory->free_bytes == memory->available_bytes,

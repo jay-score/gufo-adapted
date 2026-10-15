@@ -4,6 +4,7 @@
 #ifdef _WIN32
 #include <cpuid.h>
 #include <unistd.h>
+#include <windows.h>
 
 #include <cstring>
 #endif
@@ -74,6 +75,29 @@ std::optional<HostUnameInfo> LinuxSysfs::QueryUname() const {
 
 #ifdef _WIN32
 namespace {
+std::uint32_t WindowsPhysicalCoreCount() {
+  DWORD bytes = 0;
+  GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &bytes);
+  if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+    return 0;
+  std::vector<std::uint8_t> buffer(bytes);
+  auto* records =
+      reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data());
+  if (!GetLogicalProcessorInformationEx(RelationProcessorCore, records, &bytes))
+    return 0;
+
+  std::uint32_t cores = 0;
+  for (std::size_t offset = 0; offset < bytes;) {
+    const auto* record =
+        reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(
+            buffer.data() + offset);
+    if (record->Relationship == RelationProcessorCore)
+      ++cores;
+    offset += record->Size;
+  }
+  return cores;
+}
+
 // Windows has no /proc: CPUID supplies the names, the OS the counts.
 HostCpuInfo WindowsCpuInfo() {
   HostCpuInfo cpu;
@@ -95,7 +119,7 @@ HostCpuInfo WindowsCpuInfo() {
   cpu.model_name = Trim(brand);
   const long logical = sysconf(_SC_NPROCESSORS_ONLN);
   cpu.logical_cores = logical > 0 ? static_cast<std::uint32_t>(logical) : 0;
-  cpu.physical_cores = cpu.logical_cores / 2;
+  cpu.physical_cores = WindowsPhysicalCoreCount();
   return cpu;
 }
 }  // namespace
