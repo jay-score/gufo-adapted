@@ -458,7 +458,7 @@ void PrintServeHelp(std::string_view program_name,
     std::string vision_model_path;
     std::size_t draft_tokens = 7;
     std::size_t min_draft_tokens = 1;
-    std::string mtp_draft_vocab = "full";
+    std::string mtp_draft_vocab = "prefix";
     bool prompt_lookup = false;
     std::size_t prefill_chunk_tokens =
         server::kDefaultDecodeActivePrefillTokens;
@@ -542,10 +542,10 @@ void PrintServeHelp(std::string_view program_name,
                      &min_draft_tokens);
     parser.AddOption(
         "", "--mtp-draft-vocab", "VOCAB",
-        "Qwen3.8-Flash-Next draft head vocabulary: full, or prefix (the first "
-        "98,304 tokens plus special tokens, read in place; falls back to the "
-        "full head while recent text leaves them; latin is an alias) "
-        "(default: full)",
+        "Qwen3.8-Flash-Next draft head vocabulary: prefix (the first 98,304 "
+        "tokens plus special tokens, read in place; falls back to the full "
+        "head while recent text leaves them; latin is an alias) or full "
+        "(default: prefix)",
         "Speculative", &mtp_draft_vocab);
     parser.AddFlag(
         "", "--prompt-lookup",
@@ -929,7 +929,7 @@ int RunServe(std::span<const char* const> args) {
     std::string vision_model_path;
     std::size_t draft_tokens = 7;
     std::size_t min_draft_tokens = 1;
-    std::string mtp_draft_vocab = "full";
+    std::string mtp_draft_vocab = "prefix";
     bool prompt_lookup = false;
     std::size_t prefill_chunk_tokens =
         server::kDefaultDecodeActivePrefillTokens;
@@ -1007,10 +1007,10 @@ int RunServe(std::span<const char* const> args) {
                          &min_draft_tokens);
     llm_parser.AddOption(
         "", "--mtp-draft-vocab", "VOCAB",
-        "Qwen3.8-Flash-Next draft head vocabulary: full, or prefix (the first "
-        "98,304 tokens plus special tokens, read in place; falls back to the "
-        "full head while recent text leaves them; latin is an alias) "
-        "(default: full)",
+        "Qwen3.8-Flash-Next draft head vocabulary: prefix (the first 98,304 "
+        "tokens plus special tokens, read in place; falls back to the full "
+        "head while recent text leaves them; latin is an alias) or full "
+        "(default: prefix)",
         "Speculative", &mtp_draft_vocab);
     llm_parser.AddFlag(
         "", "--prompt-lookup",
