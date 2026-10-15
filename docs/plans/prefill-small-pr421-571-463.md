@@ -5,7 +5,7 @@ Worktree branch: `perf/upstream-prefill-small-pr421-571-463`, based on
 `f6ca085a5091eed23541cde6fa1ff282cbd4c68b` (October 15, 2026).
 
 This campaign kept the original 2048-token chunk. The subsequent independent
-[4096-token experiment](prefill-chunk-4096.md) records the worktree's later
+[4096-token experiment](prefill-chunk-4096.md) records the later fork-default
 chunk-size change and measurements.
 
 ## Scope and acceptance

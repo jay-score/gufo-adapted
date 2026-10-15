@@ -5,9 +5,9 @@
 - [ ] [PR #470 — prefetch the next chunk's n-gram rows](https://github.com/gufo-org/gufo/pull/470).
   Adapt [the focused prefetch commit](https://github.com/gufo-org/gufo/commit/0610c8f1a0513364b5920337460705b2febfb172)
   separately from chunk-size tuning. Compare prefetch on/off at the same chunk
-  size and retain 128 Windows readers. The isolated
-  [4096-token experiment](docs/plans/prefill-chunk-4096.md) measures larger
-  chunks without importing prefetch. Preserve exact token/history matching,
+  size and retain 128 Windows readers. The
+  [4096-token default](docs/plans/prefill-chunk-4096.md) was adopted without
+  importing prefetch. Preserve exact token/history matching,
   cancellation, interleaved-session ownership and the current attention-boundary
   fixes. Measure cold and warm SSD gathers and matched HTTP prefill;
   upstream's 6–11% package gain is not a Windows or

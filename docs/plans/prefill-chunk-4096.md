@@ -1,8 +1,8 @@
 # Flash-Next 4096-token prefill chunk experiment
 
 October 15, 2026, native Windows/gfx1151. Flash-Next's original internal prefill
-capacity is `min(2048, max_context)`; this isolated worktree uses 4096 for trials.
-This is separate from HTTP's `--prefill-chunk`,
+capacity was `min(2048, max_context)`. After this experiment and the paired
+memory comparison below, 4096 is the fork default. This is separate from HTTP's `--prefill-chunk`,
 which budgets prefill between active decode steps. There is no CLI override
 for this internal model constant.
 
@@ -112,14 +112,15 @@ All generated-token hashes match across the four arms of each format.
 The pp4096 gain is larger than observed arm variation. Small-prompt controls
 remain within 1%; decode observations do not establish a general decode gain.
 
-Keep the 4096 source and the measured `build/release/gufo.exe` in this isolated
-worktree for hands-on trials, with `gufo-chunk2048.exe` available for comparison.
-The original checkout and its executable remain untouched. The executable's
-`ef549cd80daf-dirty` identity denotes the recorded one-line experiment patch;
-the later explanatory comment and documentation do not change its behavior.
+**Decision:** adopt 4096 as the Flash-Next default for this fork. The prefill
+gain on prompts over 2048 tokens outweighs a fixed ~1.36 GiB extra GPU
+reservation. Full 262K context with MTP still fits a 96 GiB carve-out, as
+measured below. The measured `ef549cd80daf-dirty` executable denotes the
+recorded one-line experiment patch; the later comment and documentation do not
+change its behavior.
 
 Many activation buffers scale with maximum batch capacity, so the larger limit
-increases scratch reservation. Incremental memory versus 2048 is unmeasured. Linux,
+increases scratch reservation; see the paired memory comparison below. Linux,
 MTP serving latency, sustained mixed-arrival fairness and GPU timeline profiling
 remain unqualified. No #470 prefetch is included.
 
@@ -157,3 +158,47 @@ a short-context AR check, without MTP or a vision request; larger contexts and
 other serving configurations are not measured. No code or binary changes are
 made for this check. Raw samples and logs are in `build/prefill-4096/memory-*`;
 the compact summary is in the portable artifact above.
+
+## Paired 2048/4096 memory comparison
+
+Same day, worktree `t3-28bc9e40`: `gufo-chunk2048.exe` is `6ca4c1a1c109`;
+`gufo-chunk4096.exe` is `6ca4c1a1c109-dirty` with only the
+`kPrefillChunkTokens` change. Both use the TheRock 10.0.0 release toolchain and
+the UD-Q4_K_XL model. One fresh process per arm, sampled every 100 ms with
+the PDH counters from the brief check above, and no other model processes.
+
+- **Bench:** AR pp4096/tg16 at depth 0, as in the brief check.
+- **Serve:** context 200000, one session, Q8_0 MTP sidecar,
+  `mmproj-BF16.gguf`, thinking off and cache RAM capped at one byte.
+  One cold 12,911-token chat request with 32 output tokens.
+
+| GPU committed, GiB | Chunk 2048 | Chunk 4096 | Change |
+| --- | ---: | ---: | ---: |
+| Bench, post-load plateau | 79.711 | 81.069 | +1.358 |
+| Bench, whole-run peak | 79.962 | 81.319 | +1.357 |
+| Serve, idle after load | 87.481 | 88.841 | +1.360 |
+| Serve, peak during request | 87.878 | 89.237 | +1.359 |
+
+The server's own `gpu_device_used_mib` after load is 89320 → 90709 MiB
+(+1389 MiB) of 112.6 GiB. The extra memory is a fixed reservation made at
+load. The transient rise during a request (about 0.25 GiB in bench, 0.40 GiB
+in serve) is the same for both chunk sizes. Process private commit
+differs by under 0.03 GiB. The served request used 8 forwards with a
+2048-token maximum versus 6 with a 4096 maximum. Its single-sample prefill was
+1201 → 1343 tok/s; this is not a qualified speed comparison. Bench pp4096 was
+1623 → 1686 tok/s.
+
+At full context 262144, with otherwise identical serve settings, the 4096 build
+peaks at **90.83 GiB** GPU committed (2048: 89.47). Of that, **90.45 GiB** is
+dedicated within the 96.00 GiB carve-out (2048: 89.11). Shared usage stays at
+0.38 GiB (2048: 0.36), so nothing spills beyond the carve-out. Load time is
+24.4 s for both. `gpu_device_used_mib` after load is 90948 → 92273 MiB.
+
+Flash-Next snapshots serialize only unpooled indexer rows in chronological
+order, and restore accepts any destination ring large enough. Disk checkpoints
+written by 2048-capacity builds therefore remain loadable.
+
+Only one session is measured. Activation scratch belongs to the model's single
+executor and is shared by all sessions. Each session's indexer ring also
+depends on the batch capacity (`bit_ceil(top_k + batch)`), adding about 26 MiB
+per AR/MTP session at long context. Raw samples and logs are in ignored `build/mem-4096/`.
