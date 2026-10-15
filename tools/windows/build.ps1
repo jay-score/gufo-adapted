@@ -24,9 +24,9 @@ param(
   [string[]]$CMakeArgs = @()
 )
 $ErrorActionPreference = "Stop"
-$root = (Resolve-Path "$PSScriptRoot\..\..").Path
+$root = (Resolve-Path -LiteralPath "$PSScriptRoot\..\..").Path
 $revision = "development"
-if ((Test-Path "$root\.git") -and (Get-Command git -ErrorAction SilentlyContinue)) {
+if ((Test-Path -LiteralPath "$root\.git") -and (Get-Command git -ErrorAction SilentlyContinue)) {
   $revision = & git -C $root describe --always --long --dirty --abbrev=12
   if ($LASTEXITCODE -ne 0) { throw "cannot identify the source revision" }
 }
@@ -36,16 +36,16 @@ Write-Host "Gufo revision: $revision"
 # fused kernels differently (see docs\WINDOWS.md).
 $validatedRock = "10.0.0"
 $rockVersionFile = Join-Path $Rocm ".info\version"
-if (-not (Test-Path $rockVersionFile)) {
+if (-not (Test-Path -LiteralPath $rockVersionFile)) {
   throw "TheRock not found at $Rocm (see docs\WINDOWS.md, or run tools\windows\check.ps1)"
 }
-$rockVersion = (Get-Content $rockVersionFile -TotalCount 1).Trim()
+$rockVersion = (Get-Content -LiteralPath $rockVersionFile -TotalCount 1).Trim()
 if ($rockVersion -ne $validatedRock) {
   Write-Warning "TheRock $rockVersion at $Rocm; this port is validated on $validatedRock"
 }
 
 # Ninja: the -Ninja path, else the one on PATH (as tools\windows\check.ps1 accepts).
-if (-not (Test-Path $Ninja)) {
+if (-not (Test-Path -LiteralPath $Ninja)) {
   $onPath = Get-Command ninja -ErrorAction SilentlyContinue
   if (-not $onPath) { throw "ninja not found at $Ninja or on PATH (see tools\windows\check.ps1)" }
   $Ninja = $onPath.Source
@@ -65,6 +65,7 @@ $env:PATH = "$(Split-Path $vswhere);$env:PATH"
 cmd /c "`"$vcvars`" >nul && set" | ForEach-Object {
   if ($_ -match "^([^=]+)=(.*)$") { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
 }
+if ($LASTEXITCODE -ne 0) { throw "Visual Studio environment setup failed (exit $LASTEXITCODE): $vcvars" }
 
 $env:HIP_PATH = $Rocm.Replace('\', '/')
 $env:HIP_DEVICE_LIB_PATH = "$Rocm/lib/llvm/amdgcn/bitcode".Replace('\', '/')
@@ -74,9 +75,9 @@ $clangxx = "$Rocm\lib\llvm\bin\clang++.exe".Replace('\', '/')
 
 $build = Join-Path $root "build\$Preset"
 # Clear cached global-library paths when upgrading a classic-mode build.
-if ((Test-Path "$build\CMakeCache.txt") -and ($Reconfigure -or
+if ((Test-Path -LiteralPath "$build\CMakeCache.txt") -and ($Reconfigure -or
     (Select-String -LiteralPath "$build\CMakeCache.txt" -Pattern '^VCPKG_MANIFEST_MODE:BOOL=OFF$' -Quiet))) {
-  Remove-Item "$build\CMakeCache.txt"
+  Remove-Item -LiteralPath "$build\CMakeCache.txt"
 }
 # Reconfigure so the manifest, tool paths and CMakeArgs take effect on updates.
 cmake -S $root --preset $Preset `
@@ -104,29 +105,51 @@ if ($LASTEXITCODE -ne 0) { throw "build failed" }
 
 # Runtime DLLs next to all executables: ROCm (amdhip64, hipblas, hipblaslt, rocblas
 # and their kernel libraries) and vcpkg's (icu, curl, ssl, png, jpeg, zlib).
+function Copy-RuntimeItem {
+  param(
+    [Parameter(ValueFromPipeline = $true)][IO.FileSystemInfo]$Source,
+    [string]$Destination
+  )
+  process {
+    $target = Join-Path $Destination $Source.Name
+    if ($Source.PSIsContainer) {
+      New-Item -ItemType Directory -Path $target -Force | Out-Null
+      Get-ChildItem -LiteralPath $Source.FullName -Force | Copy-RuntimeItem -Destination $target
+    } else {
+      $existing = if (Test-Path -LiteralPath $target) { Get-Item -LiteralPath $target -Force } else { $null }
+      if (-not $existing -or $existing.Length -ne $Source.Length -or
+          $existing.LastWriteTimeUtc -ne $Source.LastWriteTimeUtc) {
+        Copy-Item -LiteralPath $Source.FullName -Destination $target -Force
+      }
+    }
+  }
+}
+
 $bin = $build
 $rocmDlls = @("amdhip64_7.dll", "amd_comgr*.dll", "hipblas.dll", "libhipblaslt.dll", "origami.dll", "rocblas.dll", "rocsolver.dll", "rocsparse.dll", "rocm_kpack.dll", "rocm-openblas*.dll", "hiprtc*.dll")
 foreach ($pattern in $rocmDlls) {
-  Get-ChildItem "$Rocm\bin\$pattern" -ErrorAction SilentlyContinue | Copy-Item -Destination $bin -Force
+  Get-ChildItem -LiteralPath "$Rocm\bin" -Filter $pattern -File -ErrorAction SilentlyContinue | Copy-RuntimeItem -Destination $bin
 }
 foreach ($dir in @("hipblaslt", "rocblas")) {
   $libraryDir = Join-Path "$Rocm\bin" $dir
-  if (Test-Path $libraryDir) {
-    Copy-Item $libraryDir -Destination $bin -Recurse -Force
+  if (Test-Path -LiteralPath $libraryDir) {
+    Get-Item -LiteralPath $libraryDir | Copy-RuntimeItem -Destination $bin
   }
 }
-Get-ChildItem "$root\build\vcpkg_installed\x64-windows\bin\*.dll" | Copy-Item -Destination $bin -Force
+Get-ChildItem -LiteralPath "$root\build\vcpkg_installed\x64-windows\bin" -Filter '*.dll' -File | Copy-RuntimeItem -Destination $bin
 
 # Source builds must also work outside vcvars64's PATH. These copies are for
 # this developer's local use, NOT a redistributable release: VS's LLVM OpenMP
 # runtime lives in debug_nonredist. Binary packaging needs a different runtime.
 if ($env:VCToolsRedistDir) {
-  Get-ChildItem "$env:VCToolsRedistDir\x64\Microsoft.VC*.CRT\*.dll" | Copy-Item -Destination $bin -Force
+  Get-ChildItem -LiteralPath "$env:VCToolsRedistDir\x64" -Directory -Filter 'Microsoft.VC*.CRT' |
+    ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter '*.dll' -File } | Copy-RuntimeItem -Destination $bin
 }
 $openmp = Select-String -LiteralPath "$build\CMakeCache.txt" -Pattern '^OpenMP_libomp_LIBRARY:FILEPATH=(.*)$'
 if ($openmp -and $openmp.Matches[0].Groups[1].Value -match '^(.*)/VC/Tools/MSVC/([^/]+)/lib/x64/libomp\.lib$') {
-  $runtime = Get-ChildItem "$($Matches[1])/VC/Redist/MSVC/$($Matches[2])/debug_nonredist/x64/Microsoft.VC*.OpenMP.LLVM/libomp140.x86_64.dll" -ErrorAction SilentlyContinue
+  $runtime = Get-ChildItem -LiteralPath "$($Matches[1])/VC/Redist/MSVC/$($Matches[2])/debug_nonredist/x64" -Directory -Filter 'Microsoft.VC*.OpenMP.LLVM' -ErrorAction SilentlyContinue |
+    ForEach-Object { Get-Item -LiteralPath (Join-Path $_.FullName 'libomp140.x86_64.dll') -ErrorAction SilentlyContinue }
   if (-not $runtime) { throw "Cannot find this build's local Visual Studio OpenMP runtime; repair the C++ Build Tools installation." }
-  $runtime | Copy-Item -Destination $bin -Force
+  $runtime | Copy-RuntimeItem -Destination $bin
 }
 Write-Host "gufo: built $build"

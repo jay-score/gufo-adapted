@@ -34,13 +34,13 @@ Report "Windows x64" ($os.OSArchitecture -match "64" -and [int]$os.BuildNumber -
 
 # TheRock ROCm.
 $versionFile = Join-Path $Rocm ".info\version"
-if (Test-Path $versionFile) {
-  $version = (Get-Content $versionFile -TotalCount 1).Trim()
+if (Test-Path -LiteralPath $versionFile) {
+  $version = (Get-Content -LiteralPath $versionFile -TotalCount 1).Trim()
   Report "TheRock ROCm" $true "$version at $Rocm"
   if ($version -ne $validatedRock) {
     Note "TheRock version" "validated on $validatedRock; other releases may round kernels differently"
   }
-  Report "TheRock clang" (Test-Path "$Rocm\lib\llvm\bin\clang++.exe") "$Rocm\lib\llvm\bin\clang++.exe" `
+  Report "TheRock clang" (Test-Path -LiteralPath "$Rocm\lib\llvm\bin\clang++.exe") "$Rocm\lib\llvm\bin\clang++.exe" `
     "re-extract $tarball"
 } else {
   Report "TheRock ROCm" $false "not found at $Rocm" `
@@ -49,7 +49,7 @@ if (Test-Path $versionFile) {
 
 # Visual Studio C++ build tools (headers, libraries, linker environment).
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-$vs = if (Test-Path $vswhere) {
+$vs = if (Test-Path -LiteralPath $vswhere) {
   & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 }
 Report "VS C++ build tools" ([bool]$vs) ($(if ($vs) { $vs } else { "not found" })) `
@@ -63,7 +63,7 @@ if ($cmake) {
 } else {
   Report "CMake" $false "not on PATH" "install CMake 3.21 or newer and add it to PATH"
 }
-$ninjaExe = if (Test-Path $Ninja) { $Ninja } else { (Get-Command ninja -ErrorAction SilentlyContinue).Source }
+$ninjaExe = if (Test-Path -LiteralPath $Ninja) { $Ninja } else { (Get-Command ninja -ErrorAction SilentlyContinue).Source }
 Report "Ninja" ([bool]$ninjaExe) ($(if ($ninjaExe) { $ninjaExe } else { "not found" })) `
   "put ninja.exe on PATH or at $Ninja"
 
@@ -82,9 +82,9 @@ Report "Python for GUI" $pythonOk "$pythonVersion" "run setup-windows.bat or ins
 # The build installs the libraries from the pinned manifest automatically.
 if (-not $Vcpkg) {
   . "$PSScriptRoot\find-vcpkg.ps1"
-  $Vcpkg = Find-Vcpkg (Resolve-Path "$PSScriptRoot\..\..").Path
+  $Vcpkg = Find-Vcpkg (Resolve-Path -LiteralPath "$PSScriptRoot\..\..").Path
 }
-if (Test-Path "$Vcpkg\vcpkg.exe") {
+if (Test-Path -LiteralPath "$Vcpkg\vcpkg.exe") {
   Report "vcpkg" $true $Vcpkg
   Note "vcpkg packages" "build.ps1 installs the pinned vcpkg.json dependencies under build\vcpkg_installed"
 } else {
