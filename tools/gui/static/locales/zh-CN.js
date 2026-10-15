@@ -144,14 +144,11 @@ export const messages = {
   "? Model files and the running server will stay as they are.": "？此操作不会删除模型文件，也不会改变正在运行的服务。",
   "MTP options · Flash-Next": "MTP 选项 · Flash-Next",
   "Max draft tokens": "最大草稿 token 数",
-  "Draft policy": "草稿策略",
-  "Length (default)": "长度策略（默认）",
-  "Survival": "生存概率策略",
   "Draft vocabulary": "草稿词表",
   "Full (default)": "完整词表（默认）",
   "Latin / code": "拉丁文字 / 代码",
   "Prompt lookup": "提示查找",
-  "Survival and prompt lookup target single-session decoding. Latin vocabulary is intended for English/code and may slow drafting in other languages.": "生存概率策略和提示查找适用于单会话解码。拉丁词表面向英文和代码，可能降低其他语言的草稿生成速度。",
+  "Prompt lookup targets single-session decoding. Latin vocabulary is intended for English/code and may slow drafting in other languages.": "提示查找适用于单会话解码。拉丁词表面向英文和代码，可能降低其他语言的草稿生成速度。",
   "These settings differ from the running server. Changes apply to the next launch.": "当前设置与正在运行的服务不同，更改将在下次启动时生效。",
   "Launcher closed. Saved presets will be restored next time.": "管理器已退出，下次打开时会恢复已保存的预设。",
   "API address copied.": "已复制 API 地址。",
@@ -266,5 +263,5 @@ export const messages = {
   "frequency_penalty": "频率惩罚", "presence_penalty": "存在惩罚", "draft_tokens": "最大草稿 token 数",
   "cache_disk_gib": "磁盘容量上限", "cache_disk_staging_gib": "内存暂存上限",
   "cache_disk_dir": "缓存目录", "think": "思考模式", "reasoning_effort": "思考强度",
-  "speculative": "推测解码", "model_family": "模型系列", "mtp_policy": "草稿策略", "mtp_draft_vocab": "草稿词表"
+  "speculative": "推测解码", "model_family": "模型系列", "mtp_draft_vocab": "草稿词表"
 };

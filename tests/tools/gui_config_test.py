@@ -89,7 +89,7 @@ class ConfigTest(unittest.TestCase):
             self.assertNotIn("--mtp-model", command)
             with self.assertRaisesRegex(ValueError, "first shard"):
                 check_gguf(str(root / "模型-00002-of-00003.gguf"), "Model", sharded=True)
-            settings.update(speculative="mtp", prompt_lookup=True, mtp_policy="survival", mtp_draft_vocab="latin")
+            settings.update(speculative="mtp", prompt_lookup=True, mtp_draft_vocab="latin")
             with self.assertRaisesRegex(ValueError, "MTP sidecar"):
                 build_command(settings, check_files=True)
             sidecar = root / "mtp & sidecar.gguf"
@@ -108,12 +108,14 @@ class ConfigTest(unittest.TestCase):
             path = Path(directory) / "launcher.json"
             for enabled, mode in ((True, "mtp"), (False, "off")):
                 legacy = {"mtp": enabled, "context": 200000, "draft_tokens": 3,
-                          "mtp_model": str(Path(directory) / "mtp.gguf")}
+                          "mtp_model": str(Path(directory) / "mtp.gguf"),
+                          "mtp_policy": "survival"}
                 path.write_text(json.dumps({"version": 1, "settings": legacy}), encoding="utf-8")
                 before = path.read_bytes()
                 settings = resolved_settings(load_document(path))
                 self.assertEqual(settings["speculative"], mode)
                 self.assertNotIn("mtp", settings)
+                self.assertNotIn("mtp_policy", settings)
                 self.assertEqual(settings["mtp_model"], legacy["mtp_model"])
                 self.assertEqual(settings["context"], 200000)
                 self.assertEqual(settings["draft_tokens"], 3)
@@ -130,7 +132,7 @@ class ConfigTest(unittest.TestCase):
             settings = DEFAULTS | {
                 "executable": str(exe), "model": str(model), "speculative": "dflash2",
                 "dflash_model": str(draft), "mtp_model": str(root / "missing-mtp.gguf"),
-                "prompt_lookup": True, "mtp_policy": "survival", "mtp_draft_vocab": "latin",
+                "prompt_lookup": True, "mtp_draft_vocab": "latin",
             }
             with self.assertRaisesRegex(ValueError, "DFlash2 draft"):
                 build_command(settings, check_files=True)
@@ -138,7 +140,7 @@ class ConfigTest(unittest.TestCase):
             command = build_command(settings, check_files=True)
             self.assertEqual(command[command.index("--speculative") + 1], "dflash2")
             self.assertEqual(command[command.index("--dflash-model") + 1], str(draft))
-            for flag in ("--mtp-model", "--draft-tokens", "--mtp-policy", "--mtp-draft-vocab", "--prompt-lookup"):
+            for flag in ("--mtp-model", "--draft-tokens", "--mtp-draft-vocab", "--prompt-lookup"):
                 self.assertNotIn(flag, command)
             path = root / "launcher.json"
             save_document(path, new_document(settings))
