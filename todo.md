@@ -1,5 +1,17 @@
 # TODO
 
+## Prefill follow-up — reviewed 2026-10-15
+
+- [ ] [PR #470 — prefetch the next chunk's n-gram rows](https://github.com/gufo-org/gufo/pull/470).
+  Adapt [the focused prefetch commit](https://github.com/gufo-org/gufo/commit/0610c8f1a0513364b5920337460705b2febfb172)
+  separately from its 4096-token default. Start with our existing 2048-token
+  chunks and 128 Windows readers. Preserve exact token/history matching,
+  cancellation, interleaved-session ownership and the current attention-boundary
+  fixes. Measure cold and warm SSD gathers and matched HTTP prefill before
+  considering larger chunks; upstream's 6–11% package gain is not a Windows or
+  prefetch-only result. Require exact full logits/perplexity, MTP replay and
+  Linux CI. Deferred from the small #421/#571/#463 integration.
+
 ## Memory follow-up — reviewed 2026-10-08
 
 - [ ] [PR #445 — avoid Flash-Next prompt checkpoint copies](https://github.com/gufo-org/gufo/pull/445)
@@ -179,9 +191,12 @@ unless an integrated entry explicitly records a pass.
   `text_model_runner_test`, real-model concurrency/growth/history edits,
   cancellation, cache pressure, image identity and speculative rollback,
   exact matched-logit/perplexity checks, Linux `pr`.
-- [ ] [PR #421 — Flash prefill/indexer kernels](https://github.com/gufo-org/gufo/commit/653a31830447be5068a448a0284e43669d52f436) (**Defer** landing; investigate performance).
-  Fits Flash-Next/gfx1151, but qualify the algorithm-4438 BF16 gate, WMMA
-  intrinsics and LDS synchronization on TheRock 10.0.0. Require Windows
+- [ ] [PR #421 — Flash prefill/indexer kernels](https://github.com/gufo-org/gufo/commit/653a31830447be5068a448a0284e43669d52f436) (**Partly adapted**; remaining pieces deferred).
+  The eager selector grid, projection launch order and smaller attention LDS
+  stage are implemented in the [focused prefill series](docs/plans/prefill-small-pr421-571-463.md).
+  The algorithm-4438 BF16 gate and LDS-only synchronization remain outside that
+  series. Qualify their WMMA intrinsics and synchronization on TheRock 10.0.0.
+  Require Windows
   `dense_gemm_bench`/`attn_bench` sweeps, GPU operator tests, exact full logits
   and perplexity with pinned IQ4_XS/MTP/BF16 projector artifacts, separate
   speculative rejection coverage and matched end-to-end timings. Linux

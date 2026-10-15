@@ -1,0 +1,385 @@
+{
+  "date": "2026-10-15",
+  "base_commit": "6985ca53b04d0115cde735812d86662bde529e9d",
+  "candidate_source_commit": "c4447eedb977204fd5203cc3de5447940ae6c9c0",
+  "official_review_tip": "f6ca085a5091eed23541cde6fa1ff282cbd4c68b",
+  "toolchain": {
+    "therock": "10.0.0",
+    "compiler": [
+      "AMD clang version 23.0.0git (https://github.com/ROCm/llvm-project.git 8f497e0992fb7513f7f78a6f6b6f1056c375e961)",
+      "Target: x86_64-pc-windows-msvc",
+      "Thread model: posix"
+    ],
+    "vcpkg": "9e2895bf6afb246396d85232ba70fcfa1fa67ba1",
+    "vcpkg_manifest_sha256": "d711d2a008fd06e4d16438e033cbe463f44d5af82e82bf9f52b2c56fbe32bf3e",
+    "WindowsSDKVersion": "10.0.26100.0",
+    "Ninja": "1.12.0",
+    "CMake": "cmake version 3.29.2",
+    "VCToolsVersion": "14.51.36231"
+  },
+  "builds": {
+    "baseline": {
+      "version": "6985ca53b04d",
+      "binaries": [
+        {
+          "file": "gufo-baseline.exe",
+          "sha256": "27edee3bd3c13d19cb2591aa923b77180c8a2a47964fb653b8d299c18f5b4d11"
+        },
+        {
+          "file": "baseline-session.exe",
+          "sha256": "839f9778d817322a56846629e4f537d282a81427b95c5eaea8b3efac9c84b904"
+        }
+      ]
+    },
+    "candidate": {
+      "version": "c4447eedb977",
+      "binaries": [
+        {
+          "file": "gufo-scratch.exe",
+          "sha256": "0d0deb85cb3da2823a78899fb0d197fccaec8ae49b26be6c311350d594a77ae4"
+        },
+        {
+          "file": "scratch-session.exe",
+          "sha256": "b37ee9736ce33c21ee694c707eb3cbf5ec589f44ceb7b573096fc0a1383c2d61"
+        },
+        {
+          "file": "qwen38_flash_next_snapshot_test.exe",
+          "sha256": "70bb4f5ea145a722be421d13e2edc724ba46fe9191590da6c96791a7c607ac50"
+        },
+        {
+          "file": "qwen38_flash_next_rollback_test.exe",
+          "sha256": "98c3a09d99e0250864293a0ed7b3e777783376a312f9ac6a6c6c220f01d4153b"
+        }
+      ]
+    }
+  },
+  "models": {
+    "qwenflash-4XS": [
+      {
+        "bytes": 10946624,
+        "sha256": "5ce89370720f8bf90890f439361282104c1aa1482d4013bb9a50923e758e71a4",
+        "file": "Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf"
+      },
+      {
+        "bytes": 49835229856,
+        "sha256": "577a38a2392b40ca2193cea502e1d92f60b8cd370675d308e0ec21885d9daaa7",
+        "file": "Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf"
+      },
+      {
+        "bytes": 43836407744,
+        "sha256": "d4634e6d84f0ebb0940be15c90d3790bf6464e3dea3a1cddc567dc0e83ad8833",
+        "file": "Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf"
+      },
+      {
+        "bytes": 2786568256,
+        "sha256": "5ff54097406a905cf3a724c709124ceb0e3e10235ee862298969e91c96fa96e6",
+        "file": "mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf"
+      },
+      {
+        "bytes": 907542944,
+        "sha256": "2e788f8c511d8093c7b43cb87b2fd7e14228340318057f8fb20c86df2efe2355",
+        "file": "mmproj-BF16.gguf"
+      }
+    ],
+    "Qwenflash-4K-XL": [
+      {
+        "bytes": 10946624,
+        "sha256": "4448186216b3af4cc558bbce2c3213f01608f8f8b2e5267a9767971dd3ec8082",
+        "file": "Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf"
+      },
+      {
+        "bytes": 49859583136,
+        "sha256": "3f342f1c1580473f1ee94ddd5b28206e8c07a70fa1a366f59d1d6c922919a6c9",
+        "file": "Qwen3.8-Flash-Next-UD-Q4_K_XL-00002-of-00004.gguf"
+      },
+      {
+        "bytes": 49376141504,
+        "sha256": "56758f40269cad5cd9b0d3d6fbae0f40f6d5be6de49e4ab392dbe83157d9cbd3",
+        "file": "Qwen3.8-Flash-Next-UD-Q4_K_XL-00003-of-00004.gguf"
+      },
+      {
+        "bytes": 12087983520,
+        "sha256": "753bda48b98ba4f1636134a90a967de1b2d3908a236c026e464777342e53510a",
+        "file": "Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf"
+      },
+      {
+        "bytes": 2786568256,
+        "sha256": "5ff54097406a905cf3a724c709124ceb0e3e10235ee862298969e91c96fa96e6",
+        "file": "mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf"
+      },
+      {
+        "bytes": 907542944,
+        "sha256": "2e788f8c511d8093c7b43cb87b2fd7e14228340318057f8fb20c86df2efe2355",
+        "file": "mmproj-BF16.gguf"
+      }
+    ]
+  },
+  "harness_sha256": "de9bcd7aee8d8c189ccf2b4b81f7d4b37d03aab0d9d8165cacf1cc4c53f70165",
+  "quality": {
+    "scope": "Same extended diagnostic on baseline engine and candidate; fixed fixtures, not conversion/teacher qualification",
+    "prefixes": [
+      96,
+      1023,
+      1024,
+      2048,
+      4096,
+      32768
+    ],
+    "modes": [
+      "ar",
+      "mtp"
+    ],
+    "vocabulary": 248320,
+    "fixtures": 3,
+    "continuation_steps": 8,
+    "captures": {
+      "qwenflash-4XS": {
+        "rows": 324,
+        "values": 80455680,
+        "bytes": 321822720,
+        "baseline_and_candidate_sha256": "818fc6cd0cc8d3f6553d4cf9708399d86f2e84ebbdfd8933c2acb50b549982c8",
+        "mean_nll": 0.2149287556554124,
+        "perplexity": 1.2397735669643772,
+        "exact": true
+      },
+      "Qwenflash-4K-XL": {
+        "rows": 324,
+        "values": 80455680,
+        "bytes": 321822720,
+        "baseline_and_candidate_sha256": "00d9e0be2367289df5b3f958ebd32697bc37ea9f1f44340133921f81ebbc44e8",
+        "mean_nll": 0.14571980746101865,
+        "perplexity": 1.156871995733022,
+        "exact": true
+      }
+    },
+    "state_tests": [
+      {
+        "test": "scratch-Qwenflash-4K-XL-rollback",
+        "exit": 0
+      },
+      {
+        "test": "scratch-Qwenflash-4K-XL-session",
+        "exit": 0
+      },
+      {
+        "test": "scratch-Qwenflash-4K-XL-snapshot",
+        "exit": 0
+      },
+      {
+        "test": "scratch-qwenflash-4XS-rollback",
+        "exit": 0
+      },
+      {
+        "test": "scratch-qwenflash-4XS-session",
+        "exit": 0
+      },
+      {
+        "test": "scratch-qwenflash-4XS-snapshot",
+        "exit": 0
+      }
+    ]
+  },
+  "resources": {
+    "original_contract": "pass",
+    "dense_f16_variants": 12,
+    "dense_scratch_and_spills": "zero",
+    "attention": {
+      "baseline": {
+        "scratch": 0,
+        "vgpr": 221,
+        "vgpr_spill": 0,
+        "sgpr_spill": 0,
+        "lds": 49152
+      },
+      "scratch": {
+        "scratch": 0,
+        "vgpr": 207,
+        "vgpr_spill": 0,
+        "sgpr_spill": 0,
+        "lds": 24576
+      }
+    },
+    "selector_score_bytes": {
+      "baseline": 134217728,
+      "candidate": 20971520
+    },
+    "selector_scope": "Allocation size at the model 262144-token context, not total Windows commit"
+  },
+  "limitations": [
+    "Linux CI unrun",
+    "GPU timeline profiling unrun",
+    "Full-model full-logit coverage through 32768 tokens; selector operator coverage through 131K",
+    "Existing model/conversion/vision oracle gaps are outside this regression comparison"
+  ],
+  "runtime_environment": {
+    "ROCR_VISIBLE_DEVICES": null,
+    "HSA_OVERRIDE_GFX_VERSION": null,
+    "HIP_VISIBLE_DEVICES": null,
+    "GUFO_PLATFORM_TUNING": null
+  },
+  "power_profile": "Balanced; no clock or power settings changed",
+  "native_timing": {
+    "method": "Native pp2048/tg128, greedy AR, depths 0/32768, one repetition per fresh-process arm; ABBA order",
+    "models": {
+      "qwenflash-4XS": {
+        "pp2048@0": {
+          "baseline": [
+            998.69,
+            988.21
+          ],
+          "candidate": [
+            995.36,
+            995.64
+          ],
+          "baseline_mean": 993.45,
+          "candidate_mean": 995.5,
+          "gain_percent": 0.20635160299964372,
+          "baseline_arm_spread_percent": 1.0549096582616153,
+          "candidate_arm_spread_percent": 0.02812656956303091
+        },
+        "tg128@0": {
+          "baseline": [
+            28.4,
+            29.13
+          ],
+          "candidate": [
+            28.54,
+            28.5
+          ],
+          "baseline_mean": 28.765,
+          "candidate_mean": 28.52,
+          "gain_percent": -0.8517295324178775,
+          "baseline_arm_spread_percent": 2.5378063618981415,
+          "candidate_arm_spread_percent": 0.14025245441794934
+        },
+        "pp2048@32768": {
+          "baseline": [
+            935.52,
+            933.63
+          ],
+          "candidate": [
+            934.75,
+            919.27
+          ],
+          "baseline_mean": 934.575,
+          "candidate_mean": 927.01,
+          "gain_percent": -0.8094588449295226,
+          "baseline_arm_spread_percent": 0.20223096059706136,
+          "candidate_arm_spread_percent": 1.6698848987605333
+        },
+        "tg128@32768": {
+          "baseline": [
+            26.38,
+            26.95
+          ],
+          "candidate": [
+            26.54,
+            26.56
+          ],
+          "baseline_mean": 26.665,
+          "candidate_mean": 26.549999999999997,
+          "gain_percent": -0.4312769548096784,
+          "baseline_arm_spread_percent": 2.1376336021001325,
+          "candidate_arm_spread_percent": 0.07532956685498898
+        }
+      },
+      "Qwenflash-4K-XL": {
+        "pp2048@0": {
+          "baseline": [
+            1587.76,
+            1589.85
+          ],
+          "candidate": [
+            1590.49,
+            1600.24
+          ],
+          "baseline_mean": 1588.8049999999998,
+          "candidate_mean": 1595.365,
+          "gain_percent": 0.4128889322478235,
+          "baseline_arm_spread_percent": 0.13154540676797458,
+          "candidate_arm_spread_percent": 0.6111454118649964
+        },
+        "tg128@0": {
+          "baseline": [
+            28.8,
+            29.43
+          ],
+          "candidate": [
+            28.6,
+            28.9
+          ],
+          "baseline_mean": 29.115000000000002,
+          "candidate_mean": 28.75,
+          "gain_percent": -1.2536493216555145,
+          "baseline_arm_spread_percent": 2.163833075734154,
+          "candidate_arm_spread_percent": 1.0434782608695554
+        },
+        "pp2048@32768": {
+          "baseline": [
+            1426.69,
+            1432.78
+          ],
+          "candidate": [
+            1437.76,
+            1424.99
+          ],
+          "baseline_mean": 1429.7350000000001,
+          "candidate_mean": 1431.375,
+          "gain_percent": 0.11470657149750263,
+          "baseline_arm_spread_percent": 0.4259530612316211,
+          "candidate_arm_spread_percent": 0.892149157278839
+        },
+        "tg128@32768": {
+          "baseline": [
+            26.82,
+            26.76
+          ],
+          "candidate": [
+            26.76,
+            26.29
+          ],
+          "baseline_mean": 26.79,
+          "candidate_mean": 26.525,
+          "gain_percent": -0.9891750653228892,
+          "baseline_arm_spread_percent": 0.22396416573347788,
+          "candidate_arm_spread_percent": 1.7719132893496794
+        }
+      }
+    }
+  },
+  "http": {
+    "method": "One paired baseline/candidate run per mode; IQ4_XS, context 65536, 8 sessions, 128-token budget, BF16 projector, cache_prompt false; functional equivalence, not a latency non-regression campaign",
+    "modes": {
+      "off": {
+        "requests_per_binary": 23,
+        "equivalence_sha256": "c1a0336e0267948333e069b0dc51115634b5fc66a007a40b7e417c733b12969d",
+        "text_and_token_counts_exact": true,
+        "cached_tokens_all_zero": true,
+        "greedy_concurrencies": [
+          1,
+          2,
+          4,
+          6,
+          8
+        ],
+        "seeded_sampled_c1": true,
+        "image_c1_sha256": "85d79f94f9cbb318b162bcfa89d878d0538dabd2ef7989ee5de21923be2fcb1f"
+      },
+      "mtp": {
+        "requests_per_binary": 23,
+        "equivalence_sha256": "3d04ddd9f9d840f0ee4e471e2da5e46f835f2781fcc55b31c2fbc96f5c4ff591",
+        "text_and_token_counts_exact": true,
+        "cached_tokens_all_zero": true,
+        "greedy_concurrencies": [
+          1,
+          2,
+          4,
+          6,
+          8
+        ],
+        "seeded_sampled_c1": true,
+        "image_c1_sha256": "85d79f94f9cbb318b162bcfa89d878d0538dabd2ef7989ee5de21923be2fcb1f"
+      }
+    }
+  }
+}

@@ -436,8 +436,12 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
       (c.context_length + c.compress_ratio - 1) / c.compress_ratio;
   e->mask_words_ = (max_blocks + 31) / 32;
   s.mask = Alloc<std::uint32_t>(a, T * e->mask_words_, error_msg);
-  s.scores =
-      f32(static_cast<std::size_t>(e->select_chunk_) * e->mask_words_ * 32);
+  // Bound score traffic while retaining every row a decode graph can replay.
+  const std::size_t score_stride = std::size_t{e->mask_words_} * 32;
+  e->select_score_floats_ =
+      std::max(kVecBatch * score_stride,
+               std::min(std::size_t{5 * 1024 * 1024}, 512 * score_stride));
+  s.scores = f32(e->select_score_floats_);
   s.ctx = f32(T * c.AttentionQDim());
   s.attn_partials = f32(static_cast<std::size_t>(kVecBatch) * c.num_heads *
                         kAttnSplits * (c.head_dim + 2));
@@ -1671,21 +1675,31 @@ bool Executor::Attention(const DeviceLayer& l, Session::AttentionState& s,
                       index_capacity, stream_, s.rope);
     // Align score rows to full cache lines. The selector still considers
     // only complete causal blocks, so padding cannot change the ranking.
+    // Eager prefill compacts scores to the populated extent; graphs retain
+    // the maximum stride for replay at later positions.
+    const auto score_context =
+        n_tokens > kVecBatch ? start_pos + n_tokens : max_context;
     const std::uint32_t blocks =
-        (max_context + c.compress_ratio - 1) / c.compress_ratio;
+        (score_context + c.compress_ratio - 1) / c.compress_ratio;
     const std::uint32_t max_blocks = (blocks + 31) / 32 * 32;
+    const auto select_chunk = static_cast<std::uint32_t>(std::min(
+        std::size_t{512}, std::bit_floor(select_score_floats_ / max_blocks)));
     // Catch-up consumes only the final attention tile. Cover its masks even
     // when the dense/sparse boundary shifts the four-query sparse groups.
     const auto first_query = last_only && n_tokens > 16 ? n_tokens - 16 : 0U;
-    for (std::uint32_t t0 = first_query; t0 < n_tokens; t0 += select_chunk_) {
-      const std::uint32_t n = std::min(select_chunk_, n_tokens - t0);
+    for (std::uint32_t t0 = first_query; t0 < n_tokens; t0 += select_chunk) {
+      const std::uint32_t n = std::min(select_chunk, n_tokens - t0);
+      // Wide prefill is eager; captured decode grids must cover later
+      // positions.
+      const std::uint32_t live =
+          n_tokens > kVecBatch ? (start_pos + t0 + n) / c.compress_ratio : 0;
       SelectBlocks(s_.iq + static_cast<std::size_t>(t0) * c.indexer_heads *
                                c.indexer_head_dim,
                    s.block_k,
                    s_.mask + static_cast<std::size_t>(t0) * mask_words_,
                    s_.scores, n, pos, t0, c.indexer_heads, c.indexer_head_dim,
                    c.compress_ratio, c.indexer_top_k / c.compress_ratio,
-                   mask_words_, max_blocks, stream_);
+                   mask_words_, max_blocks, stream_, live);
     }
     mask = s_.mask;
   }
