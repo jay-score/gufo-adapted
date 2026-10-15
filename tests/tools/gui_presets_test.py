@@ -122,9 +122,9 @@ class PresetsTest(unittest.TestCase):
             with self.subTest(family=family), self.assertRaisesRegex(ValueError, "does not support"):
                 build_command(DEFAULTS | {"model_family": family, "speculative": mode})
         values = DEFAULTS | {"model_family": "qwen38_27b", "speculative": "dflash2", "prompt_lookup": True,
-                             "mtp_policy": "survival", "reasoning_effort": "low", "think": "off"}
+                             "mtp_draft_vocab": "latin", "reasoning_effort": "low", "think": "off"}
         command = build_command(values)
-        for flag in ("--model-family", "--reasoning-effort", "--mtp-policy", "--prompt-lookup", "--mtp-model"):
+        for flag in ("--model-family", "--reasoning-effort", "--mtp-draft-vocab", "--prompt-lookup", "--mtp-model"):
             self.assertNotIn(flag, command)
         self.assertIn("--dflash-model", command)
 

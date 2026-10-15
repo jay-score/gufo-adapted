@@ -37,20 +37,31 @@ MTP=/path/to/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf
 
 The loader discovers the remaining shards. Omit the speculative options for AR;
 AR sessions allocate no predictor state even if a shared model has MTP loaded.
-Adaptive MTP is default, with `--draft-tokens` capping 1–7 proposals. Sampled
-requests use deterministic acceptance/cost control for seeded replay; all-greedy
-C>1 batches may use measured cycle costs. Each request keeps private caches,
-rollback and RNG. See [MTP qualification](QUALITY.md).
+Adaptive MTP is default, with `--draft-tokens` capping 1–7 proposals. A request
+that is not in a jointly planned batch drafts toward that cap and stops on the
+draft head's own confidence (`mtp_policy.hpp`, from upstream PR #603):
 
-Three opt-in MTP options change only what the draft side proposes; verification
+- Greedy, one session: stop before the draft at which the product of the drafts'
+  top-1 probabilities falls below 0.6; the first draft is always kept. After 15
+  cycles, a request keeping fewer than 0.95 drafts per cycle drafts one token.
+- Sampled, or greedy with `--sessions` above 1: stop when the next draft's
+  acceptance, learned per confidence bucket from the request's committed
+  accept/reject prefix, no longer pays for its share of the cycle-cost table.
+
+Jointly planned all-greedy C>1 batches keep a shared width from measured cycle
+costs. Every policy reads only committed history, so seeded sampling replays.
+Each request keeps private caches, rollback and RNG. See
+[MTP qualification](QUALITY.md).
+
+Two opt-in MTP options change only what the draft side proposes; verification
 is unchanged, so sampled outputs keep the target distribution and greedy text is
 byte-identical. They apply to single-session decoding (measured on Windows,
-sampled, thinking on, 3 seeds per prompt, against the default):
+sampled, thinking on, 3 seeds per prompt, against the length controller that
+preceded the confidence stop):
 
 | Option | What it does | Measured |
 | --- | --- | --- |
 | `--mtp-draft-vocab latin` | The draft head scores only special and ASCII/Latin-script text tokens (130K of 248K), reading half of the output head per draft step; ids map back on the GPU | +4.9% decode, identical texts and acceptance |
-| `--mtp-policy survival` | Sampled drafting stops when the product of per-proposal acceptance estimates (from the draft head's top probability, by depth) falls below 0.40, instead of the per-cycle length controller | With the draft vocabulary: +8.7% over the default (prose +7%, code +7%, reasoning +13%) |
 | `--prompt-lookup` | After each kept MTP draft, a match of 12+ tokens in the conversation proposes the tokens that followed it (point-mass proposals, exact under rejection sampling). Shorter matches propose nothing: an ungated 3-token rule lost 6-8% at temperature 1 | File-editing replies +10% sampled; log quoting +23% greedy; prose unchanged. Timings report `lookup_n` / `lookup_n_accepted` |
 
 The official template defaults to thinking on, `xhigh` effort and preserving

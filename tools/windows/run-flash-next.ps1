@@ -5,7 +5,7 @@
 #   powershell -ExecutionPolicy Bypass -File tools\windows\run-flash-next.ps1 -Draft mtp3    # MTP capped at 3 drafts
 #   powershell -ExecutionPolicy Bypass -File tools\windows\run-flash-next.ps1 -Draft off     # autoregressive baseline
 #   powershell -ExecutionPolicy Bypass -File tools\windows\run-flash-next.ps1 -Mode bench    # pp/tg at depths 0..128K
-#   ... -DraftVocab -Survival -Lookup   serve-only MTP options; require -Draft mtp or mtp3
+#   ... -DraftVocab -Lookup             serve-only MTP options; require -Draft mtp or mtp3
 #
 # Files come from the Hugging Face cache (see docs\WINDOWS.md for the
 # download); -Snapshot points at another copy of unsloth/Qwen3.8-Flash-Next-GGUF.
@@ -16,7 +16,6 @@ param(
   [ValidateSet("mtp", "mtp3", "off")] [string]$Draft = "mtp",
   [switch]$Greedy,
   [switch]$DraftVocab,
-  [switch]$Survival,
   [switch]$Lookup,
   [int]$Context = 262144,
   [int]$Port = 8080,
@@ -24,8 +23,8 @@ param(
   [string]$MtpModel = ""
 )
 $ErrorActionPreference = "Stop"
-if (($DraftVocab -or $Survival -or $Lookup) -and ($Mode -ne "serve" -or $Draft -eq "off")) {
-  throw "-DraftVocab, -Survival and -Lookup require -Mode serve and -Draft mtp or mtp3."
+if (($DraftVocab -or $Lookup) -and ($Mode -ne "serve" -or $Draft -eq "off")) {
+  throw "-DraftVocab and -Lookup require -Mode serve and -Draft mtp or mtp3."
 }
 $bin = Join-Path $PSScriptRoot "..\..\build\release"
 if (-not (Test-Path "$bin\gufo.exe")) {
@@ -67,7 +66,6 @@ $speculative = switch ($Draft) {
 }
 if ($Draft -ne "off" -and $Mode -eq "serve") {
   if ($DraftVocab) { $speculative += @("--mtp-draft-vocab", "latin") }
-  if ($Survival) { $speculative += @("--mtp-policy", "survival") }
   if ($Lookup) { $speculative += "--prompt-lookup" }
 }
 
