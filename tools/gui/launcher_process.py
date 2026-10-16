@@ -71,21 +71,22 @@ class ProcessManager:
                     "pid": self.process.pid if self.process and self.process.poll() is None else None,
                     "elapsed_seconds": int(time.monotonic() - self.started_at) if self.started_at else 0}
 
-    def start(self, command, port, model_name):
+    def start(self, command, port, model_name, host="127.0.0.1"):
         with self.lifecycle_lock, self.lock:
             if self.state == "stopping" or (self.process and self.process.poll() is None):
                 raise ValueError("Stop the running Gufo server before starting another.")
             # Match Gufo's address reuse so TIME_WAIT does not block a restart.
             # Windows can also allow this bind beside a reusable listener, so
             # check for an accepting server before launching our child.
+            connect_host = "127.0.0.1" if host == "0.0.0.0" else host
             with socket.socket() as probe:
                 probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 try:
-                    probe.bind(("127.0.0.1", port))
+                    probe.bind((host, port))
                 except OSError as exc:
                     raise ValueError(f"Port {port} is unavailable or already in use.") from exc
             try:
-                connection = socket.create_connection(("127.0.0.1", port), timeout=0.25)
+                connection = socket.create_connection((connect_host, port), timeout=0.25)
             except OSError:
                 pass
             else:
@@ -94,7 +95,7 @@ class ProcessManager:
             self.logs.clear()
             self.metrics = None
             self.command = list(command)
-            self.base_url = f"http://127.0.0.1:{port}/v1"
+            self.base_url = f"http://{connect_host}:{port}/v1"
             self.model_name = model_name
             self.error = ""
             self.exit_code = None
@@ -134,7 +135,7 @@ class ProcessManager:
             self.process = child
             self.state = "loading"
             threading.Thread(target=self._read_output, args=(child,), daemon=True).start()
-            threading.Thread(target=self._watch, args=(child, port, model_name), daemon=True).start()
+            threading.Thread(target=self._watch, args=(child, connect_host, port, model_name), daemon=True).start()
         return self.snapshot()
 
     def _read_output(self, child):
@@ -144,7 +145,7 @@ class ProcessManager:
                     if self.process is child:
                         self.logs.append(line.rstrip("\r\n"))
 
-    def _watch(self, child, port, model_name):
+    def _watch(self, child, host, port, model_name):
         # Local probes must not inherit HTTP proxy settings from the user's shell.
         client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         next_metrics_poll = 0.0
@@ -158,7 +159,7 @@ class ProcessManager:
                 ready = self.state == "ready"
             if loading:
                 try:
-                    with client.open(f"http://127.0.0.1:{port}/ready", timeout=0.5) as response:
+                    with client.open(f"http://{host}:{port}/ready", timeout=0.5) as response:
                         body = json.loads(response.read(16384))
                     ready = isinstance(body, dict) and body.get("status") == "ready" and body.get("model") == model_name
                     with self.lock:
@@ -168,7 +169,7 @@ class ProcessManager:
                     pass  # The model loads before Gufo starts listening.
             elif ready and time.monotonic() >= next_metrics_poll:
                 try:
-                    with client.open(f"http://127.0.0.1:{port}/metrics", timeout=0.5) as response:
+                    with client.open(f"http://{host}:{port}/metrics", timeout=0.5) as response:
                         metrics = parse_metrics(response.read(16384).decode("utf-8"))
                 except urllib.error.HTTPError as error:
                     error.close()
