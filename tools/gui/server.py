@@ -121,7 +121,7 @@ def create_app(config_path, manager, exit_event, ui_port=8090):
             if values["port"] == ui_port:
                 raise ValueError("The Gufo API and launcher need different ports (defaults: 8080 and 8090).")
             command = build_command(values, check_files=True)
-            state = manager.start(command, values["port"], values["served_model_name"])
+            state = manager.start(command, values["port"], values["served_model_name"], host=values["host"])
             running = {"preset_id": preset["id"], "preset_name": preset["name"],
                        "modified": values != resolved_settings(document, preset["id"]),
                        "settings": values}

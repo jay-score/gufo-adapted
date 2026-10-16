@@ -15,6 +15,15 @@ from settings import DEFAULTS, validate_settings
 
 
 class ConfigTest(unittest.TestCase):
+    def test_bind_address_validation_and_command(self):
+        self.assertEqual(validate_settings({})["host"], "127.0.0.1")
+        for host in ("127.0.0.1", "0.0.0.0", "192.168.1.10"):
+            command = build_command({"host": host})
+            self.assertEqual(command[command.index("--host") + 1], host)
+        for host in ("", "localhost", "::1", "http://127.0.0.1", "127.0.0.1:8080", "256.1.1.1", None, True):
+            with self.subTest(host=host), self.assertRaises(ValueError):
+                validate_settings({"host": host})
+
     def test_round_trip_and_failed_write_preserves_previous_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings/launcher.json"

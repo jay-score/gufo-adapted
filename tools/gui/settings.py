@@ -1,5 +1,6 @@
 """Common launcher fields and validation; no persistence or process operations."""
 
+import ipaddress
 import math
 import os
 from pathlib import Path
@@ -28,6 +29,7 @@ DEFAULTS = {
                           if os.environ.get("LOCALAPPDATA") else Path.home() / ".cache" / "gufo"),
     "cache_disk_gib": 8,
     "cache_disk_staging_gib": 0,
+    "host": "127.0.0.1",
     "port": 8080,
     "served_model_name": "gufo",
     "sessions": 1,
@@ -112,6 +114,10 @@ def validate_settings(values):
             if not path.is_absolute():
                 raise ValueError(f"{key}: use a full filesystem path.")
             result[key] = str(path)
+    try:
+        ipaddress.IPv4Address(result["host"])
+    except ipaddress.AddressValueError as exc:
+        raise ValueError("host: enter an IPv4 address, such as 127.0.0.1 or 0.0.0.0.") from exc
     if result["max_tokens"] == 0:
         raise ValueError("max_tokens: use -1 for unlimited output, or a positive limit.")
     if result["repeat_penalty"] == 0:
