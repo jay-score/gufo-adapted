@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -2823,18 +2824,22 @@ struct ToolFixtureOutput {
 gufo::server::HttpResponse ToolFixtureResponse(gufo::json::Value body,
                                                FakeBackend& backend,
                                                bool responses, bool stream,
-                                               bool reasoning = false) {
+                                               bool reasoning = false,
+                                               bool debug_tool_calls = false) {
   body["stream"] = stream;
   body["chat_template_kwargs"] = gufo::json::Value::object();
   body["chat_template_kwargs"]["enable_thinking"] = reasoning;
+  auto request = Request(body.dump());
+  request.request_id = "tool-fixture";
+  request.debug_tool_calls = debug_tool_calls;
   if (!responses)
-    return gufo::server::HandleOpenAiChat(Request(body.dump()), backend);
+    return gufo::server::HandleOpenAiChat(request, backend);
   auto input = *body.find("messages");
   body["input"] = std::move(input);
   auto chat = ResponseChat(body);
   chat.reasoning.enabled = reasoning;
-  return gufo::server::CreateOpenAiResponse(Request(body.dump()), backend, chat,
-                                            0, {}, stream);
+  return gufo::server::CreateOpenAiResponse(request, backend, chat, 0, {},
+                                            stream);
 }
 
 ToolFixtureOutput ReadToolFixture(const gufo::server::HttpResponse& response,
@@ -3379,6 +3384,54 @@ void TestQwenParameterDelimiters() {
   }
 }
 
+void TestToolCallLogging() {
+  const auto body = gufo::json::parse(R"({"model":"test-model",
+    "messages":[{"role":"user","content":"private-prompt"}],
+    "tools":[{"type":"function","function":{"name":"f","parameters":{
+      "properties":{"n":{"type":"integer"}}}}}]})");
+  const std::string raw =
+      "<tool_call><function=f><parameter=n>private-argument\n\x1b[31m" +
+      std::string(2000, 'x') + "</parameter></function></tool_call>";
+  for (bool responses : {false, true}) {
+    for (bool stream : {false, true}) {
+      for (bool debug : {false, true}) {
+        FakeBackend backend;
+        // Enough bad frames to verify the per-request diagnostic limit.
+        backend.pieces = {raw, raw, raw, raw, raw, raw};
+        std::ostringstream logs;
+        auto* previous = std::clog.rdbuf(logs.rdbuf());
+        try {
+          const auto response = ToolFixtureResponse(body, backend, responses,
+                                                    stream, false, debug);
+          (void)ReadToolFixture(response, responses, stream);
+        } catch (const gufo::server::TextGenerationError& error) {
+          Expect(
+              responses && !stream &&
+                  error.code() ==
+                      gufo::server::TextGenerationErrorCode::kMalformedToolCall,
+              "Logging preserves buffered Responses errors");
+        }
+        std::clog.rdbuf(previous);
+        const auto log = logs.str();
+        Expect(log.find("request=tool-fixture event=tool_call_rejected "
+                        "reason=invalid_parameter_value") != std::string::npos,
+               "Rejected calls log a request ID and specific reason");
+        Expect(std::count(log.begin(), log.end(), '\n') == 4,
+               "Diagnostics are bounded and payloads cannot inject log lines");
+        Expect(log.find("private-prompt") == std::string::npos &&
+                   log.find('\x1b') == std::string::npos,
+               "Diagnostics exclude prompts and escape terminal controls");
+        Expect((log.find("private-argument") != std::string::npos) == debug &&
+                   (log.find("payload_truncated=true") != std::string::npos) ==
+                       debug,
+               "Only opt-in logs contain bounded rejected payloads");
+        Expect(log.size() < 8192,
+               "Large rejected calls produce bounded diagnostic output");
+      }
+    }
+  }
+}
+
 void TestMalformedToolDiagnostics() {
   using Backend = gufo::server::TextGenerationBackend;
   const auto body = gufo::json::parse(R"({"model":"test-model",
@@ -3687,6 +3740,7 @@ int main() {
   TestQwenParameterDelimiters();
   TestConsolidatedOutputParsing();
   TestMalformedToolDiagnostics();
+  TestToolCallLogging();
   TestMultilineToolEdits();
   TestQwenDeclaredTypes();
   TestHistoricalFunctions();

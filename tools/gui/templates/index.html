@@ -115,6 +115,8 @@
           <div><label for="frequency_penalty" data-i18n="Frequency penalty">Frequency penalty</label><input id="frequency_penalty" name="frequency_penalty" type="number" min="-2" max="2" step="any" required></div>
           <div><label for="presence_penalty" data-i18n="Presence penalty">Presence penalty</label><input id="presence_penalty" name="presence_penalty" type="number" min="-2" max="2" step="any" required></div>
         </div>
+        <label class="check-label"><input id="debug_tool_calls" name="debug_tool_calls" type="checkbox"> <span class="i18n-text" data-i18n="Debug tool calls">Debug tool calls</span></label>
+        <p class="hint" data-i18n="Log rejected tool-call text in the process log. May include sensitive file contents or arguments. Applies on next launch.">Log rejected tool-call text in the process log. May include sensitive file contents or arguments. Applies on next launch.</p>
         {% include "mtp-options.html" %}
       </details>
       <section class="launch-bar" aria-label="Launch controls" data-i18n-aria-label="Launch controls">

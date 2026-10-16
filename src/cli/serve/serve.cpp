@@ -119,7 +119,7 @@ void AddServerOptions(gufo::cli::ArgParser& parser, std::string* host,
                       int* port, std::size_t* session_count,
                       std::size_t* max_connections,
                       std::size_t* max_request_body_bytes, std::string* api_key,
-                      bool* verbose) {
+                      bool* verbose, bool* debug_tool_calls) {
   parser.AddOption("-i", "--host", "IP", "Bind address", "Server", host);
   parser.AddOption("-p", "--port", "N", "Port to listen on", "Server", port);
   if (session_count != nullptr)
@@ -134,6 +134,9 @@ void AddServerOptions(gufo::cli::ArgParser& parser, std::string* host,
                    max_request_body_bytes);
   parser.AddOption("", "--api-key", "KEY", "API key", "Server", api_key);
   parser.AddFlag("-v", "--verbose", "Verbose logging", "General", verbose);
+  parser.AddFlag("", "--debug-tool-calls",
+                 "Log rejected tool payloads (may contain sensitive data)",
+                 "Server", debug_tool_calls);
 }
 
 // Help-only sinks for AddServerOptions, so subcommand help can list the
@@ -147,6 +150,7 @@ struct ServerOptionHelpTargets {
       static_cast<std::size_t>(8) * 1024 * 1024;
   std::string api_key;
   bool verbose = false;
+  bool debug_tool_calls = false;
 };
 
 void AddServerOptionsForHelp(gufo::cli::ArgParser& parser,
@@ -155,7 +159,8 @@ void AddServerOptionsForHelp(gufo::cli::ArgParser& parser,
   AddServerOptions(parser, &targets->host, &targets->port,
                    include_sessions ? &targets->session_count : nullptr,
                    &targets->max_connections, &targets->max_request_body_bytes,
-                   &targets->api_key, &targets->verbose);
+                   &targets->api_key, &targets->verbose,
+                   &targets->debug_tool_calls);
 }
 
 // Split a `NAME=VALUE` CLI spec. Returns false when either side is empty.
@@ -625,6 +630,8 @@ void PrintServeHelp(std::string_view program_name,
       << "      --max-request-bytes <N>\n"
       << "                         Maximum HTTP request body bytes (default: "
          "8388608)\n"
+      << "      --debug-tool-calls  Log rejected tool payloads (sensitive "
+         "data)\n"
       << "      --api-key <KEY>    Require Bearer authorization for requests\n"
       << "  -v, --verbose          Print detailed server metrics and request "
          "traces\n"
@@ -673,6 +680,7 @@ int RunServe(std::span<const char* const> args) {
       static_cast<std::size_t>(8) * 1024 * 1024;
   std::string api_key;
   bool verbose = false;
+  bool debug_tool_calls = false;
 
   // Identify the modality only after leading server options. The selected
   // parser consumes every option together, so --served-model-name -v and
@@ -680,9 +688,10 @@ int RunServe(std::span<const char* const> args) {
   ArgParser server_parser("gufo serve");
   const auto add_server_options = [&](ArgParser& parser,
                                       bool include_sessions = true) {
-    AddServerOptions(
-        parser, &host, &port, include_sessions ? &session_count : nullptr,
-        &max_connections, &max_request_body_bytes, &api_key, &verbose);
+    AddServerOptions(parser, &host, &port,
+                     include_sessions ? &session_count : nullptr,
+                     &max_connections, &max_request_body_bytes, &api_key,
+                     &verbose, &debug_tool_calls);
   };
   add_server_options(server_parser);
   std::string subcommand = "llm";
@@ -1225,6 +1234,7 @@ int RunServe(std::span<const char* const> args) {
           .max_request_body_bytes = max_request_body_bytes,
           .max_connections = max_connections,
           .api_key = std::move(api_key),
+          .debug_tool_calls = debug_tool_calls,
       },
       images);
   std::string err;

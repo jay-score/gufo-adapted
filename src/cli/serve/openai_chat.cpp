@@ -24,6 +24,7 @@
 #include <utility>
 #include <vector>
 
+#include "src/cli/serve/logging.hpp"
 #include "src/cli/serve/sampling_request.hpp"
 #include "src/cli/serve/stop_sequences.hpp"
 #include "src/core/image.hpp"
@@ -57,6 +58,32 @@ std::optional<ReasoningEffort> ParseReasoningEffortName(
 
 namespace {
 
+using ToolDiagnostic = std::function<void(std::string_view, std::string_view)>;
+
+// Bound both the number of diagnostics and the escaped payload size. Never
+// include a request body, tool schema, or reasoning in these records.
+ToolDiagnostic ToolDiagnostics(const HttpRequest& request) {
+  return [id = request.request_id, debug = request.debug_tool_calls,
+          count = std::size_t{0}](std::string_view reason,
+                                  std::string_view frame) mutable {
+    if (count++ >= 4)
+      return;
+    std::string message =
+        "request=" + id +
+        " event=tool_call_rejected reason=" + std::string(reason) +
+        " frame_bytes=" + std::to_string(frame.size());
+    if (debug) {
+      constexpr std::size_t limit = 1024;
+      const auto payload =
+          core::Utf8Decoder{}.Push(frame.substr(0, limit), true);
+      message += " payload_truncated=" +
+                 std::string(frame.size() > limit ? "true" : "false") +
+                 " payload=" + json::Value(payload).dump();
+    }
+    Logger::Warn("tools", message);
+  };
+}
+
 struct ParsedChatRequest {
   ChatRequest chat;
   std::string model;
@@ -64,6 +91,7 @@ struct ParsedChatRequest {
   sampling::SamplingConfig sampling;
   bool stream{false};
   bool include_usage{false};
+  ToolDiagnostic tool_diagnostic;
 };
 
 struct ParsedToolCall {
@@ -1165,6 +1193,7 @@ std::size_t FindUnquoted(std::string_view text, std::string_view marker) {
 
 struct ToolParsing {
   std::size_t malformed_frames{0};
+  const char* reason{"invalid_tool_frame"};
 };
 
 enum class ParameterEndMatch { kData, kPrefix, kDelimiter };
@@ -1196,7 +1225,7 @@ ToolParsing ParseQwenCall(std::string_view frame,
                               frame.starts_with("<tool_call>\r\n<function=");
   // Framing/recovery belongs to the incremental scanner. A rejected payload
   // cannot promote an example inside its argument string to a second call.
-  ToolParsing parsing{.malformed_frames = 1};
+  ToolParsing parsing{.malformed_frames = 1, .reason = "invalid_tool_framing"};
   auto body = frame.substr(start.size());
   const auto consume = [&](std::string_view tag) {
     body = Trim(body);
@@ -1222,8 +1251,10 @@ ToolParsing ParseQwenCall(std::string_view frame,
         break;
       }
     }
-    if (call.name.empty() || (!tools.empty() && !schema))
+    if (call.name.empty() || (!tools.empty() && !schema)) {
+      parsing.reason = "unknown_tool_name";
       return parsing;
+    }
     bool valid = true;
     while (consume("<parameter=")) {
       const auto name_end = body.find('>');
@@ -1257,6 +1288,7 @@ ToolParsing ParseQwenCall(std::string_view frame,
       const auto nested =
           is_string ? body.find(start) : FindUnquoted(body, start);
       if (close == std::string_view::npos || nested < close || name.empty()) {
+        parsing.reason = "invalid_parameter_framing";
         valid = false;
         break;
       }
@@ -1271,6 +1303,7 @@ ToolParsing ParseQwenCall(std::string_view frame,
           parsed = TryParseJson(raw);
         }
         if (!parsed || !hint.Accepts(*parsed)) {
+          parsing.reason = "invalid_parameter_value";
           valid = false;
           break;
         }
@@ -1283,6 +1316,7 @@ ToolParsing ParseQwenCall(std::string_view frame,
         call.arguments.push_back(
             {.name = name, .value = std::move(raw), .is_string = is_string});
       } else if (previous->value != raw || previous->is_string != is_string) {
+        parsing.reason = "conflicting_duplicate_parameter";
         valid = false;
         break;
       }
@@ -1293,8 +1327,10 @@ ToolParsing ParseQwenCall(std::string_view frame,
     // The scanner found the unquoted outer boundary. Decode JSON once;
     // quoted closing markers belong to its argument strings.
     if (closing != std::string_view::npos) {
+      parsing.reason = "invalid_tool_json";
       const auto parsed = TryParseJson(Trim(body.substr(0, closing)));
       if (parsed && parsed->is_object()) {
+        parsing.reason = "invalid_tool_name_or_arguments";
         call.name = parsed->member_str("name");
         const auto* arguments = parsed->find("arguments");
         if (!call.name.empty() && arguments && arguments->is_object()) {
@@ -1310,8 +1346,10 @@ ToolParsing ParseQwenCall(std::string_view frame,
   }
   if (complete && !tools.empty() &&
       std::ranges::none_of(
-          tools, [&](const auto& tool) { return tool.name == call.name; }))
+          tools, [&](const auto& tool) { return tool.name == call.name; })) {
+    parsing.reason = "unknown_tool_name";
     complete = false;
+  }
   if (complete) {
     parsing.malformed_frames = 0;
     call.id = RandomId("call_");
@@ -1653,11 +1691,13 @@ public:
 
   GeneratedTextParser(OutputState initial, ToolFormat format,
                       std::span<const tokenization::ChatTool> tools,
-                      ChatRequest::ToolChoice choice, EmitCallback emit = {})
+                      ChatRequest::ToolChoice choice, EmitCallback emit = {},
+                      ToolDiagnostic diagnostic = {})
       : tools_(tools),
         choice_(choice),
         format_(format),
         emit_(std::move(emit)),
+        diagnostic_(std::move(diagnostic)),
         state_(initial == OutputState::kReasoning ? State::kReasoning
                : initial == OutputState::kContent ? State::kContent
                                                   : State::kInitial) {}
@@ -1778,6 +1818,8 @@ public:
       if (frame_attempted_) {
         if (marker_ != "<tool_call>")
           DecodeFrame(pending_);
+        else if (diagnostic_)
+          diagnostic_("incomplete_tool_frame", pending_);
       } else if (enforce_required ||
                  !Trim(std::string_view(pending_).substr(marker_.size()))
                       .empty()) {
@@ -1860,6 +1902,8 @@ private:
             ? ParseQwenCall(frame, tools_, &parsed_.tool_calls)
             : ParseDsmlCalls(body, &parsed_.tool_calls, complete);
     malformed_ |= result.malformed_frames != 0;
+    if (result.malformed_frames != 0 && diagnostic_)
+      diagnostic_(result.reason, frame);
     auto begin =
         parsed_.tool_calls.begin() + static_cast<std::ptrdiff_t>(first);
     parsed_.tool_calls.erase(
@@ -1870,6 +1914,8 @@ private:
                                return tool.name == call.name;
                              });
                          malformed_ |= undeclared;
+                         if (undeclared && diagnostic_)
+                           diagnostic_("unknown_tool_name", frame);
                          return undeclared;
                        }),
         parsed_.tool_calls.end());
@@ -2030,6 +2076,7 @@ private:
   ChatRequest::ToolChoice choice_;
   ToolFormat format_;
   EmitCallback emit_;
+  ToolDiagnostic diagnostic_;
   State state_;
   core::Utf8Decoder decoder_;
   ParsedGeneration parsed_;
@@ -2283,7 +2330,8 @@ HttpResponse NonStreamingResponse(
     TextGenerationBackend::InitialOutputState initial_output_state) {
   const auto result = generation->Wait();
   GeneratedTextParser parser(initial_output_state, generation->tool_format(),
-                             request.chat.tools, request.chat.tool_choice);
+                             request.chat.tools, request.chat.tool_choice, {},
+                             request.tool_diagnostic);
   parser.Push(result.text);
   const auto& generated = parser.Finish(
       !result.cancelled &&
@@ -2385,7 +2433,8 @@ HttpResponse StreamingResponse(
                   connected = write(
                       Sse(ChoiceChunk(id, created, model, std::move(delta))));
                   return connected;
-                });
+                },
+                request.tool_diagnostic);
 
             try {
               const auto result = generation->Wait([&](std::string_view piece) {
@@ -2678,7 +2727,8 @@ HttpResponse CreateOpenAiResponse(const HttpRequest& request,
   auto stream_log = std::make_shared<HttpResponse::StreamLog>();
   auto timing = std::make_shared<std::string>();
   const auto run = [generation, initial, model = backend.model_id(), stream_log,
-                    timing, chat, parallel_tool_calls](
+                    timing, chat, parallel_tool_calls,
+                    diagnostic = ToolDiagnostics(request)](
                        const HttpResponse::BodyWriter& writer) {
     auto last_write = StreamClock::now();
     const HttpResponse::BodyWriter write = [&](std::string_view piece) {
@@ -2691,14 +2741,15 @@ HttpResponse CreateOpenAiResponse(const HttpRequest& request,
       generation->Cancel();
       return json::Value();
     }
-    GeneratedTextParser filter(initial, generation->tool_format(), chat.tools,
-                               chat.tool_choice,
-                               [&](std::string_view piece, bool reasoning) {
-                                 if (output.Append(piece, reasoning))
-                                   return true;
-                                 generation->Cancel();
-                                 return false;
-                               });
+    GeneratedTextParser filter(
+        initial, generation->tool_format(), chat.tools, chat.tool_choice,
+        [&](std::string_view piece, bool reasoning) {
+          if (output.Append(piece, reasoning))
+            return true;
+          generation->Cancel();
+          return false;
+        },
+        diagnostic);
     try {
       const auto result =
           writer ? generation->Wait([&](std::string_view piece) {
@@ -2779,6 +2830,7 @@ HttpResponse CreateOpenAiResponse(const HttpRequest& request,
 HttpResponse HandleOpenAiChat(const HttpRequest& request,
                               TextGenerationBackend& backend) {
   ParsedChatRequest parsed;
+  parsed.tool_diagnostic = ToolDiagnostics(request);
   const auto defaults = backend.sampling_defaults();
   parsed.max_tokens = defaults.max_tokens;
   parsed.sampling = defaults.sampling;

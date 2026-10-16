@@ -46,6 +46,7 @@ DEFAULTS = {
     "draft_tokens": 7,
     "mtp_draft_vocab": "prefix",
     "prompt_lookup": False,
+    "debug_tool_calls": False,
 }
 INTEGER_LIMITS = {
     "context": (0, 2**32 - 1), "max_tokens": (-1, 2**32 - 1),

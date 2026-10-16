@@ -44,6 +44,18 @@ class ConfigTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 resolved_settings(load_document(path))
 
+    def test_tool_debug_is_opt_in_and_saved_per_preset(self):
+        self.assertFalse(validate_settings({})["debug_tool_calls"])
+        self.assertNotIn("--debug-tool-calls", build_command({}))
+        with self.assertRaises(ValueError):
+            validate_settings({"debug_tool_calls": "true"})
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "launcher.json"
+            save_document(path, new_document({"debug_tool_calls": True}))
+            settings = resolved_settings(load_document(path))
+            self.assertTrue(settings["debug_tool_calls"])
+            self.assertIn("--debug-tool-calls", build_command(settings))
+
     def test_rejects_invalid_values_before_save_or_launch(self):
         for change in ({"port": True}, {"port": 0}, {"port": 65536}, {"context": -1},
                        {"temperature": float("nan")}, {"temperature": 2.1}, {"top_p": 1.1}, {"top_p": 0},

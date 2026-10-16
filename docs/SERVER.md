@@ -834,7 +834,9 @@ CORS preflight (`OPTIONS`) does not require credentials. Select the listen
 address with `--host`; it must be an IPv4 address. TLS termination belongs in
 a reverse proxy.
 
-Request bodies, prompts, generated text and credentials are not logged.
+Request bodies, prompts, generated text and credentials are not logged by
+default. `--debug-tool-calls` opts into logging bounded rejected tool-call
+payloads, which may contain sensitive arguments or file contents.
 
 Tool definitions and generated tool calls are treated as data. `gufo`
 never executes tools, shell commands, URLs, or generated code.
@@ -908,6 +910,23 @@ TODO: real slot/KV metrics, a validated administrative reload/drain interface,
 and automatic recovery after device reset or suspend/resume.
 
 ## Troubleshooting logs
+
+Rejected Chat Completions and Responses tool calls produce `[WARN] [tools]`
+records with the request ID, `event=tool_call_rejected`, a parsing `reason`, and
+`frame_bytes`. Reasons include
+unknown tool names, invalid parameter values, conflicting duplicate parameters,
+invalid JSON, invalid framing, and incomplete calls. Incomplete calls can also
+occur when generation reaches a limit; consult the matching HTTP completion log
+for `finish` and token counts. These diagnostics do not change parsing or retries.
+
+To inspect the rejected syntax, start with `gufo serve --debug-tool-calls llm
+--model <PATH>` (on one command line), or enable **Debug tool calls** under the
+GUI's **More options** settings before starting Gufo. This adds a JSON-escaped
+`payload` prefix of at most 1024 source bytes, plus `payload_truncated`. Each request emits
+at most four tool diagnostics. Payloads can contain sensitive arguments or file
+contents: disable this option after diagnosis. Logs go to stderr and the GUI
+process log; the GUI retains its latest 300 lines, so copy relevant entries before
+they roll out. Prompts and reasoning are not included in these diagnostic records.
 
 Server lifecycle and request logs go to stderr. Each request gets an
 `X-Request-ID` response header matching its `request=rN` log entries. Inference

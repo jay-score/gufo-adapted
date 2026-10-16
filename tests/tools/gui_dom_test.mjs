@@ -258,6 +258,21 @@ test("restoring a preset keeps sidecars; changing its model clears them", async 
   assert.equal(form.values().speculative, "off");
 });
 
+test("tool-call debugging is off by default and restores with settings", async (t) => {
+  const env = await setup(t);
+  const { createSettingsForm } = await env.use("settings-form.js");
+  const { settings, families, modes } = env.initial;
+  const form = createSettingsForm(settings, families, modes, () => {});
+  assert.equal(env.$("debug_tool_calls").checked, false);
+  env.$("debug_tool_calls").click();
+  assert.equal(form.values().debug_tool_calls, true);
+  const enabled = form.values();
+  form.apply(settings);
+  assert.equal(env.$("debug_tool_calls").checked, false);
+  form.apply(enabled);
+  assert.equal(env.$("debug_tool_calls").checked, true);
+});
+
 test("reasoning preservation and disk caching restore independently of thinking", async (t) => {
   const env = await setup(t);
   const { createSettingsForm } = await env.use("settings-form.js");

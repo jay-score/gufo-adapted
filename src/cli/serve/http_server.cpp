@@ -1437,6 +1437,7 @@ void HttpServer::handle_connection(int client_fd) {
       ::inet_ntop(AF_INET, &peer.sin_addr, peer_address, sizeof(peer_address)))
     req.client_id = peer_address;
   req.request_id = "r" + std::to_string(next_request.fetch_add(1) + 1);
+  req.debug_tool_calls = options_.debug_tool_calls;
   bool response_started = false;
   bool http11 = false;
   int response_status = 0;
