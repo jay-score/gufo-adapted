@@ -31,6 +31,7 @@ struct HttpRequest {
   std::vector<std::pair<std::string, std::string>> headers;
   TextGenerationBackend::CancellationCheck is_cancelled;
   std::string request_id{};
+  bool debug_tool_calls{false};
   /// Transport-derived peer address, never read from client headers.
   std::string client_id{"anonymous"};
 
@@ -87,6 +88,7 @@ struct HttpServerOptions {
   std::size_t max_request_body_bytes{static_cast<std::size_t>(8) * 1024 * 1024};
   std::size_t max_connections{16};
   std::string api_key;
+  bool debug_tool_calls{false};
 };
 
 /// Minimal bounded HTTP/1.1 server for trusted-LAN model serving.

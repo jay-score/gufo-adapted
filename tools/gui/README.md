@@ -152,6 +152,13 @@ memory without rewriting the saved file. Use **Save preset** to persist changes;
 they apply on the next engine launch. RAM continuation caching remains active
 with disk caching off.
 
+Tool-call debugging is available under **More options** as **Debug tool calls**.
+It defaults off and is saved per preset. Changes apply on the next Start. When
+enabled, rejected calls include escaped text (up to 1024 source bytes per frame,
+four diagnostics per request) in the process log. Arguments may contain sensitive
+file contents. Disable it after diagnosis and copy relevant log lines before the
+300-line process log rolls over. Rejection reasons are logged even when it is off.
+
 ## Options and checks
 
 The **Performance** section polls Gufo's `/metrics` endpoint about once per

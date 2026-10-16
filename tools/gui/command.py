@@ -32,6 +32,8 @@ def build_command(values, *, check_files=False):
     command = [settings["executable"], "serve", "--host", settings["host"],
                "--port", str(settings["port"]), "--sessions", str(settings["sessions"]),
                "llm", "--model", settings["model"]]
+    if settings["debug_tool_calls"]:
+        command.append("--debug-tool-calls")
     for key in CLI_FIELDS:
         command.extend(["--" + key.replace("_", "-"), str(settings[key])])
     command.extend(["--preserve-thinking", "on" if settings["preserve_thinking"] else "off"])

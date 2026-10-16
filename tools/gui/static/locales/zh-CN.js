@@ -1,5 +1,7 @@
 // English source strings remain the fallback. Placeholders are inserted as text.
 export const messages = {
+  "Debug tool calls": "调试工具调用",
+  "Log rejected tool-call text in the process log. May include sensitive file contents or arguments. Applies on next launch.": "在进程日志中记录被拒绝的工具调用文本。可能包含敏感文件内容或参数。下次启动时生效。",
   "RAM cache size (GiB)": "内存缓存大小 (GiB)",
   "cache_ram_gib": "内存缓存大小",
   "0 sizes it automatically. Raise it if long chats keep reprocessing the whole prompt; Flash-Next at 262K needs about 16. Uses system RAM.": "0 表示自动设置。如果长对话总是重新处理整个提示，请调高此值；Flash-Next 在 262K 上下文下约需 16。占用系统内存。",

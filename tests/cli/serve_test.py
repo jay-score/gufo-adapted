@@ -33,6 +33,8 @@ def main():
         check(["serve", modality, "unexpected"], 2, "Unexpected argument")
         check(["serve", modality, "--port", "65536"], 2, "--port must")
         check(["serve", modality, "--host", "bad.address"], 2, "--host must")
+    for args in (["--debug-tool-calls", "llm"], ["llm", "--debug-tool-calls"]):
+        check(["serve", *args, "--help"], 0, "--debug-tool-calls")
     check(["serve", "image"], 2, "--model <DIR> is required")
     for modality in ("tts", "asr"):
         check(["serve", modality], 2, "--model <DIR> is required")
