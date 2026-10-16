@@ -10,7 +10,7 @@ import uuid
 from settings import validate_settings
 
 
-LAUNCHER_FIELDS = ("executable", "models_dir", "port")
+LAUNCHER_FIELDS = ("executable", "models_dir", "host", "port")
 MAX_PRESETS = 100
 
 
@@ -49,6 +49,9 @@ def validate_document(document):
     if type(document["revision"]) is not int or document["revision"] < 0:
         raise ValueError("Invalid launcher settings revision.")
     launcher = document["launcher"]
+    # Existing version-2 documents predate the configurable bind address.
+    if isinstance(launcher, dict):
+        launcher = {"host": "127.0.0.1"} | launcher
     if not isinstance(launcher, dict) or set(launcher) != set(LAUNCHER_FIELDS):
         raise ValueError("Invalid shared launcher settings.")
     presets = document["presets"]

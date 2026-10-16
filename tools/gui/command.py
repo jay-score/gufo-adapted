@@ -29,7 +29,7 @@ def build_command(values, *, check_files=False):
             directory = Path(settings["cache_disk_dir"])
             if any(path.exists() and not path.is_dir() for path in (directory, *directory.parents)):
                 raise ValueError("Disk cache: choose a folder, not a file.")
-    command = [settings["executable"], "serve", "--host", "127.0.0.1",
+    command = [settings["executable"], "serve", "--host", settings["host"],
                "--port", str(settings["port"]), "--sessions", str(settings["sessions"]),
                "llm", "--model", settings["model"]]
     for key in CLI_FIELDS:

@@ -368,9 +368,18 @@ test("runtime display reports the launch snapshot independently of form edits", 
   const env = await setup(t);
   const { createRuntime } = await env.use("runtime.js");
   const runtime = createRuntime(() => {});
+  edit(env, "host", "192.168.1.10");
+  runtime.render({ state: "stopped", logs: [] });
+  assert.equal(env.$("api-url").textContent, "http://192.168.1.10:8080/v1");
+  edit(env, "host", "0.0.0.0");
+  runtime.render({ state: "stopped", logs: [] });
+  assert.equal(env.$("api-url").textContent, "http://127.0.0.1:8080/v1");
   const state = { state: "ready", pid: 123, logs: [], base_url: "http://127.0.0.1:8080/v1", model_name: "gufo",
     running: { preset_name: "Flash 32K", modified: true, settings: env.initial.settings } };
   runtime.render(state);
+  edit(env, "host", "192.168.1.20");
+  runtime.render(state);
+  assert.equal(env.$("api-url").textContent, state.base_url);
   edit(env, "context", "65536");
   assert.equal(env.$("running-preset").textContent, "Running: Flash 32K (modified)");
   runtime.render({ ...state, state: "stopped", pid: null });

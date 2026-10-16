@@ -66,7 +66,7 @@ until you click **Load preset**. Loading does not save or start the server; only
 choosing Save in the unsaved-edits prompt writes changes to disk. Preset names
 must be unique, and up to 100 presets can be saved.
 
-The executable, models folder, and API port are shared across presets. **Save
+The executable, models folder, API bind address, and API port are shared across presets. **Save
 preset** and **Save as…** also save these shared values. The form describes the
 next launch; the Server panel separately identifies the running preset and
 whether it launched with unsaved changes. Saving, renaming, or deleting a preset
@@ -172,8 +172,16 @@ Gufo for live rates and request counts. Missing measurements appear as dashes,
 and unavailable metrics are retried without adding process-log entries.
 Restart the launcher after updating its code to load the new panel.
 
-- The control panel and Gufo both bind to localhost. Their ports must differ.
-  `gui.ps1 -Port 8091` changes the control panel's port; the form sets Gufo's port.
+- The control panel binds to localhost. Gufo defaults to `127.0.0.1`; the form's
+  **API bind address** accepts an IPv4 address. Use `0.0.0.0` to listen on all
+  interfaces, or a local LAN IPv4 address to listen on that interface. Stop and
+  restart Gufo to apply a change; saving is explicit and shared across presets.
+  Network clients use this PC's LAN address, such as `http://192.168.1.10:8080/v1`,
+  and Windows Firewall must allow the API port. The displayed URL uses loopback
+  for `0.0.0.0`. The API has no authentication configured by this GUI, so expose
+  it only to trusted networks; see [SERVER.md](../../docs/SERVER.md) for security.
+  The API and control panel ports must differ. `gui.ps1 -Port 8091` changes the
+  control panel's port; the form sets Gufo's port.
 - `gui.ps1 -Config C:\path\launcher.json` uses another settings file.
 - `gui.ps1 -NoBrowser` starts without opening a browser.
 - More options exposes disk caching, sessions, penalties and Flash-Next MTP options. MTP
