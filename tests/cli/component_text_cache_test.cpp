@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <numeric>
+#include <semaphore>
 #include <thread>
 
 #include "src/cli/serve/text_model_runner.hpp"
@@ -1267,6 +1269,27 @@ void NearTailDiskBranchSurvivesRestart() {
   std::filesystem::remove_all(directory);
 }
 void UnbackedDeepRowsSurviveDiskRestart() {
+  struct Gate {
+    std::atomic<bool> entered{false};
+    std::binary_semaphore reading{0}, release{0};
+  };
+  struct HeldRunner final : Runner {
+    std::shared_ptr<Gate> gate = std::make_shared<Gate>();
+    std::unique_ptr<ComponentCacheResources> CreateComponentCacheResources(
+        cache::ResourceLedger& ledger, std::size_t ram) const override {
+      auto resources = Runner::CreateComponentCacheResources(ledger, ram);
+      resources->copy_observed_rows =
+          [gate = gate, copy = resources->copy_observed_rows](
+              auto source, auto destination, cache::Stream& stream) {
+            if (!gate->entered.exchange(true)) {
+              gate->reading.release();
+              gate->release.acquire();
+            }
+            return copy(source, destination, stream);
+          };
+      return resources;
+    }
+  };
   char pattern[] = "/tmp/gufo-component-deep-test-XXXXXX";
   const std::filesystem::path directory = mkdtemp(pattern);
   const TextRunnerDiskCacheOptions disk{.directory = directory.string(),
@@ -1277,7 +1300,7 @@ void UnbackedDeepRowsSurviveDiskRestart() {
   std::iota(prompt.begin(), prompt.end(), 10);
   std::uint64_t hash;
   {
-    auto runner = std::make_shared<Runner>();
+    auto runner = std::make_shared<HeldRunner>();
     ComponentTextCache cache(runner, 1, 1 << 24, disk);
     auto lease = cache.Acquire(prompt, {}, {}, true, 0, true);
     auto& state = dynamic_cast<State&>(lease->state());
@@ -1291,7 +1314,34 @@ void UnbackedDeepRowsSurviveDiskRestart() {
     assert(snapshot);
     assert(lease->PublishSnapshot(prompt, std::move(snapshot), false) == 0);
     assert(lease->Metrics().disk_queued_bytes > 40000);
+    assert(runner->gate->reading.try_acquire_for(std::chrono::seconds(5)));
+    const auto pending = cache.PendingPublication(prompt, {});
+    assert(pending && pending->checkpoint_id &&
+           pending->pending_tokens == prompt.size() &&
+           pending->available_tokens == 0 && pending->Gain() == prompt.size());
+    assert(!cache.PendingPublication(prompt, {}, pending->checkpoint_id + 1));
+    assert(!cache.PendingPublication(std::span(prompt).first(4096), {}));
+    auto different = prompt;
+    ++different.front();
+    assert(!cache.PendingPublication(different, {}));
+    TextPromptContext image;
+    image.cache_identity = {99};
+    assert(!cache.PendingPublication(prompt, &image));
     (void)lease->Commit(prompt, {}, prompt);
+    // A newly usable live frontier makes the pending write unhelpful. The
+    // tracked job remains identifiable so its existing deadline can shrink;
+    // a fresh admission must not begin waiting for it.
+    const auto tracked =
+        cache.PendingPublication(prompt, {}, pending->checkpoint_id);
+    assert(tracked && tracked->Gain() == 0);
+    assert(!cache.PendingPublication(prompt, {}));
+    runner->gate->release.release();
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (cache.PendingPublication(prompt, {}, pending->checkpoint_id) &&
+           std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    assert(!cache.PendingPublication(prompt, {}, pending->checkpoint_id));
   }
   {
     const auto seed_size = prompt.size();

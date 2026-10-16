@@ -456,6 +456,28 @@ fixture cannot establish that behavior.
 Known cache-work failures exit nonzero and retain controls/evidence; they are
 not skipped, marked as expected passes, or fixed in this test-only card.
 
+Publication-wait regression #617 uses the same process-local fault library,
+filtered to hold a manifest after its payload is written. It checks both an
+expired recomputation budget and publication before that budget expires:
+
+```sh
+nix develop -c python3 tests/functional/publication_wait.py \
+  --output /tmp/publication-wait --fault-library build/cpu-test/libcache_disk_faults.so -- \
+  /path/to/production/gufo serve llm --model /path/to/flash-next.gguf \
+  --mtp-model /path/to/mtp.gguf --speculative mtp --sessions 1 --context 65536
+```
+
+The runner uses a fresh 8 GiB disk tier and a 1 GiB RAM budget unless explicitly
+set, requires an actual over-RAM publication and disk restore, and retains all
+HTTP requests/responses and timings. It removes its own cache after each case.
+Use `--case bound --expect cap` only for a matched pre-fix main timing control;
+candidate correctness uses the default `bounded` expectation. The bound case
+schedules release after 130 seconds and releases earlier if the waiter finishes;
+the child-only helper has a longer safety timeout. The publication case waits
+for the scheduler's actual park before starting its 250 ms release timer, then
+checks the matching request/checkpoint release before its deadline and a disk
+restore. These checks stay outside hosted CI and the routine API suites.
+
 Unchanged retries must reproduce the complete output with zero prefill. After a
 restart, disk restores may re-prefill less than one 2048-token disk step;
 greedy and zero-prefill restores must still reproduce their output. Edited
