@@ -1,5 +1,7 @@
 #include "src/cli/serve/component_text_cache.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstring>
@@ -544,6 +546,48 @@ void ColdAssignmentKeepsLiveFrontiers() {
     assert(turn(conversation) == frontier);
   }
 }
+void ColdSideRequestsKeepPreservedDeepFrontier() {
+  auto runner = std::make_shared<Runner>();
+  runner->defer_idle = true;
+  ComponentTextCache cache(runner, 2, 1 << 22, {});
+  std::vector<TextRunnerToken> conversation(4096);
+  std::iota(conversation.begin(), conversation.end(), 10);
+  {
+    auto source = cache.Acquire(conversation, {}, {}, true, 0, true);
+    auto& state = dynamic_cast<State&>(source->state());
+    const auto prefix = std::span(conversation).first(4088);
+    runner->adapter->Append(state.slot, prefix, prefix);
+    assert(source->TryReserveSnapshot(source->CaptureBytes(), prefix.size(),
+                                      false, SnapshotPurpose::kContinuation,
+                                      prefix));
+    auto snapshot = source->Capture();
+    assert(snapshot);
+    assert(source->PublishSnapshot({prefix.begin(), prefix.end()},
+                                   std::move(snapshot), false));
+    // Deterministically finish preservation. A faster idle worker must not
+    // remove the only protection of this live reply against short traffic.
+    runner->adapter->GuardRows(state.slot, cache::testing::kTarget, 0,
+                               prefix.size());
+    runner->adapter->GuardRows(state.slot, cache::testing::kDraft, 0,
+                               prefix.size());
+    assert(source->Metrics().ledger.reserved_bytes[static_cast<unsigned>(
+               cache::ResourceCategory::kBackingAssigned)] == 0);
+    const auto reply = std::span(conversation).last(8);
+    runner->adapter->Append(state.slot, reply, reply);
+    (void)source->Commit({}, {}, conversation);
+  }
+  for (const TextRunnerToken code : {100, 101, 102}) {
+    const std::vector<TextRunnerToken> short_prompt(12, code);
+    auto side = cache.Acquire(short_prompt, {}, {}, true, 0, true);
+    auto& state = dynamic_cast<State&>(side->state());
+    runner->adapter->Append(state.slot, short_prompt, short_prompt);
+    (void)side->Commit({}, {}, short_prompt);
+  }
+  auto resumed = cache.Acquire(conversation, {}, {}, true, 0, true);
+  assert(resumed->cached_tokens() == conversation.size() &&
+         !resumed->restored_snapshot_bytes() &&
+         "short side requests evicted a preserved deep live frontier");
+}
 void ReuseAndBranches() {
   auto runner = std::make_shared<Runner>();
   TextRunnerPool pool(runner, 2);
@@ -748,6 +792,151 @@ void FailedCaptureKeepsPublishedBoundary() {
   assert(restored->cached_tokens() == 40);
   auto& restored_state = dynamic_cast<State&>(restored->state());
   assert(runner->adapter->RecurrentHash(restored_state.slot) == hash);
+}
+void BackingPressureKeepsSharedPrefix(bool capacity_check = false) {
+  struct PressureRunner final : Runner {
+    bool capacity_check{};
+    mutable std::size_t inherited_boundary{}, recopied_prefixes{},
+        rejected_plans{}, failed_allocations{};
+    std::unique_ptr<ComponentCacheResources> CreateComponentCacheResources(
+        cache::ResourceLedger& ledger, std::size_t ram) const override {
+      auto resources = Runner::CreateComponentCacheResources(ledger, ram);
+      resources->allocate = [this, allocate = std::move(resources->allocate)](
+                                const cache::PayloadRequest& request) {
+        if (request.category == cache::ResourceCategory::kBackingAssigned &&
+            request.first < inherited_boundary)
+          ++recopied_prefixes;
+        try {
+          return allocate(request);
+        } catch (const cache::ResourceExhausted&) {
+          ++failed_allocations;
+          throw;
+        }
+      };
+      if (capacity_check)
+        resources->can_capture = [this, &ledger](auto payloads) {
+          const bool needs_private =
+              std::ranges::any_of(payloads, [](const auto& payload) {
+                return payload.category ==
+                       cache::ResourceCategory::kPrivateState;
+              });
+          const bool fits = !needs_private ||
+                            !ledger.Snapshot().bytes[static_cast<std::size_t>(
+                                cache::ResourceCategory::kPrivateState)];
+          rejected_plans += !fits;
+          return fits;
+        };
+      return resources;
+    }
+  };
+  auto runner = std::make_shared<PressureRunner>();
+  runner->capacity_check = capacity_check;
+  // The next private frontier cannot fit until the old checkpoint is evicted.
+  runner->private_blocks = 1;
+  ComponentTextCache cache(runner, 1, 1 << 22, {});
+  std::vector<TextRunnerToken> prompt(80);
+  std::iota(prompt.begin(), prompt.end(), 10);
+  auto lease = cache.Acquire(prompt, {}, {}, true, 0, true);
+  auto& state = dynamic_cast<State&>(lease->state());
+  runner->adapter->Append(state.slot, std::span(prompt).first(64),
+                          std::span(prompt).first(64));
+  assert(lease->TryReserveSnapshot(lease->CaptureBytes(), 64, false,
+                                   SnapshotPurpose::kContinuation, {}));
+  assert(lease->PublishSnapshot({prompt.begin(), prompt.begin() + 64},
+                                lease->Capture(), false));
+  runner->inherited_boundary = 64;
+  runner->adapter->Append(state.slot, std::span(prompt).subspan(64),
+                          std::span(prompt).subspan(64));
+  const auto hash = runner->adapter->RecurrentHash(state.slot);
+  assert(lease->TryReserveSnapshot(lease->CaptureBytes(), prompt.size(), false,
+                                   SnapshotPurpose::kContinuation, {}));
+  assert(lease->PublishSnapshot(prompt, lease->Capture(), false));
+  assert(!runner->recopied_prefixes);
+  if (capacity_check)
+    assert(runner->rejected_plans && !runner->failed_allocations);
+  else
+    assert(runner->failed_allocations);
+  assert(!lease->HasSnapshotFor(std::span(prompt).first(64)));
+  lease->Invalidate();
+  auto restored = cache.Acquire(prompt, {}, {}, true, 0, true);
+  assert(restored->cached_tokens() == prompt.size());
+  auto& restored_state = dynamic_cast<State&>(restored->state());
+  assert(runner->adapter->RecurrentHash(restored_state.slot) == hash);
+}
+void FragmentedBackingKeepsCompletePrompt() {
+  struct FragmentedRunner final : Runner {
+    mutable std::size_t failed_allocations{};
+    std::unique_ptr<ComponentCacheResources> CreateComponentCacheResources(
+        cache::ResourceLedger& ledger, std::size_t ram) const override {
+      auto resources = Runner::CreateComponentCacheResources(ledger, ram);
+      struct Pool {
+        std::array<cache::ResourceCharge, 6> pages;
+        std::array<cache::ResourceCharge, 2> occupied;
+        std::shared_ptr<std::array<std::byte, 96>> data =
+            std::make_shared<std::array<std::byte, 96>>();
+      };
+      auto pool = std::make_shared<Pool>();
+      for (auto& page : pool->pages)
+        page =
+            ledger.Reserve(cache::ResourceCategory::kBackingFree, 16).Convert();
+      for (std::size_t i = 0; i < pool->occupied.size(); ++i)
+        pool->occupied[i] =
+            pool->pages[2 + 2 * i]
+                .ReserveBacking(cache::ResourceCategory::kPrivateState)
+                .Convert();
+      // Free runs have sizes 32, 16, 16. Two 16-byte row captures followed
+      // by the 32-byte state cannot fit with first-fit allocation, despite
+      // sufficient total space. The existing occupied pages cannot be evicted.
+      resources->owner = pool;
+      resources->allocate = [this, pool](const cache::PayloadRequest& request) {
+        const auto count = (request.bytes + 15) / 16;
+        const auto first =
+            cache::ResourceCharge::FindFreeBacking(pool->pages, count);
+        if (first == pool->pages.size()) {
+          ++failed_allocations;
+          throw cache::ResourceExhausted();
+        }
+        auto reservation = std::make_shared<cache::ResourceReservation>(
+            cache::ResourceCharge::ReserveBacking(
+                std::span(pool->pages).subspan(first, count),
+                request.category));
+        auto bytes = std::span(*pool->data).subspan(first * 16, count * 16);
+        auto owner = std::shared_ptr<const void>(pool->data, bytes.data());
+        return ComponentCaptureBuffer{bytes,
+                                      [reservation, owner] {
+                                        return cache::Payload::Committed(
+                                            reservation->Convert(), owner);
+                                      },
+                                      pool->data.get(),
+                                      {}};
+      };
+      return resources;
+    }
+  };
+  auto runner = std::make_shared<FragmentedRunner>();
+  ComponentTextCache cache(runner, 1, 1 << 22, {});
+  const std::vector<TextRunnerToken> prompt{10, 11, 12, 13};
+  auto lease = cache.Acquire(prompt, {}, {}, true, 0, true);
+  auto& state = dynamic_cast<State&>(lease->state());
+  runner->adapter->Append(state.slot, prompt, prompt);
+  const auto hash = runner->adapter->RecurrentHash(state.slot);
+  assert(lease->TryReserveSnapshot(lease->CaptureBytes(), prompt.size(), false,
+                                   SnapshotPurpose::kContinuation, {}));
+  std::unique_ptr<TextRunnerSnapshot> snapshot;
+  try {
+    snapshot = lease->Capture();
+  } catch (const cache::ResourceExhausted&) {
+  }
+  assert(snapshot && "fragmented backing rejected a complete prompt");
+  assert(lease->PublishSnapshot(prompt, std::move(snapshot), false));
+  assert(!runner->failed_allocations);
+  lease->Invalidate();
+  auto restored = cache.Acquire(prompt, {}, {}, true, 0, true);
+  assert(restored->cached_tokens() == prompt.size());
+  auto& restored_state = dynamic_cast<State&>(restored->state());
+  assert(runner->adapter->RecurrentHash(restored_state.slot) == hash);
+  const TextRunnerToken next = 99;
+  runner->adapter->Append(restored_state.slot, {&next, 1}, {&next, 1});
 }
 void DiskBudgetEvictsAnUnpinnedConversation() {
   char pattern[] = "/tmp/gufo-component-budget-test-XXXXXX";
@@ -1175,11 +1364,15 @@ int main() {
   ImageAfterCachedTextPrefixCaptures();
   ColdAssignmentPrefersPreservedSlot();
   ColdAssignmentKeepsLiveFrontiers();
+  ColdSideRequestsKeepPreservedDeepFrontier();
   ReuseAndBranches();
   EditBoundariesSurviveActualBackingPressure();
   ReusedConversationOutlivesOneUseRequests();
   RestartAndCorruption();
   FailedCaptureKeepsPublishedBoundary();
+  BackingPressureKeepsSharedPrefix();
+  BackingPressureKeepsSharedPrefix(true);
+  FragmentedBackingKeepsCompletePrompt();
   DiskBudgetEvictsAnUnpinnedConversation();
   LoweredDiskBudgetEvictsOldestAtStartup();
   OrphansLeaveBeforeCheckpoints();
