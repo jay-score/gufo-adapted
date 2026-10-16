@@ -64,6 +64,26 @@ HTTPServer(('127.0.0.1', int(sys.argv[1])), Handler).serve_forever()
 
 
 class ProcessTest(unittest.TestCase):
+    def test_selected_bind_address_is_used_for_preflight_and_probes(self):
+        for host in ("0.0.0.0", "127.0.0.2"):
+            with self.subTest(host=host):
+                port = unused_port()
+                server = FAKE_SERVER.replace("HTTPServer(('127.0.0.1',", f"HTTPServer(('{host}',")
+                self.manager.start([PYTHON, "-u", "-c", server, str(port)], port, "fixture", host=host)
+                ready = self.wait_for("ready")
+                connect_host = "127.0.0.1" if host == "0.0.0.0" else host
+                self.assertEqual(ready["base_url"], f"http://{connect_host}:{port}/v1")
+                deadline = time.monotonic() + 8
+                while self.manager.snapshot()["metrics"] is None and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                self.assertIsNotNone(self.manager.snapshot()["metrics"])
+                self.manager.stop()
+                with socket.socket() as listener:
+                    listener.bind((host, port))
+                    listener.listen()
+                    with self.assertRaisesRegex(ValueError, "already in use"):
+                        self.manager.start([PYTHON], port, "fixture", host=host)
+
     def setUp(self):
         self.manager = ProcessManager()
         self.addCleanup(self.manager.stop)

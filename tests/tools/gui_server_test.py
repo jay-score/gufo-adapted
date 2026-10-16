@@ -78,11 +78,14 @@ class ServerTest(unittest.TestCase):
         model.write_bytes(b"GGUF")
         mtp.write_bytes(b"GGUF")
         settings = DEFAULTS | {"executable": str(exe), "model": str(model),
-                               "speculative": "mtp", "mtp_model": str(mtp), "prompt_lookup": True}
+                               "speculative": "mtp", "mtp_model": str(mtp), "prompt_lookup": True,
+                               "host": "192.168.1.10"}
         started = self.start(settings)
         self.assertEqual(started.status_code, 200)
         command, port, name = self.manager.start.call_args.args
         self.assertEqual(command[command.index("--model") + 1], str(model))
+        self.assertEqual(command[command.index("--host") + 1], "192.168.1.10")
+        self.assertEqual(self.manager.start.call_args.kwargs, {"host": "192.168.1.10"})
         self.assertIn("--prompt-lookup", command)
         self.assertEqual((port, name), (8080, "gufo"))
         self.assertFalse(self.config.exists())

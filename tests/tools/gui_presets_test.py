@@ -16,6 +16,24 @@ from settings import DEFAULTS
 
 
 class PresetsTest(unittest.TestCase):
+    def test_bind_address_migration_and_shared_persistence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "launcher.json"
+            legacy = new_document({"context": 8192})
+            del legacy["launcher"]["host"]
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+            before = path.read_bytes()
+            document = load_document(path)
+            self.assertEqual(resolved_settings(document)["host"], "127.0.0.1")
+            self.assertEqual(path.read_bytes(), before)
+            values = resolved_settings(document) | {"host": "0.0.0.0"}
+            document = self.change(document, action="create", name="Network", settings=values)
+            save_document(path, document)
+            restored = load_document(path)
+            self.assertEqual(resolved_settings(restored)["host"], "0.0.0.0")
+            self.assertEqual(resolved_settings(restored, "default")["host"], "0.0.0.0")
+            self.assertNotIn("host", restored["presets"][0]["settings"])
+
     def change(self, document, **request):
         return change_preset(document, {"revision": document["revision"], **request})
 
