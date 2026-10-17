@@ -761,7 +761,15 @@ void TestQwenToolBoundariesAndSchema() {
              0, ""},
         Case{"<tool_call>{\"name\":\"f\",\"arguments\":{\"text\":"
              "\"literal </tool_call>\"}}</tool_call>",
-             1, R"({"text":"literal </tool_call>"})"}}) {
+             1, R"({"text":"literal </tool_call>"})"},
+        // Integers stream as the model wrote them, not as 1e+05.
+        Case{"<tool_call><function=f><parameter=count>100000</parameter>"
+             "<parameter=tags>[1000000, -100000]</parameter></function>"
+             "</tool_call>",
+             1, R"({"count":100000,"tags":[1000000,-100000]})"},
+        Case{"<tool_call>{\"name\":\"f\",\"arguments\":{\"count\":"
+             "100000}}</tool_call>",
+             1, R"({"count":100000})"}}) {
     for (bool reasoning : {false, true}) {
       for (bool stream : {false, true}) {
         auto body = schema;

@@ -782,6 +782,7 @@ void TestTypedToolReplay() {
             .value = "{\"z\":[1,true,null]}",
             .is_string = true},
            {.name = "spaced", .value = "[ 1,  2 ]", .is_string = false},
+           {.name = "limit", .value = "100000", .is_string = false},
        }});
   const std::vector<ChatMessage> messages{{ChatRole::kUser, "store"},
                                           assistant};
@@ -799,6 +800,9 @@ void TestTypedToolReplay() {
   Expect(rendered->find("<parameter=spaced>\n[1, 2]\n</parameter>") !=
              std::string::npos,
          "Typed replay normalizes existing whitespace once");
+  Expect(rendered->find("<parameter=limit>\n100000\n</parameter>") !=
+             std::string::npos,
+         "Typed replay keeps the decimal spelling of integers");
 }
 
 void TestLiteralPromptTokens() {

@@ -37,6 +37,26 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-17 — Decimal spelling of integer JSON numbers
+
+- Source: [gufo-org/gufo@22e36769f9b25a57963a9215003eae0f5f9c15d6](https://github.com/gufo-org/gufo/commit/22e36769f9b25a57963a9215003eae0f5f9c15d6)
+  (PR #614).
+- Local: commit introducing this entry.
+- Adaptation: `json.hpp` imported unchanged, so integers up to 2^53 serialize
+  in decimal (`100000`, not `1e+05`). This affected streamed tool arguments
+  and Qwen typed tool-call replay (`json::parse(...).tojson()`). Upstream's
+  `json_constraint_test` and functional-suite edits are omitted because those
+  files do not exist here. Its Responses replay case targets a test absent
+  here and is replaced by an integer case in `TestTypedToolReplay`.
+- Areas: `src/core/json.hpp`, `tests/core/json_test.cpp`,
+  `tests/cli/openai_chat_test.cpp`,
+  `tests/models/qwen/tokenization/chat_template_test.cpp`.
+- Validation: Windows `gpu-test` builds of `json_test`, `openai_chat_test` and
+  `qwen_chat_template_test` pass. With the previous `json.hpp`, `json_test` and
+  `qwen_chat_template_test` both fail. Repository format check passes. There are
+  no numerics changes, so no logit checks were run. Linux CI not yet run.
+- Status: retained.
+
 ### 2026-10-15 — Bound Flash-Next selector score scratch
 
 - Source: [gufo-org/gufo@5a0a0ed75009ad56f9eee7cdd92f3b1752dfee64](https://github.com/gufo-org/gufo/commit/5a0a0ed75009ad56f9eee7cdd92f3b1752dfee64)
