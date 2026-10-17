@@ -893,7 +893,13 @@ not use this text-generation probe.
 `/metrics` exposes total prompt/generated tokens and the latest prompt/decode
 speeds. The token counters advance as each prefill chunk and generated token
 executes, so their rates show live throughput; prompt tokens exclude cache
-hits. `llamacpp:requests_processing` counts admitted requests, including cache
+hits. `llamacpp:prompt_seconds_total` accumulates the same measured prefill
+time used in request results. Prompt token/time totals are captured together;
+divide their changes to calculate prefill speed without diluting it by the
+polling interval. This uses existing runner timing boundaries, not GPU kernel
+profiling, and adds no synchronization. The generic Qwen runner can enqueue
+non-final chunks asynchronously; Flash-Next steps wait for logits readback.
+`llamacpp:requests_processing` counts admitted requests, including cache
 preparation and cleanup; `llamacpp:requests_deferred` counts requests waiting
 for a session. The speed gauges retain the latest nonzero request rates.
 `Server-Timing`, generation `timings`, and Chat Completions `usage.gufo`

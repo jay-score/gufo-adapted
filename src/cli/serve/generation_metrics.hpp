@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <iomanip>
+#include <mutex>
 #include <sstream>
 
 #include "src/cli/serve/text_generation_backend.hpp"
@@ -14,9 +15,36 @@ namespace gufo::server {
 // Process-wide `/metrics` values. Token counters advance per prefill chunk and
 // per generated token, so scrapes see work while requests are still running.
 namespace detail {
-inline std::atomic<std::uint64_t>& TotalPromptTokens() {
-  static std::atomic<std::uint64_t> count{0};
-  return count;
+struct PromptMetrics {
+  std::uint64_t tokens{0};
+  double seconds{0.0};
+};
+
+// A scrape must observe matching token and time totals, including when two
+// schedulers contribute during a model reload.
+class PromptMetricsCounter {
+public:
+  void Add(std::uint64_t tokens, double milliseconds) {
+    if (tokens == 0)
+      return;
+    std::lock_guard lock(mutex_);
+    totals_.tokens += tokens;
+    totals_.seconds += milliseconds / 1000.0;
+  }
+
+  [[nodiscard]] PromptMetrics Snapshot() const {
+    std::lock_guard lock(mutex_);
+    return totals_;
+  }
+
+private:
+  mutable std::mutex mutex_;
+  PromptMetrics totals_;
+};
+
+inline PromptMetricsCounter& TotalPromptMetrics() {
+  static PromptMetricsCounter counter;
+  return counter;
 }
 inline std::atomic<std::uint64_t>& TotalGenTokens() {
   static std::atomic<std::uint64_t> count{0};

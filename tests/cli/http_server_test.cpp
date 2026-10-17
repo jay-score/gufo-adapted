@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <iostream>
 #include <memory>
@@ -416,7 +417,8 @@ void TestFallbackBackendMetrics() {
            Endpoint{"/v1/responses", R"({"input":"hi"})"},
        }) {
     for (const bool stream : {false, true}) {
-      const auto prompt_before = metrics::TotalPromptTokens().load();
+      const auto prompt_before =
+          metrics::TotalPromptMetrics().Snapshot().tokens;
       const auto generated_before = metrics::TotalGenTokens().load();
       auto body = gufo::json::parse(endpoint.body);
       body["model"] = "test";
@@ -451,19 +453,49 @@ void TestFallbackBackendMetrics() {
            Case{0, 0, true, 0},
            Case{3, 0, true, 3},
        }) {
-    const auto prompt_before = metrics::TotalPromptTokens().load();
+    const auto prompt_before = metrics::TotalPromptMetrics().Snapshot();
     const auto generated_before = metrics::TotalGenTokens().load();
     TextGenerationBackend::Result result;
     result.prompt_tokens = 10;
     result.cached_prompt_tokens = test.cached;
     result.prefill_tokens = test.prefill;
+    result.prefill_ms = 0.125;
     result.completion_tokens = 2;
     result.cancelled = test.cancelled;
     gufo::server::RecordServerMetrics(result);
-    assert(metrics::TotalPromptTokens().load() ==
-           prompt_before + test.expected_prompt);
+    const auto prompt_after = metrics::TotalPromptMetrics().Snapshot();
+    assert(prompt_after.tokens == prompt_before.tokens + test.expected_prompt);
+    const double expected_seconds = test.expected_prompt > 0 ? 0.000125 : 0.0;
+    assert(std::abs(prompt_after.seconds - prompt_before.seconds -
+                    expected_seconds) < 1e-9);
     assert(metrics::TotalGenTokens().load() == generated_before + 2);
   }
+  const auto prompt = metrics::TotalPromptMetrics().Snapshot();
+  const auto response = server.Send("GET /metrics HTTP/1.1\r\n\r\n");
+  const std::string marker = "\nllamacpp:prompt_seconds_total ";
+  const auto offset = response.find(marker);
+  assert(offset != std::string::npos);
+  const auto seconds = std::stod(response.substr(offset + marker.size()));
+  assert(seconds == prompt.seconds);
+}
+
+void TestPromptMetricsSnapshot() {
+  gufo::server::detail::PromptMetricsCounter counter;
+  std::atomic<int> done{0};
+  const auto write = [&] {
+    for (int i = 0; i < 1000; ++i)
+      counter.Add(2, 125.0);
+    ++done;
+  };
+  std::thread first(write), second(write);
+  while (done.load() != 2) {
+    const auto snapshot = counter.Snapshot();
+    assert(snapshot.seconds == snapshot.tokens / 16.0);
+  }
+  first.join();
+  second.join();
+  const auto snapshot = counter.Snapshot();
+  assert(snapshot.tokens == 4000 && snapshot.seconds == 250.0);
 }
 
 void TestMalformedToolCalls() {
@@ -1157,6 +1189,7 @@ void TestCachePromptRoutes() {
 }
 
 int main() {
+  TestPromptMetricsSnapshot();
   TestCachePromptRoutes();
   TestMalformedToolCalls();
   TestRequestLogging();

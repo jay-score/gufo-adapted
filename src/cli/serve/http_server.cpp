@@ -978,12 +978,17 @@ HttpResponse LlamaSlots(const HttpRequest&, TextGenerationBackend& b) {
 }
 
 HttpResponse LlamaMetrics(const HttpRequest&, TextGenerationBackend&) {
+  const auto prompt = detail::TotalPromptMetrics().Snapshot();
   std::ostringstream out;
+  out << std::setprecision(std::numeric_limits<double>::max_digits10);
   out << "# HELP llamacpp:prompt_tokens_total Total prompt tokens processed, "
          "excluding cache hits\n"
       << "# TYPE llamacpp:prompt_tokens_total counter\n"
-      << "llamacpp:prompt_tokens_total "
-      << detail::TotalPromptTokens().load(std::memory_order_relaxed) << "\n"
+      << "llamacpp:prompt_tokens_total " << prompt.tokens << "\n"
+      << "# HELP llamacpp:prompt_seconds_total Total measured prompt "
+         "processing time in seconds\n"
+      << "# TYPE llamacpp:prompt_seconds_total counter\n"
+      << "llamacpp:prompt_seconds_total " << prompt.seconds << "\n"
       << "# HELP llamacpp:tokens_predicted_total Total tokens generated\n"
       << "# TYPE llamacpp:tokens_predicted_total counter\n"
       << "llamacpp:tokens_predicted_total "
