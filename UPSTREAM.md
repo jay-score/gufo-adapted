@@ -37,6 +37,33 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-17 — Flat-table Flash-Next n-gram gather
+
+- Source: [gufo-org/gufo@8497711eb154ecff55ef4119a01ace214149e276](https://github.com/gufo-org/gufo/commit/8497711eb154ecff55ef4119a01ace214149e276)
+  (PR #613), gather half only.
+- Local: commit introducing this entry.
+- Adaptation: imported `NgramTable::ReserveGather` and the flat power-of-two
+  deduplication table that replaces the per-gather `std::unordered_map`, plus
+  the `ReserveGather(T * ple_heads)` call in `Executor::Create`. Upstream's
+  prompt-lookup MTP proposals, length-controller changes, snapshot payload bump
+  and functional suite are omitted. They conflict with this fork's own
+  `prompt_lookup.hpp` and remain a separate decision. The fork's cached
+  overlapped reads are unchanged. Scratch is reserved once at load:
+  4,096 prefill tokens × 16 heads gives 65,536 rows, a 1 MiB table plus about
+  2 MiB of job/copy lists, independent of context length.
+- Areas: `src/models/qwen38_flash_next/ngram.{hpp,cpp}`,
+  `src/models/qwen38_flash_next/kernels/rocm/executor.cpp`,
+  `tests/models/qwen38_flash_next/ngram_test.cpp`.
+- Validation: Windows `gpu-test` build; `qwen38_flash_next.ngram` passes,
+  including upstream's reuse and active-gather cases. `gufo bench --logit-eval`
+  on Flash-Next UD-Q4_K_XL with Q8_0 MTP compared the previous commit against
+  this one, same toolchain and settings. The corpus was the first 16,000 bytes
+  of wikitext-2 test (sha256 `fdcdcd05f34de43e…`), with schedules
+  `1:2,4,8:p8`. All 3,686 raw-logit rows match exactly in every schedule
+  (perplexity 1.443348 / 1.443348 / 1.472327). No throughput measurement. IQ4_XS
+  weights and Linux CI not run.
+- Status: retained.
+
 ### 2026-10-17 — Prepare the Qwen vision sidecar before serving
 
 - Source: [gufo-org/gufo@0604e9ebc41388ab610ed0bed198e49ef96a6a82](https://github.com/gufo-org/gufo/commit/0604e9ebc41388ab610ed0bed198e49ef96a6a82)

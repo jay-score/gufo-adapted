@@ -465,6 +465,8 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
     }
     e->host_emb_ = static_cast<float*>(pinned);
     e->host_rows_.resize(T * c.ple_heads);
+    if (ngram)
+      ngram->ReserveGather(T * c.ple_heads);
   }
   s.router = f32(T * (c.num_experts + 1));
   s.ids = Alloc<std::int32_t>(a, slots, error_msg);
