@@ -564,12 +564,12 @@ struct TextGenerationScheduler::Impl {
       }
       const auto start = Clock::now();
       const auto step = request->runner_request.Prefill(budget);
-      request->result.prefill_ms +=
+      const double prefill_ms =
           std::chrono::duration<double, std::milli>(Clock::now() - start)
               .count();
+      request->result.prefill_ms += prefill_ms;
       request->result.prefill_tokens += step.consumed_tokens;
-      detail::TotalPromptTokens().fetch_add(step.consumed_tokens,
-                                            std::memory_order_relaxed);
+      detail::TotalPromptMetrics().Add(step.consumed_tokens, prefill_ms);
       ++request->result.prefill_chunks;
       request->result.max_prefill_chunk_tokens = std::max(
           request->result.max_prefill_chunk_tokens, step.consumed_tokens);
