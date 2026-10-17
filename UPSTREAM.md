@@ -60,8 +60,10 @@ Use this entry format:
   this one, same toolchain and settings. The corpus was the first 16,000 bytes
   of wikitext-2 test (sha256 `fdcdcd05f34de43e…`), with schedules
   `1:2,4,8:p8`. All 3,686 raw-logit rows match exactly in every schedule
-  (perplexity 1.443348 / 1.443348 / 1.472327). No throughput measurement. IQ4_XS
-  weights and Linux CI not run.
+  (perplexity 1.443348 / 1.443348 / 1.472327). Repeated on the fork's UD-IQ4_XS
+  qualification weights with the same Q8_0 MTP sidecar and corpus: all 3,686
+  rows match exactly (perplexity 1.544504 / 1.544504 / 1.576038). No throughput
+  measurement. Linux CI not run.
 - Status: retained.
 
 ### 2026-10-17 — Prepare the Qwen vision sidecar before serving
@@ -90,7 +92,11 @@ Use this entry format:
   upload ~0.17 s. Readiness takes +1.0 s. The first image request drops from
   2.72/2.54 s to 0.92/0.89 s (queue 1.1–1.2 s to under 10 ms) with identical
   replies. Second-image latency is unchanged, and `/v1/models` and `/props`
-  still report image input. IQ4_XS weights and Linux CI not run.
+  still report image input. On UD-IQ4_XS with the same auto-discovered BF16
+  projector, readiness is 21.8 s, `vision_prepared` logs identity 1.62 s and
+  upload 0.18 s, and the first image request takes 1.11 s (queue 6 ms) with
+  image input advertised. That run is candidate-only, with no IQ4_XS baseline.
+  Linux CI not run.
 - Status: retained.
 
 ### 2026-10-17 — Decimal spelling of integer JSON numbers
