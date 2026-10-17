@@ -37,6 +37,35 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-17 — Prepare the Qwen vision sidecar before serving
+
+- Source: [gufo-org/gufo@0604e9ebc41388ab610ed0bed198e49ef96a6a82](https://github.com/gufo-org/gufo/commit/0604e9ebc41388ab610ed0bed198e49ef96a6a82)
+  (PR #616).
+- Local: commit introducing this entry.
+- Adaptation: imported as is (public `Encoder::Upload`, `PrepareVision` at both
+  Qwen `InferenceBackend::load` overloads, docs and test), with two Windows
+  changes. The `event=vision_prepared` free-memory field and the new test read
+  `gufo::platform::DeviceMemoryInfo` instead of `hipMemGetInfo`, because
+  `hipMemGetInfo` reports wrong numbers on Windows. On Windows the first encode
+  keeps a fixed ~73 MiB of one-time runtime state, beyond upstream's 64 MiB
+  allowance. The test now bounds the first encode by half the sidecar, which
+  still catches a re-upload, and requires a repeated encode to stay flat.
+- Areas: `src/models/qwen/vision/encoder.{hpp,hip}`,
+  `src/cli/serve/inference_backend.cpp`, `docs/SERVER.md`,
+  `tests/models/qwen/vision_prepare_test.cpp`, `tests/models/qwen27b/CMakeLists.txt`.
+- Validation: Windows `gpu-test` build. `qwen_vision_prepare_test` passes on
+  `mmproj-BF16.gguf` (resident 903,984,064 bytes, matching the sidecar
+  weights); upstream's unmodified check fails there as described.
+  `qwen_vision_discovery_test` passes; `qwen_vision_serving_test` skipped (no
+  model argument under CTest). Real serve smoke test on Flash-Next UD-Q4_K_XL
+  with auto-discovered BF16 projector, two runs per build against a
+  `6d7f8d3d` release baseline: `vision_prepared` logs identity ~1.11 s and
+  upload ~0.17 s. Readiness takes +1.0 s. The first image request drops from
+  2.72/2.54 s to 0.92/0.89 s (queue 1.1–1.2 s to under 10 ms) with identical
+  replies. Second-image latency is unchanged, and `/v1/models` and `/props`
+  still report image input. IQ4_XS weights and Linux CI not run.
+- Status: retained.
+
 ### 2026-10-17 — Decimal spelling of integer JSON numbers
 
 - Source: [gufo-org/gufo@22e36769f9b25a57963a9215003eae0f5f9c15d6](https://github.com/gufo-org/gufo/commit/22e36769f9b25a57963a9215003eae0f5f9c15d6)
