@@ -165,12 +165,23 @@ The **Performance** section polls Gufo's `/metrics` endpoint about once per
 second while the server is ready, including when requests come from another
 chat client. It shows live prefill and generation tokens/second, cumulative
 prompt and generated token counts for the current server run, and processing
-and queued request counts. Live rates measure token-counter changes over the
-actual interval between successful polls and cover all concurrent requests,
-including idle time. Prompt totals and live prefill exclude cached tokens.
+and queued request counts. Live prefill divides changes in processed prompt
+tokens by changes in the engine's cumulative measured prefill seconds
+(`llamacpp:prompt_seconds_total`), excluding idle and generation intervals.
+The engine publishes each token/time pair together, using the same per-step
+timing as request results. Generation uses token-counter changes over the actual
+interval between successful polls, including idle time. Both cover concurrent
+requests. Prompt totals and live prefill exclude cached tokens. Measurements
+arrive after work units return; an unfinished chunk has no speed estimate.
+The generic Qwen runner can enqueue non-final chunks asynchronously, so its
+existing per-step timers do not isolate GPU compute time; Flash-Next steps wait
+for logits readback. These metrics do not introduce additional GPU waits.
 Processing includes cache preparation and cleanup; queued requests await a
 session. Live rates need two consecutive polls; failures, restarts and counter
-resets clear their baseline, and idle rates show zero.
+resets clear their baseline, and idle rates show zero. A prefill time-counter
+reset or missing timing baseline shows a dash until a valid interval is available.
+Executables with live token counters but no prefill time counter retain the
+previous wall-time prefill calculation, identified by the panel's explanatory text.
 
 The completed-request speed cards retain the latest nonzero prefill/generation
 measurements; a fully cached prompt retains the previous prefill speed. Older

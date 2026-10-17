@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdlib>
 #include <functional>
@@ -691,7 +692,7 @@ void TestBatchFailureIsolation() {
 void TestModelOwnedBatchMetrics() {
   for (const std::size_t actual_width : {1U, 2U}) {
     namespace metrics = gufo::server::detail;
-    const auto prompt_before = metrics::TotalPromptTokens().load();
+    const auto prompt_before = metrics::TotalPromptMetrics().Snapshot().tokens;
     const auto generated_before = metrics::TotalGenTokens().load();
     auto control = std::make_shared<FakeControl>();
     control->multi_token_decode = true;
@@ -713,9 +714,10 @@ void TestModelOwnedBatchMetrics() {
       Expect(result.token_metrics_recorded, "scheduled tokens counted live");
       gufo::server::RecordServerMetrics(result);
     }
-    Expect(metrics::TotalPromptTokens().load() - prompt_before == 2 &&
-               metrics::TotalGenTokens().load() - generated_before == 24,
-           "speculative batches and HTTP completion count each token once");
+    Expect(
+        metrics::TotalPromptMetrics().Snapshot().tokens - prompt_before == 2 &&
+            metrics::TotalGenTokens().load() - generated_before == 24,
+        "speculative batches and HTTP completion count each token once");
   }
 }
 
@@ -1342,7 +1344,8 @@ void TestServerMetricsAreLive() {
   const auto read = [](const auto& value) {
     return value.load(std::memory_order_relaxed);
   };
-  const auto prompt_before = read(metrics::TotalPromptTokens());
+  const auto prompt_before = metrics::TotalPromptMetrics().Snapshot().tokens;
+  const auto seconds_before = metrics::TotalPromptMetrics().Snapshot().seconds;
   const auto generated_before = read(metrics::TotalGenTokens());
   const auto processing_before = read(metrics::RequestsProcessing());
   const auto deferred_before = read(metrics::RequestsDeferred());
@@ -1353,8 +1356,11 @@ void TestServerMetricsAreLive() {
 
     auto active = scheduler->Submit({1, 10}, 3, 0.0F);
     control->WaitForAdvance(1);
-    Expect(read(metrics::TotalPromptTokens()) - prompt_before == 2,
+    Expect(metrics::TotalPromptMetrics().Snapshot().tokens - prompt_before == 2,
            "prompt tokens are counted when prefill executes");
+    const auto seconds_live = metrics::TotalPromptMetrics().Snapshot().seconds;
+    Expect(seconds_live > seconds_before,
+           "prefill time is published before generation completes");
     Expect(read(metrics::TotalGenTokens()) - generated_before == 1,
            "generated tokens are counted before the request completes");
     Expect(read(metrics::RequestsProcessing()) - processing_before == 1,
@@ -1373,8 +1379,13 @@ void TestServerMetricsAreLive() {
            "scheduler results identify live token accounting");
     gufo::server::RecordServerMetrics(active_result);
     gufo::server::RecordServerMetrics(queued_result);
-    Expect(read(metrics::TotalPromptTokens()) - prompt_before == 4,
+    Expect(metrics::TotalPromptMetrics().Snapshot().tokens - prompt_before == 4,
            "HTTP completion does not count the prompt again");
+    const auto seconds_after = metrics::TotalPromptMetrics().Snapshot().seconds;
+    Expect(std::abs(seconds_after - seconds_before -
+                    (active_result.prefill_ms + queued_result.prefill_ms) /
+                        1000.0) < 1e-9,
+           "prefill time matches step timers and HTTP does not count it twice");
     Expect(read(metrics::TotalGenTokens()) - generated_before == 4,
            "every generated token is counted once");
   }
