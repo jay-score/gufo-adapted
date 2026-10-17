@@ -474,6 +474,9 @@ test("performance distinguishes live rates, completed speeds, legacy engines, an
   assert.equal(env.$("requests-processing").textContent, "1");
   assert.equal(env.$("requests-deferred").textContent, "2");
   assert.match(env.$("metrics-detail").textContent, /exclude cached tokens/);
+  runtime.render({ ...ready, metrics: { ...metrics, prompt_seconds_total: 0.125 } });
+  assert.match(env.$("metrics-detail").textContent, /prefill uses measured processing time/);
+  assert.equal(env.$("live-prefill-speed").textContent, "0.0");
   runtime.render({ ...ready, metrics: { ...metrics, prompt_tokens_total: 0,
     generated_tokens_total: 0, requests_processing: 0, requests_deferred: 2 } });
   assert.match(env.$("metrics-note").textContent, /Live totals/);

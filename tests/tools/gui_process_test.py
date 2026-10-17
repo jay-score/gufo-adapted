@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools/gui"))
-from launcher_process import ProcessManager, parse_metrics
+from launcher_process import ProcessManager, add_live_rates, parse_metrics
 
 # Windows venv python.exe is a redirector that spawns the real interpreter.
 # Exercise the same single-process ownership as gufo.exe, without that wrapper.
@@ -201,6 +201,41 @@ class ProcessTest(unittest.TestCase):
         for value in ("NaN", "Inf", "-1", "0.5"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 parse_metrics(text.replace("requests_processing 1", f"requests_processing {value}"))
+
+    def test_prefill_rate_uses_processing_time_and_handles_counter_transitions(self):
+        previous = {"prompt_tokens_total": 100, "prompt_seconds_total": 0.25,
+                    "generated_tokens_total": 20, "requests_processing": 1, "requests_deferred": 0}
+        for elapsed in (1, 10):
+            current = {**previous, "prompt_tokens_total": 1100, "prompt_seconds_total": 0.5,
+                       "generated_tokens_total": 40}
+            self.assertIs(add_live_rates(current, previous, elapsed), current)
+            self.assertEqual(current["live_prefill_tps"], 4000)
+            self.assertEqual(current["live_generation_tps"], 20 / elapsed)
+        idle = dict(previous)
+        add_live_rates(idle, previous, 10)
+        self.assertEqual(idle["live_prefill_tps"], 0)
+        for changes, baseline, elapsed in (
+                ({}, None, 1), ({}, previous, 0),
+                ({"prompt_seconds_total": 0.1}, previous, 1),
+                ({"prompt_tokens_total": 0}, previous, 1),
+                ({"generated_tokens_total": 0}, previous, 1),
+                ({"prompt_tokens_total": 200}, previous, 1),
+                ({}, {key: value for key, value in previous.items() if key != "prompt_seconds_total"}, 1)):
+            with self.subTest(changes=changes, baseline=baseline, elapsed=elapsed):
+                current = {**previous, **changes}
+                add_live_rates(current, baseline, elapsed)
+                self.assertIsNone(current["live_prefill_tps"])
+
+    def test_metrics_parser_accepts_and_validates_optional_prefill_time(self):
+        text = ("llamacpp:prompt_tokens_seconds 800\n"
+                "llamacpp:predicted_tokens_seconds 25\n"
+                "llamacpp:prompt_tokens_total 100\n"
+                "llamacpp:tokens_predicted_total 20\n"
+                "llamacpp:prompt_seconds_total 1.25e-1\n")
+        self.assertEqual(parse_metrics(text)["prompt_seconds_total"], 0.125)
+        for value in ("NaN", "Inf", "-1", "bad", ""):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                parse_metrics(text.replace("1.25e-1", value))
 
     def test_occupied_port_is_not_mistaken_for_our_server(self):
         with socket.socket() as listener:
