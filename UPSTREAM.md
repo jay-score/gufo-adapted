@@ -37,6 +37,41 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-17 — Cut Flash-Next sparse attention tiles across selection windows
+
+- Source: [gufo-org/gufo@6a4c89784adb1c99830889b42fc3e243c3fcb7d8](https://github.com/gufo-org/gufo/commit/6a4c89784adb1c99830889b42fc3e243c3fcb7d8)
+  (PR #292).
+- Local: commit introducing this entry.
+- Adaptation: imported the `AttentionKernel` change that cuts key tiles from
+  the running compacted block list, carrying a partial tile of at most
+  `kTile / 4` blocks into the next 1024-block window, and deals the tiles
+  round-robin across splits. Previously each window was tiled separately, so
+  deep contexts produced many mostly empty tiles and windows with less than a
+  tile landed on split 0. The selected keys are unchanged; only tile grouping
+  and softmax accumulation order differ. Also imported the FP64 structured
+  attention tests. Upstream's `gpu_probe` additions, model-identity record and
+  benchmark artifacts are omitted (Linux-specific harness data).
+- Areas: `src/models/qwen38_flash_next/kernels/rocm/kernels.hip.cpp`,
+  `tests/models/qwen38_flash_next/attention_ops_test.cpp`.
+- Validation: Windows `gpu-test` build; `qwen38_flash_next.attention_ops`
+  passes with FP64 worst absolute errors ≤ ~3e-7. Arithmetic changes
+  intentionally, so the declared limit is drift below the existing
+  path-to-path spread. `gufo bench --logit-eval` on UD-IQ4_XS with the Q8_0
+  MTP sidecar compared `daf56a19` against this commit. The corpus was the
+  first 64,000 bytes of wikitext-2 test (sha256 `b12cec83c3206e1b…`, 15,834
+  positions; the 16 KB corpus stays inside one window and cannot exercise the
+  change), schedules `2,4,8:p8`. `p8` rows match exactly (perplexity
+  2.000619). Narrow verify batches (`2,4,8`) first differ at position 4,105:
+  top-1 agreement 97.22%, mean KL over the top 64 tokens 1.50e-2, perplexity
+  1.973978 → 1.976805. Both builds are equally distant from the `p8` path
+  (top-1 94.66%, mean KL 4.49e-2 before and 4.54e-2 after), so the drift is a
+  third of the existing schedule spread. AR `gufo bench -p 512 -n 128
+  -d 0,32768,131072 -r 2` on UD-IQ4_XS, base run before and after: decode
+  28.33/28.43 → 28.45 tok/s at depth 0, 26.38/26.34 → 27.34 at 32K (+3.7%),
+  24.58/24.57 → 26.60 at 128K (+8.2%); pp512 unchanged within noise. Linux CI
+  not run.
+- Status: retained.
+
 ### 2026-10-17 — Flat-table Flash-Next n-gram gather
 
 - Source: [gufo-org/gufo@8497711eb154ecff55ef4119a01ace214149e276](https://github.com/gufo-org/gufo/commit/8497711eb154ecff55ef4119a01ace214149e276)
