@@ -6,6 +6,16 @@ shared Q8_0 MTP; [identities](artifacts/model-identities.json).
 These are consistency checks, not original unquantized-model or GGUF-conversion
 qualification. Latest measurements: September 20–23, 2026.
 
+October 18 out-of-core Phase 5 Windows/gfx1151 check: 8-token greedy MTP trace
+`434d749a…` and the 64-output trace `c71e47bb…` match Phase 3 at 32 GiB and
+40 GiB. The latter covers the larger streamed prefill union while retaining the
+original eight-row compute grouping. Focused storage/Qwen3.8 checks pass 7/7.
+On the 64-output Phase 5 run, 55 MTP drafts were accepted 47 times (85.45%) in
+17 cycles; prompt lookup was off. The configured MTP ceiling is seven proposals
+plus the anchor. Long-form prompt-lookup acceptance and draft-cap tuning remain
+unqualified because the 40 GiB prompt-lookup session failed at HIP allocation;
+these trace checks are not full-logit/perplexity equivalence evidence.
+
 | Check | Result |
 | --- | --- |
 | MTP versus scalar CPU formulas, eight text/image states | Fusion/attention relative RMS <0.0008 (limit 0.002); full-width normalization, split projections, recursive carry and full Q8 head checked |

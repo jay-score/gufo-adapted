@@ -712,26 +712,15 @@ bool Executor::MoeBatch(const DeviceLayer& l, const float* x, float* out,
     return false;
   }
   // Streamed tensors contain cache slots, while the batched Q4_K fast path
-  // below indexes weights with global router IDs. Preserve the original
-  // eight-row arithmetic grouping while resolving each streamed chunk first.
+  // below indexes weights with global router IDs. StreamedMoeRows resolves a
+  // larger unique-expert window, then executes the original eight-row groups.
   if (l.experts_streamed) {
-    for (std::uint32_t r = 0; r < rows; r += kDecodeRows) {
-      UseScratch(RowScratch(base, r));
-      const bool ok = MoeExperts(l, x + std::size_t{r} * c.hidden_size,
-                                 out + std::size_t{r} * c.hidden_size,
-                                 std::min(kDecodeRows, rows - r), error);
-      UseScratch(base);
-      if (!ok) {
-        if (expert_cache_ != nullptr) {
-          expert_cache_->FinishPrefetch(l.layer_index);
-          cancel_future_prefetch();
-        }
-        return false;
-      }
-    }
+    const bool ok = StreamedMoeRows(l, x, out, rows, error, kDecodeRows);
     if (expert_cache_ != nullptr)
       expert_cache_->FinishPrefetch(l.layer_index);
-    return true;
+    if (!ok)
+      cancel_future_prefetch();
+    return ok;
   }
   if (l.ffn_gate_exps.type == core::GgmlType::kQ4_K &&
       l.ffn_up_exps.type == core::GgmlType::kQ4_K) {

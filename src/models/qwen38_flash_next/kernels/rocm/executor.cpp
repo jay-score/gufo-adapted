@@ -755,81 +755,157 @@ bool Executor::CaptureExpertIds(const std::int32_t* ids, std::size_t count,
 
 bool Executor::StreamedMoeRows(const DeviceLayer& layer, const float* x,
                                float* out, std::uint32_t rows,
-                               std::string* error_msg) const {
+                               std::string* error_msg,
+                               std::uint32_t compute_group_rows) const {
   if (expert_cache_ == nullptr) {
     AssignError(error_msg, "streamed experts have no enabled cache");
     return false;
   }
   const auto& c = config();
   const std::uint32_t used = c.num_experts_used;
-  const std::uint32_t rows_per_chunk =
+  const std::uint32_t default_group_rows =
       expert_cache_->demand_slots_available(layer.layer_index) /
       std::max(used, 1u);
-  if (rows_per_chunk == 0) {
+  const std::uint32_t rows_per_compute_group =
+      compute_group_rows == 0 ? default_group_rows : compute_group_rows;
+  if (rows_per_compute_group == 0) {
     AssignError(error_msg, "expert cache cannot hold one routed token");
+    return false;
+  }
+  const std::size_t id_count = static_cast<std::size_t>(rows) * used;
+  if (used == 0 || id_count > expert_ids_capacity_ ||
+      !CaptureExpertIds(s_.ids, id_count, error_msg)) {
+    if (error_msg != nullptr && error_msg->empty())
+      AssignError(error_msg,
+                  "router ID window exceeds pinned staging capacity");
     return false;
   }
 
   const Scratch base = s_;
   DeviceLayer resident_layer = Layer(layer.layer_index);
   resident_layer.experts_streamed = false;
-  for (std::uint32_t first = 0; first < rows; first += rows_per_chunk) {
-    const std::uint32_t count = std::min(rows_per_chunk, rows - first);
-    UseScratch(RowScratch(base, first));
-    const std::size_t id_count = static_cast<std::size_t>(count) * used;
-    if (!CaptureExpertIds(s_.ids, id_count, error_msg)) {
+  if (tokens_device_base_ != nullptr && tokens_host_ != nullptr) {
+    const auto token_offset =
+        static_cast<std::size_t>(base.tokens - tokens_device_base_);
+    expert_cache_->RecordTokenRouting(
+        layer.layer_index,
+        std::span<const std::int32_t>(tokens_host_ + token_offset, rows),
+        std::span<const std::int32_t>(expert_ids_host_, id_count));
+  }
+
+  for (std::uint32_t first = 0; first < rows;) {
+    const std::uint32_t available =
+        expert_cache_->demand_slots_available(layer.layer_index);
+    if (available < used) {
+      AssignError(error_msg, "expert cache cannot hold one routed token");
       UseScratch(base);
       return false;
     }
-    if (tokens_device_base_ != nullptr && tokens_host_ != nullptr) {
-      const auto token_offset =
-          static_cast<std::size_t>(s_.tokens - tokens_device_base_);
-      expert_cache_->RecordTokenRouting(
-          layer.layer_index,
-          std::span<const std::int32_t>(tokens_host_ + token_offset, count),
-          std::span<const std::int32_t>(expert_ids_host_, id_count));
+
+    // Grow by the original compute group (eight rows for MoeBatch, or the
+    // cache-bounded group for ForwardBody). Stop before the first group whose
+    // actual unique routed-expert union would consume a protected lookahead
+    // slot. This lets wide prefill windows batch more experts than the
+    // conservative slots/used estimate without changing arithmetic groups.
+    std::vector<std::uint8_t> seen(c.num_experts, 0);
+    std::size_t unique = 0;
+    std::uint32_t fitting_rows = 0;
+    while (first + fitting_rows < rows) {
+      const std::uint32_t group_rows = std::min<std::uint32_t>(
+          rows_per_compute_group, rows - first - fitting_rows);
+      bool fits = true;
+      for (std::uint32_t row = 0; row < group_rows && fits; ++row) {
+        const std::size_t id_base =
+            (static_cast<std::size_t>(first + fitting_rows + row)) * used;
+        for (std::uint32_t route = 0; route < used; ++route) {
+          const auto expert = expert_ids_host_[id_base + route];
+          if (expert < 0 ||
+              static_cast<std::uint32_t>(expert) >= c.num_experts) {
+            AssignError(error_msg, "router selected an out-of-range expert ID");
+            UseScratch(base);
+            return false;
+          }
+          if (!seen[static_cast<std::uint32_t>(expert)]) {
+            seen[static_cast<std::uint32_t>(expert)] = 1;
+            if (++unique > available) {
+              fits = false;
+              break;
+            }
+          }
+        }
+      }
+      if (!fits)
+        break;
+      fitting_rows += group_rows;
     }
+
+    // Very small budgets may not fit a complete eight-row union. Fall back to
+    // the old conservative bound in that case; each row chunk is still
+    // resolved once and the existing short-batch arithmetic is retained.
+    const std::uint32_t fallback_rows =
+        std::min(available / used, rows - first);
+    const std::uint32_t bounded_fallback =
+        fallback_rows >= rows_per_compute_group
+            ? fallback_rows / rows_per_compute_group * rows_per_compute_group
+            : fallback_rows;
+    const std::uint32_t rows_per_window =
+        fitting_rows != 0 ? fitting_rows : bounded_fallback;
+    const std::size_t window_ids =
+        static_cast<std::size_t>(rows_per_window) * used;
+    const auto* window_experts =
+        expert_ids_host_ + static_cast<std::size_t>(first) * used;
+    auto* window_slots =
+        expert_slot_ids_host_ + static_cast<std::size_t>(first) * used;
     if (!expert_cache_->Resolve(
             layer.layer_index,
-            std::span<const std::int32_t>(expert_ids_host_, id_count),
-            std::span<std::int32_t>(expert_slot_ids_host_, id_count),
-            error_msg)) {
+            std::span<const std::int32_t>(window_experts, window_ids),
+            std::span<std::int32_t>(window_slots, window_ids), error_msg)) {
       UseScratch(base);
       return false;
     }
-    bool ok = Check(hipMemcpyAsync(s_.ids, expert_slot_ids_host_,
-                                   id_count * sizeof(std::int32_t),
-                                   hipMemcpyHostToDevice, stream_),
-                    "expert slot IDs upload", error_msg);
-    if (ok) {
-      ExpertCounts(s_.ids, s_.expert_counts, count, c.num_experts, used,
-                   stream_);
-      ok = Check(hipMemcpyAsync(counts_host_, s_.expert_counts,
-                                c.num_experts * sizeof(std::uint32_t),
-                                hipMemcpyDeviceToHost, stream_),
-                 "cached expert counts download", error_msg) &&
-           Check(hipEventRecord(counts_ready_, stream_),
-                 "cached expert counts event", error_msg);
+
+    bool ok = true;
+    for (std::uint32_t offset = 0; offset < rows_per_window;) {
+      const auto absolute_row = first + offset;
+      const auto group_remainder = absolute_row % rows_per_compute_group;
+      const auto rows_to_group_end =
+          group_remainder == 0 ? rows_per_compute_group
+                               : rows_per_compute_group - group_remainder;
+      const std::uint32_t count =
+          std::min({rows_per_compute_group, rows_to_group_end,
+                    rows_per_window - offset});
+      const std::size_t chunk_id_count = static_cast<std::size_t>(count) * used;
+      UseScratch(RowScratch(base, first + offset));
+      ok = Check(hipMemcpyAsync(
+                     s_.ids,
+                     window_slots + static_cast<std::size_t>(offset) * used,
+                     chunk_id_count * sizeof(std::int32_t),
+                     hipMemcpyHostToDevice, stream_),
+                 "expert slot IDs upload", error_msg) &&
+           MoeExperts(
+               resident_layer,
+               x + static_cast<std::size_t>(first + offset) * c.hidden_size,
+               out + static_cast<std::size_t>(first + offset) * c.hidden_size,
+               count, error_msg);
+      if (!ok)
+        break;
+      offset += count;
     }
-    if (ok) {
-      ok = MoeExperts(resident_layer,
-                      x + static_cast<std::size_t>(first) * c.hidden_size,
-                      out + static_cast<std::size_t>(first) * c.hidden_size,
-                      count, error_msg);
-    }
+    UseScratch(base);
+
     const hipError_t recorded = hipEventRecord(expert_ids_ready_, stream_);
     const bool drain_ok =
         recorded == hipSuccess
             ? hipEventSynchronize(expert_ids_ready_) == hipSuccess
             : hipStreamSynchronize(stream_) == hipSuccess;
     expert_cache_->Release(layer.layer_index);
-    UseScratch(base);
     if (!ok)
       return false;
     if (!drain_ok) {
       AssignError(error_msg, "waiting for streamed expert kernels failed");
       return false;
     }
+    first += rows_per_window;
   }
   return true;
 }

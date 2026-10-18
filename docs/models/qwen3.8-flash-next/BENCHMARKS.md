@@ -8,6 +8,37 @@ llama.cpp uses `b11069` for AR and `6fcaa16f` for MTP.
 
 Positive gain favors Gufo.
 
+## Windows out-of-core Phase 5 control (2026-10-18)
+
+Native Windows `gfx1151`, TheRock 10.0.0, Swift-1.5 IQ4_XS target and shared
+Q8_0 MTP sidecar. Raw 63-token prompt, greedy, seed 459, 64-token output cap,
+single request, `--ssd-stats --verbose`; one run per Phase/budget. Timed model
+load varied across runs; the table compares prefill/decode rates, SSD bytes,
+and Phase 4/5 cache service counters. The 8-token smoke (`Reply with exactly
+OK.`) and 64-token output SHA-256 traces remain bit-identical across phases.
+
+| Budget | Phase | Prefill (tok/s) | Decode (tok/s) | Effective NVMe (GiB/s) | Prefetched in time (%) | Hard stall (ms) | SSD bytes read | 64-token SHA-256 |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 32 GiB | Phase 4 | 7.921 | 11.160 | 1.775 | 76.275 | 9,867.548 | 28,170,908,608 | `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d` |
+| 32 GiB | Phase 5 | 9.993 | 11.469 | 2.563 | 77.241 | 8,722.453 | 28,159,734,720 | `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d` |
+| 40 GiB | Phase 4 | 8.330 | 11.996 | 1.820 | 76.857 | 9,434.749 | 26,839,004,096 | `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d` |
+| 40 GiB | Phase 5 | 10.061 | 12.484 | 2.584 | 77.819 | 8,208.794 | 26,818,950,080 | `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d` |
+
+These single-run deltas show +20.8–26.2% prefill, +2.8–4.1% decode and
+42.0–44.4% effective NVMe rate; prefetched-in-time rises about 0.96 percentage
+points. `expert_requests` and cache-hit percentages are not directly comparable
+across phases because Phase 5 resolves and counts the unique routed-expert union
+over a wider row window. These short controls are not pp2048/tg128 or long-form
+throughput qualification.
+
+The task's separate 40/44 GiB long-form baseline reported 1.23M expert requests,
+262 GB read, 1.77 GiB/s and 37.6% prefetched in time. A raw 78-token, 128-token
+cap, MTP baseline at 40 GiB emitted 123 tokens before EOS: 8.938 tok/s prefill,
+12.396 tok/s decode, 1.849 GiB/s and 71.662% prefetched in time. The matching
+Phase 5 prompt-lookup run did not produce results: `hipMalloc of 40960 bytes
+failed` while creating the session. Do not infer a long-form gain from the
+64-token controls.
+
 October 15 Windows chunk-size default: internal prefill chunks 2048 → 4096
 improve native C1 AR **pp4096 by 18.79% / 18.57% for IQ4_XS** and
 **6.51% / 6.95% for UD-Q4_K_XL** at empty / 32K context. Matched ABBA release

@@ -175,6 +175,10 @@ static void RegisterTextOptions(ArgParser& parser, PromptOptions& opt,
   parser.AddOption("", "--mtp-model", "PATH",
                    "Path to quantized Qwen MTP draft head GGUF file",
                    "Speculative", &opt.mtp_model_path);
+  parser.AddFlag(
+      "", "--prompt-lookup",
+      "Allow repeated committed text to fill remaining MTP draft slots",
+      "Speculative", &opt.prompt_lookup);
   parser.AddCustomOption(
       "-d", "--draft-tokens", "N",
       "Maximum speculative draft tokens evaluated per step (default: 7)",
@@ -678,6 +682,10 @@ std::shared_ptr<models::qwen38_flash_next::Model> LoadFlashNextModel(
                  "--min-draft-tokens 1\n";
     return nullptr;
   }
+  if (opt.prompt_lookup && opt.speculative_backend != "mtp") {
+    std::cerr << "Flash-Next prompt lookup requires --speculative mtp\n";
+    return nullptr;
+  }
   if (opt.use_chat_template &&
       !tokenization::QwenChatTemplate::ValidateGgufTemplate(reader, &error)) {
     std::cerr << "Unsupported Flash-Next chat template: " << error << '\n';
@@ -693,7 +701,8 @@ std::shared_ptr<models::qwen38_flash_next::Model> LoadFlashNextModel(
        .mtp_model_path =
            opt.speculative_backend == "mtp" ? opt.mtp_model_path : "",
        .max_draft_tokens = opt.draft_tokens,
-       .vision_model_path = opt.vision_model_path},
+       .vision_model_path = opt.vision_model_path,
+       .prompt_lookup = opt.prompt_lookup},
       &error);
   PrintModelLoadTime(load_start, model != nullptr);
   if (!model)
@@ -753,6 +762,30 @@ int GenerateFlashNextResponse(const PromptOptions& opt,
     std::cerr << "Generated " << generated.size() << " tokens ("
               << generated.size() / seconds << " tok/s)\n";
     PrintTokenTrace(generated);
+  }
+  if (opt.verbose && opt.speculative_backend == "mtp") {
+    const auto& stats = session.Statistics();
+    const std::uint64_t mtp_drafted = stats.drafted - stats.lookup;
+    const std::uint64_t mtp_accepted = stats.accepted - stats.lookup_accepted;
+    const double mtp_acceptance =
+        mtp_drafted == 0
+            ? 0.0
+            : 100.0 * static_cast<double>(mtp_accepted) / mtp_drafted;
+    std::cerr << "MTP speculation cycles=" << stats.cycles
+              << " proposals=" << stats.drafted
+              << " accepted=" << stats.accepted << " proposals_per_cycle="
+              << (stats.cycles == 0
+                      ? 0.0
+                      : static_cast<double>(stats.drafted) / stats.cycles)
+              << " accepted_per_cycle="
+              << (stats.cycles == 0
+                      ? 0.0
+                      : static_cast<double>(stats.accepted) / stats.cycles)
+              << " mtp_proposals=" << mtp_drafted
+              << " mtp_accepted=" << mtp_accepted
+              << " mtp_acceptance_pct=" << mtp_acceptance
+              << " lookup_proposals=" << stats.lookup
+              << " lookup_accepted=" << stats.lookup_accepted << '\n';
   }
   if (opt.ssd_stats) {
     const auto report = model.SsdStatsReport();

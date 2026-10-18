@@ -480,9 +480,9 @@ private:
   [[nodiscard]] bool CaptureExpertIds(const std::int32_t* ids,
                                       std::size_t count,
                                       std::string* error_msg) const;
-  [[nodiscard]] bool StreamedMoeRows(const DeviceLayer& layer, const float* x,
-                                     float* out, std::uint32_t rows,
-                                     std::string* error_msg) const;
+  [[nodiscard]] bool StreamedMoeRows(
+      const DeviceLayer& layer, const float* x, float* out, std::uint32_t rows,
+      std::string* error_msg, std::uint32_t compute_group_rows = 0) const;
   [[nodiscard]] bool LookaheadPrefetch(const DeviceLayer& layer,
                                        const float* residual,
                                        std::uint32_t rows,
