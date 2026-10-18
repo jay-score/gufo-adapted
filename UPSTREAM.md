@@ -37,6 +37,43 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-17 — Keep the cached conversation when tool choice changes
+
+- Source: [gufo-org/gufo@23d970d0ca0ef694dafec64131269f9c24590940](https://github.com/gufo-org/gufo/commit/23d970d0ca0ef694dafec64131269f9c24590940)
+  (PR #623), adapted.
+- Local: commit introducing this entry.
+- Adaptation: same goal, different route. Upstream deletes the `required`
+  instruction from the system prompt because its grammar forces a tool call.
+  This fork enforces `required` only after generation
+  (`tool_choice_unsatisfied`), so the instruction is kept and moved after the
+  cacheable prefix instead. Qwen renders it as a trailing user turn after
+  `stable_prefix_bytes` (system turns must lead), only with tools and a
+  generation prompt. DeepSeek appends it after the last message, before the
+  generation prompt; its continuation-render frontier already stops before
+  it. `require_tool_call` options and the server wiring are unchanged.
+  Upstream's functional suite is omitted (absent here). Cost: the request after
+  a `required` one resumes from the last-message checkpoint rather than the
+  live frontier, re-processing that assistant reply.
+- Areas: `src/models/qwen/chat_template.cpp`,
+  `src/models/deepseek_v4_flash/chat_template.cpp`, `docs/SERVER.md`,
+  `tests/models/qwen/tokenization/chat_template_test.cpp`,
+  `tests/models/deepseek_v4_flash/chat_template_test.cpp`.
+- Validation: Windows `gpu-test` build; `qwen_chat_template_test` (required
+  and auto share the stable prefix; the turn follows it; absent without a
+  generation prompt) and `ds4_chat_template_test` (required only appends
+  after the last message; pinned golden unchanged) pass and fail against the
+  previous renderers. `openai_chat_test` and `text_model_runner_test` pass.
+  Real-model check on Flash-Next UD-IQ4_XS, `gufo serve -c 16384`,
+  temperature 0, thinking off, three tools, 20 prompts that need no tool, all
+  with `tool_choice: "required"`: the previous system-prompt placement gave
+  18 `tool_choice_unsatisfied`, 1 call and 1 length-limited text reply; the
+  trailing turn gave 19 calls and 1 unsatisfied. Upstream's deletion renders
+  `required` like `auto`, where all 20 replied with text (20 unsatisfied).
+  Switching a ~1K-token conversation from `auto` to `required` reused 0
+  tokens before (1,013 prefilled) and 989 after (28 prefilled). DeepSeek not
+  run on a real model (no local weights). Linux CI not run.
+- Status: retained.
+
 ### 2026-10-17 — Compact Flash-Next sparse attention selections once per row
 
 - Source: [gufo-org/gufo@baf5a1bbab5b99a8278c4869122fd173b205671b](https://github.com/gufo-org/gufo/commit/baf5a1bbab5b99a8278c4869122fd173b205671b)
