@@ -158,8 +158,36 @@ void Run() {
   }
   manager->Release(0);
 
+  // Count every occurrence in a resolve window, not merely one hit per
+  // window, so a frequently routed expert survives a later prefill burst.
   constexpr std::size_t three_slot_budget =
       3 * 3 * kExpertBytes + 3 * kTailMargin;
+  std::array<std::int32_t, kExperts> hot_indirection{};
+  hot_indirection.fill(-1);
+  auto hot_manager = gufo::storage::ExpertCacheManager::Create(
+      std::span<const DeviceLayer>(&layer, 1), three_slot_budget, kExpertsUsed,
+      kExperts, hot_indirection, &error);
+  if (!hot_manager || hot_manager->slots_per_layer() != 3)
+    throw std::runtime_error("hotness cache creation failed: " + error);
+  const std::array<std::int32_t, kExpertsUsed> hot_seed{0, 1};
+  std::array<std::int32_t, kExpertsUsed> hot_seed_slots{};
+  if (!hot_manager->Resolve(0, hot_seed, hot_seed_slots, &error))
+    throw std::runtime_error("hotness seed resolve failed: " + error);
+  hot_manager->Release(0);
+  const std::array<std::int32_t, 4> hot_window{0, 0, 0, 1};
+  std::array<std::int32_t, 4> hot_window_slots{};
+  if (!hot_manager->Resolve(0, hot_window, hot_window_slots, &error))
+    throw std::runtime_error("hotness window resolve failed: " + error);
+  hot_manager->Release(0);
+  const std::array<std::int32_t, kExpertsUsed> cold_burst{2, 3};
+  std::array<std::int32_t, kExpertsUsed> cold_burst_slots{};
+  if (!hot_manager->Resolve(0, cold_burst, cold_burst_slots, &error) ||
+      hot_indirection[0] < 0 || hot_indirection[1] != -1) {
+    throw std::runtime_error(
+        "route frequency did not protect the repeatedly activated expert");
+  }
+  hot_manager->Release(0);
+
   std::array<std::int32_t, kExperts> async_indirection{};
   async_indirection.fill(-1);
   auto async_manager = gufo::storage::ExpertCacheManager::Create(

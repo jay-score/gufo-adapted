@@ -130,7 +130,10 @@ void Run() {
 
   std::vector<std::uint32_t> expected;
   WriteFixture(resources, expected);
-  gufo::storage::SsdBatchReader reader(resources.file, {.io_threads = 8});
+  gufo::storage::SsdBatchReader reader(resources.file,
+                                       {.io_threads = 8,
+                                        .max_scratch_bytes = 64 * 1024,
+                                        .max_inflight_reads = 32});
   std::vector<gufo::storage::SsdReadRequest> requests(kExperts);
   auto* slots = static_cast<std::uint8_t*>(resources.host_slots);
   for (std::size_t expert = 0; expert < kExperts; ++expert) {
@@ -179,6 +182,33 @@ void Run() {
     }
   }
 
+  // Adjacent unaligned payloads have overlapping 4 KiB windows. They should
+  // share one aligned IOCP read, then scatter back to their separate slots.
+  std::array<gufo::storage::SsdReadRequest, 2> coalesced{};
+  const std::array<std::uint64_t, 2> offsets{100, 4196};
+  for (std::size_t i = 0; i < coalesced.size(); ++i) {
+    coalesced[i] = {.file_offset = offsets[i],
+                    .bytes = 4096,
+                    .destination = slots + (kExperts - 2 + i) * kSlotStride,
+                    .destination_capacity = 4096};
+  }
+  std::uint64_t coalesced_bytes = 0;
+  if (!reader.ReadBatch(coalesced, &error, &coalesced_bytes) ||
+      coalesced_bytes != 3 * 4096) {
+    throw std::runtime_error("overlapping read ranges were not coalesced: " +
+                             error);
+  }
+  for (const auto& request : coalesced) {
+    if (!request.completed || !request.used_scratch ||
+        request.payload_offset != 0) {
+      throw std::runtime_error("coalesced payload has an invalid destination");
+    }
+    for (std::size_t byte = 0; byte < request.bytes; ++byte) {
+      if (request.Payload()[byte] != Pattern(request.file_offset + byte))
+        throw std::runtime_error("coalesced payload byte mismatch");
+    }
+  }
+
   CheckHip("hipHostMalloc direct slot",
            hipHostMalloc(&resources.direct_slot, 4096, hipHostMallocMapped));
   void* direct_device_slot = nullptr;
@@ -216,9 +246,8 @@ void Run() {
   if (direct_checksum != expected_direct)
     throw std::runtime_error("direct fast-path HIP checksum mismatch");
   std::cout << "ssd_batch_reader_test: " << kExperts
-            << " packed unaligned slots and the aligned fast path passed byte "
-               "and HIP "
-               "checksums\n";
+            << " packed unaligned slots, coalesced ranges, and the aligned "
+               "fast path passed byte and HIP checksums\n";
 }
 
 }  // namespace

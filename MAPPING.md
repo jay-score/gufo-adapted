@@ -225,6 +225,64 @@ ctest --test-dir build/gpu-test -L gpu -E "minimax_h3_dit_analytic|qwen_ssm_ops_
 
 The excluded full-suite rerun was not performed. The focused storage/Qwen3.8 tests and model trace checks above completed before the MES-ring fault.
 
+### Phase 5 streamed-prefill and I/O scheduling (2026-10-18)
+
+**Reference review:** `../Flash-next-ssd/src/llama-moe-room.cpp` builds a floor plan from the whole read-in router set, reserves its missing union, then pipelines reading-room fills while the GPU consumes the same floor. Its worker ordering is demand, room, then speculative; queued guesses can be promoted, while stale queued room work is dropped at hand-back. Gufo's regular `ForwardBody` path calls `Moe` → `StreamedMoeRows`; the former `MoeBatch` path also limited streamed dispatch to eight rows. The new resolver scans actual router IDs, selects the largest contiguous union that fits the layer's unpinned slots, resolves that union once, then keeps the previous compute-group sizes. `MoeBatch` passes its complete routed batch into this path. This avoids using `floor(slots / top_k)` as the prefill window while preserving the original eight-row batched group and the regular path's cache-bounded group.
+
+`ExpertCacheManager::Resolve` now pins all current-window residents before selecting victims, counts each expert's route frequency, and chooses cold/old victims without evicting a hot expert needed later in the same window. A demand hit promotes its queued per-shard prefetch batch; releasing a layer cancels its still-queued speculative batches. The host cache has separate demand and prefetch job lanes. Windows IOCP keeps eight completion workers and a model-wide 32-read/scratch budget spread across expert shard readers; it sorts by aligned file offset and coalesces overlapping padded ranges into one bounce-buffer read. The cache config sizes scratch for two adjacent expert slabs (about 32–64 MiB for this target's shard count). Linux retains its eight-worker `O_DIRECT` path and sorts read batches.
+
+The current Qwen MTP cap is seven draft proposals per cycle plus the anchor (maximum verification width eight). `cap = min(request output budget, remaining context, executor verification capacity)`; optional prompt lookup fills remaining width after an MTP proposal. The 64-output candidate runs at both budgets reported 17 cycles, 55 MTP proposals, 47 accepted (85.45%); prompt lookup was off, so lookup proposals were zero. `prompt --verbose` now prints MTP/lookup proposal and acceptance counts. During verification, all proposed rows are run through target layers before rollback, so rejected tail rows have already contributed router assignments and cache demand; this cost is traded against the additional accepted-prefix opportunity. No memory-budget-specific draft cap was retained: a matched long-form acceptance/cap sweep did not complete after the HIP allocation fault below.
+
+#### Matched 64-output control, Phase 4 baseline vs Phase 5 candidate
+
+Same Windows gfx1151/TheRock 10.0.0 machine, Swift-1.5 IQ4_XS/Q8_0 MTP artifacts, raw 63-token prompt, greedy sampling, seed 459, 64-token output limit and `--ssd-stats`. Single run per cell; model load and filesystem/device warm state vary. The 8-token trace also remains `434d749ab5504962fdc020206a41ab2c427b8c6b7f1e459d2e4c9228933f97d7`; the 64-token trace is unchanged at `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d`.
+
+| Budget | Version | Prefill (tok/s) | Decode (tok/s) | Effective NVMe (GiB/s) | Prefetched in time % | Hard stall ms | SSD bytes read | 64-token trace |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 32 GiB | Phase 4 | 7.921 | 11.160 | 1.775 | 76.275 | 9,867.548 | 28,170,908,608 | `c71e47bb…` |
+| 32 GiB | Phase 5 | 9.993 | 11.469 | 2.563 | 77.241 | 8,722.453 | 28,159,734,720 | `c71e47bb…` |
+| 40 GiB | Phase 4 | 8.330 | 11.996 | 1.820 | 76.857 | 9,434.749 | 26,839,004,096 | `c71e47bb…` |
+| 40 GiB | Phase 5 | 10.061 | 12.484 | 2.584 | 77.819 | 8,208.794 | 26,818,950,080 | `c71e47bb…` |
+
+Single-run changes: at 32 GiB, prefill +26.2%, decode +2.8%, NVMe throughput +44.4%, and prefetched-in-time +0.97 percentage points; at 40 GiB, prefill +20.8%, decode +4.1%, NVMe throughput +42.0%, and prefetched-in-time +0.96 points. `expert_requests` and cache-hit percentages are **not directly comparable across phases**: `Resolve` now batches a larger row union and counts each unique expert once per union. Direct expert reads use `FILE_FLAG_NO_BUFFERING` and bypass the Windows file cache.
+
+The 40 GiB/44 GiB long-form baseline supplied for this pass reported 1.23 million expert requests, 262 GB read, 1.77 GiB/s and 37.6% prefetched in time. A reproducible raw 78-token prompt at 40 GiB, `--max-tokens 128`, MTP, seed 459 and prompt lookup off generated 123 tokens before EOS: prefill 8.938 tok/s, decode 12.396 tok/s, 1.849 GiB/s, 71.662% prefetched in time. The Phase 5 `--prompt-lookup` run for that workload failed while creating the session (`hipMalloc of 40960 bytes failed`) after the preceding successful GPU work; it produced no candidate timing or acceptance sample. **Do not run further GPU commands in this session:** the device returned a HIP allocation failure and may have entered the Windows gfx1151 MES-ring fault state. Long-form before/after, MTP+Lookup acceptance and cap sweeps remain unmeasured.
+
+The seven focused checks passed after the window, hotness, IOCP-priority and range-coalescing changes: `ssd_stats_test`, `expert_cache_manager_test`, `ssd_batch_reader_test`, `qwen38_flash_next.ngram`, `qwen38_flash_next.moe_epilogue_ops`, `qwen38_flash_next.moe_ids_ops`, and `qwen38_flash_next.iq_experts_ops`. `gpu-test` and `release` `gufo` targets compiled successfully. The faulting MiniMax H3 analytic and Qwen SSM tests were not run in Phase 5.
+
+The MTP controller remains capped at seven proposals plus its anchor (verification width at most eight). `PrepareDecode` chooses a draft width from the output budget, remaining context and executor capacity; when enabled, prompt lookup appends copied context tokens only into unused width. A target verification pass processes the complete proposed chain before rollback, so rejected tail rows still run router selection and contribute expert demand. The new verbose prompt counters separate MTP drafts/accepts from lookup drafts/accepts. On the 64-output no-lookup candidate, the recorded sample was 17 cycles, 55 MTP proposals, 47 accepted (85.45%). A long-form lookup/cap sweep was blocked by the HIP allocation fault; the cap was not adjusted without that evidence.
+
+### Phase 5 matched 64-output measurement (2026-10-18)
+
+One run per cell on Windows/gfx1151, TheRock 10.0.0, Swift-1.5 IQ4_XS and the shared Q8_0 MTP sidecar, raw 63-token input, greedy/seed 459, 64 output limit. The Phase 5 run uses the actual-union cache windows and IOCP priority/coalescing. Prefill and decode changes are single-run observations; SSD reads use `FILE_FLAG_NO_BUFFERING`.
+
+| Budget | Phase | Prefill (tok/s) | Decode (tok/s) | Effective NVMe GiB/s | Prefetched in time % | Expert requests | Cache hit % | Cold misses | Hard stall ms | SSD bytes | 64-output trace SHA-256 |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 32 GiB | Phase 4 | 7.921 | 11.160 | 1.775 | 76.275 | 35,761 | 75.988 | 8,552 | 9,867.548 | 28,170,908,608 | `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d` |
+| 32 GiB | Phase 5 | 9.993 | 11.469 | 2.563 | 77.241 | 29,527 | 70.993 | 8,548 | 8,722.453 | 28,159,734,720 | `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d` |
+| 40 GiB | Phase 4 | 8.330 | 11.996 | 1.820 | 76.857 | 34,191 | 76.035 | 8,164 | 9,434.749 | 26,839,004,096 | `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d` |
+| 40 GiB | Phase 5 | 10.061 | 12.484 | 2.584 | 77.819 | 28,906 | 71.722 | 8,162 | 8,208.794 | 26,818,950,080 | `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d` |
+
+The 8-output exact command also retains `434d749ab5504962fdc020206a41ab2c427b8c6b7f1e459d2e4c9228933f97d7`. Across the short runs, Phase 5 raises prefill +26.2%/+20.8%, decode +2.8%/+4.1%, effective NVMe +44.4%/+42.0%, and prefetched-in-time +0.97/+0.96 percentage points at 32/40 GiB. The `expert_requests` and cache-hit units change with the larger resolution windows: expert IDs repeated across more rows are now resolved/count once per window. Do not compare those counters as raw token-route assignments.
+
+The user's prior 40/44 GiB long-form telemetry was 1.23M expert requests, 262 GB read, 1.77 GiB/s and 37.6% prefetched in time. The reproducible 78-token baseline prompt at 40 GiB/128-token maximum generated 123 tokens before EOS (prefill 8.938 tok/s, decode 12.396 tok/s, 1.849 GiB/s, 71.662% prefetched in time). Adding `--prompt-lookup` failed at session creation with `hipMalloc of 40960 bytes failed`; no long-form Phase 5 result or MTP+Lookup acceptance sample was collected. The system had just faulted during GPU allocation, so no further GPU commands were run.
+
+The 64-output candidate acceptance sample is reproducible with the Phase 4 `$long` prompt and exact `--speculative mtp --mtp-model $mtp --max-tokens 64 --seed 459` settings above; the Phase 5 `--verbose` report shows 17 cycles, 55 proposals and 47 accepted (lookup off). The long-form baseline prompt and attempted lookup run were:
+
+```powershell
+$long78 = 'The quick brown fox jumps over the lazy dog. Strix Halo executes this deterministic benchmark sequence. The quick brown fox jumps over the lazy dog. Strix Halo executes this deterministic benchmark sequence. The quick brown fox jumps over the lazy dog. Strix Halo executes this deterministic benchmark sequence. Reply with exactly OK.! More. Batch expert union across tokens, and preserve the eight-row compute groups.'
+build\gpu-test\gufo.exe prompt --model $model --raw --speculative mtp --mtp-model $mtp `
+  --memory-budget-gb 40 --cache-prior-bias 0 --ssd-stats --verbose `
+  --max-tokens 128 --seed 459 --prompt $long78
+# Phase 5 lookup attempt added --prompt-lookup and failed at session hipMalloc before inference.
+```
+
+`SsdStats.expert_requests` is unique expert demand per `Resolve` window. Its count
+therefore falls when repeated row assignments are deduplicated across a wider
+window; use `expert route hits` in the manager for frequency, and compare cold
+misses/bytes/latency alongside it rather than treating Phase 4/5 request totals
+as the same unit.
+
 Reproduce with the exact 64-token raw prompt and `--memory-budget-gb 32` or `20`:
 
 ```powershell
