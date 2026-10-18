@@ -7,7 +7,9 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -320,7 +322,7 @@ def _run_command(
             key: _resolve_text(value, ctx, item_out)
             for key, value in command.env.items()
         }
-        env = os.environ.copy()
+        env = ctx.env.copy()
         env.update(declared_env)
         cwd = (ctx.root / _resolve_text(command.cwd, ctx, item_out)).resolve()
     except RecordError as error:
@@ -332,6 +334,11 @@ def _run_command(
             "reason": f"working directory does not exist: {cwd}",
         }
     timeout = command.timeout or ctx.timeout
+    junit_path = None
+    if Path(argv[0]).stem.lower() == "ctest":
+        junit_path = _log_path(ctx.out, kind, item_id, index, "junit.xml")
+        junit_path.unlink(missing_ok=True)
+        argv.extend(["--output-junit", str(junit_path)])
     started = utc_now()
     monotonic_start = time.monotonic()
     print(f"  $ {' '.join(argv)}", flush=True)
@@ -391,11 +398,30 @@ def _run_command(
         status = "skipped"
     else:
         status = "fail"
+    reason = None
+    if status == "pass" and junit_path is not None:
+        try:
+            cases = ET.parse(junit_path).getroot().findall(".//testcase")
+            if not cases:
+                status, reason = "fail", "CTest produced no individual test results"
+            elif any(
+                case.find("skipped") is not None or case.get("status") == "disabled"
+                for case in cases
+            ):
+                status, reason = "skipped", "CTest reported skipped tests"
+            elif any(
+                case.find("failure") is not None or case.find("error") is not None
+                for case in cases
+            ):
+                status, reason = "fail", "CTest reported failed tests"
+        except (OSError, ET.ParseError) as error:
+            status, reason = "error", f"cannot read CTest results: {error}"
     return {
         "argv": argv,
         "cwd": str(cwd),
         "env": declared_env,
         "status": status,
+        "reason": reason,
         "exitCode": completed.returncode,
         "started": started,
         "finished": utc_now(),
@@ -414,8 +440,28 @@ def _run_item(
     ctx: RecordContext,
 ) -> ItemResult:
     result = ItemResult(kind, item.id, "pass", item.description)
-    item_out = ctx.out / ("captures" if kind == "capture" else "checks") / item.id
+    item_parent = ctx.out / ("captures" if kind == "capture" else "checks")
+    item_parent.mkdir(parents=True, exist_ok=True)
+    item_out = (
+        Path(tempfile.mkdtemp(prefix=f"{item.id}-", dir=item_parent))
+        if kind == "capture"
+        else item_parent / item.id
+    )
     item_out.mkdir(parents=True, exist_ok=True)
+    if not any(
+        platform_name() in command.platforms and not command.optional
+        for command in item.commands
+    ):
+        result.status = "not-applicable"
+        result.reason = f"no required commands declared for {platform_name()}"
+        return result
+    if isinstance(item, Capture):
+        for output in item.outputs:
+            resolved = Path(_resolve_text(output, ctx, item_out))
+            if resolved.exists():
+                result.status = "fail"
+                result.reason = f"declared output already exists: {resolved}"
+                return result
     print(f"== {kind} {item.id}: {item.description}", flush=True)
     result.toolsUsed = _tools_used(item.commands)
     result.corporaUsed = _corpora_used(item.commands)
@@ -433,9 +479,9 @@ def _run_item(
         status = record["status"]
         if status == "pass":
             continue
-        if status == "not-applicable" and command.optional:
+        if status == "not-applicable":
             print(
-                f"  -> not-applicable (optional): {record.get('reason')}",
+                f"  -> not-applicable: {record.get('reason')}",
                 flush=True,
             )
             continue

@@ -399,8 +399,9 @@ def compare(
     elif control:
         errors.append("--control requires the same binary on both sides")
 
-    if plan is not None:
-        plan_head = plan.get("headSha")
+    revision_plan = plan if plan is not None else candidate.get("plan")
+    if revision_plan is not None:
+        plan_head = revision_plan.get("headSha")
         candidate_revision = candidate.get("source", {}).get("revision")
         if plan_head and not _revision_matches(candidate_revision, plan_head):
             message = (
@@ -411,8 +412,8 @@ def compare(
                 unverified.append(message + " (explicitly allowed)")
             else:
                 errors.append(message)
-        plan_base = plan.get("baseSha")
-        merge_base = plan.get("mergeBase")
+        plan_base = revision_plan.get("baseSha")
+        merge_base = revision_plan.get("mergeBase")
         baseline_revision = baseline.get("source", {}).get("revision")
         if plan_base and not (
             _revision_matches(baseline_revision, plan_base)

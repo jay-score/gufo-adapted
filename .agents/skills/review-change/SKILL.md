@@ -48,6 +48,10 @@ python3 tools/ci/review-context.py \
 On Windows use `python`. Add `--format json` when another tool will consume the
 packet. The tool is advisory: it classifies files, recommends checks and flags
 hazards, but it does not build Gufo, load models or prove numerical parity.
+`--run-checks` requires the checkout's HEAD to match `--head`; omit it when
+collecting context for another revision. Uncommitted edits can still affect
+check results and are reported in the packet. Renames retain `old_path` so
+both source and destination ownership select checks.
 
 If `gh` is installed, authenticated and the user authorized GitHub access,
 `gh pr view <number>` / `gh pr diff <number>` can supply the intent and the

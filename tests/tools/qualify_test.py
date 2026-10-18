@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 TOOL = Path(__file__).resolve().parents[2] / "tools/models/qualify.py"
+sys.path.insert(0, str(TOOL.parents[1]))
+
+from gufo.qualify.config import Check, Command, config_for
+from gufo.qualify.record import _context, _run_command, _run_item
 
 MAKE_LOGITS = """\
 import hashlib
@@ -383,6 +390,19 @@ class QualifyTest(unittest.TestCase):
         packet = self.plan()
         self.assertIn("src/core/unknown/thing.cpp", packet["uncovered"])
 
+    def test_plan_covers_both_sides_of_renames(self) -> None:
+        self.git("mv", "src/core/quant/dequant.cpp", "tools/moved.cpp")
+        self.commit("refactor: move shared quantization")
+        packet = self.plan()
+        self.assertEqual({entry["model"] for entry in packet["models"]}, {"example", "other"})
+        self.assertIn("src/core/quant/dequant.cpp", packet["models"][0]["triggers"][0]["files"])
+
+        self.write("src/core/unknown/thing.cpp", "int thing = 1;\n")
+        self.commit("chore: add uncovered fixture")
+        self.git("mv", "src/core/unknown/thing.cpp", "tools/thing.cpp")
+        self.commit("refactor: move uncovered code")
+        self.assertIn("src/core/unknown/thing.cpp", self.plan()["uncovered"])
+
     def test_matching_records_pass_and_report(self) -> None:
         plan_path, run, _ = self.planned_run()
         result = self.run_tool(
@@ -700,6 +720,145 @@ class QualifyTest(unittest.TestCase):
             "declared output was not produced",
             record["items"]["capture:logits"]["reason"],
         )
+
+    def test_capture_rerun_does_not_reuse_previous_outputs(self) -> None:
+        plan_path, run, head_sha = self.planned_run()
+        candidate = run / "candidate"
+        previous = json.loads((candidate / "record.json").read_text())
+        old_output = Path(previous["items"]["capture:logits"]["outputs"][0]["path"])
+        recorded = self.record(
+            "candidate", "gufo-candidate.bin", str(candidate),
+            plan=plan_path, mode="missing", revision=head_sha,
+        )
+        self.assertEqual(recorded.returncode, 1, recorded.stdout)
+        current = json.loads((candidate / "record.json").read_text())
+        self.assertEqual(current["items"]["capture:logits"]["status"], "fail")
+        self.assertEqual(current["items"]["capture:logits"]["outputs"], [])
+        self.assertTrue(old_output.is_file())
+
+    def test_embedded_plan_enforces_both_revisions(self) -> None:
+        plan_path, run, head_sha = self.planned_run()
+        args = (
+            "compare", "--model", "example",
+            "--baseline", str(run / "baseline"),
+            "--candidate", str(run / "candidate"), "--out", str(run),
+        )
+        matching = self.run_tool(*args)
+        self.assertEqual(matching.returncode, 0, matching.stdout + matching.stderr)
+        for side, wrong, correct, expected in (
+            ("candidate", self.base_sha, head_sha, "not the planned head"),
+            ("baseline", head_sha, self.base_sha, "neither the planned base"),
+        ):
+            with self.subTest(side=side):
+                recorded = self.record(
+                    side, f"gufo-{side}.bin", str(run / side),
+                    plan=plan_path, revision=wrong,
+                )
+                self.assertEqual(recorded.returncode, 0, recorded.stderr)
+                result = self.run_tool(*args)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(expected, result.stdout)
+                self.assertEqual(self.record(
+                    side, f"gufo-{side}.bin", str(run / side),
+                    plan=plan_path, revision=correct,
+                ).returncode, 0)
+
+
+class RecordCommandTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="gufo-qualify-command-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.config = config_for(TOOL.parents[2], "qwen3.8-flash-next")
+        self.ctx = _context(
+            self.root, self.root, Path(sys.executable), self.root, self.config,
+            {}, {}, {"QUALIFY_TEST_OVERRIDE": "override"}, 30, set(),
+        )
+
+    def run_command(self, command: Command) -> dict:
+        with contextlib.redirect_stdout(io.StringIO()):
+            return _run_command(
+                command, self.ctx, kind="check", item_id="fixture",
+                index=0, item_out=self.root,
+            )
+
+    def test_model_build_commands_select_each_platform(self) -> None:
+        for model in ("qwen3.8-flash-next", "qwen3.8-27b", "deepseek-v4-flash"):
+            build = config_for(TOOL.parents[2], model).checks["build"]
+            for platform in ("windows", "linux"):
+                with self.subTest(model=model, platform=platform), patch(
+                    "gufo.qualify.record.platform_name", return_value=platform
+                ), patch(
+                    "gufo.qualify.record.subprocess.run",
+                    return_value=subprocess.CompletedProcess([], 0, "", ""),
+                ) as execute, contextlib.redirect_stdout(io.StringIO()):
+                    result = _run_item(build, "check", self.ctx)
+                    self.assertEqual(result.status, "pass", result.reason)
+                    self.assertEqual(execute.call_count, sum(
+                        platform in command.platforms for command in build.commands
+                    ))
+
+    def test_item_with_no_required_platform_command_does_not_pass(self) -> None:
+        item = Check("foreign", "fixture", (
+            Command(("not-executed",), platforms=("linux",)),
+            Command(("not-executed",), platforms=("windows",), optional=True),
+        ))
+        with patch("gufo.qualify.record.platform_name", return_value="windows"), patch(
+            "gufo.qualify.record.subprocess.run"
+        ) as execute:
+            result = _run_item(item, "check", self.ctx)
+        self.assertEqual(result.status, "not-applicable")
+        execute.assert_not_called()
+
+    def test_environment_overrides_reach_children_and_command_env_wins(self) -> None:
+        command = Command((
+            sys.executable, "-c",
+            "import os; print(os.environ['QUALIFY_TEST_OVERRIDE'])",
+        ))
+        result = self.run_command(command)
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["stdoutTail"].strip(), "override")
+        result = self.run_command(Command(
+            command.argv, env={"QUALIFY_TEST_OVERRIDE": "command"}
+        ))
+        self.assertEqual(result["stdoutTail"].strip(), "command")
+
+    def test_ctest_individual_results_are_required(self) -> None:
+        python = json.dumps(sys.executable.replace("\\", "/"))
+        for mode in ("pass", "skip", "mixed", "disabled", "empty"):
+            with self.subTest(mode=mode):
+                suite = self.root / mode
+                suite.mkdir()
+                tests = []
+                if mode != "empty":
+                    exit_code = 77 if mode in ("skip", "mixed") else 0
+                    tests.append(
+                        f'add_test(fixture {python} "-c" "raise SystemExit({exit_code})")'
+                    )
+                    tests.append('set_tests_properties(fixture PROPERTIES SKIP_RETURN_CODE 77)')
+                if mode == "mixed":
+                    tests.append(f'add_test(passed {python} "-c" "raise SystemExit(0)")')
+                if mode == "disabled":
+                    tests.append('set_tests_properties(fixture PROPERTIES DISABLED TRUE)')
+                (suite / "CTestTestfile.cmake").write_text("\n".join(tests) + "\n")
+                result = self.run_command(Command(("ctest", "--test-dir", str(suite))))
+                self.assertEqual(result["status"], {
+                    "pass": "pass", "skip": "skipped", "mixed": "skipped",
+                    "disabled": "skipped", "empty": "fail",
+                }[mode], result)
+
+    def test_ctest_cannot_reuse_a_previous_result_file(self) -> None:
+        logs = self.root / "logs"
+        logs.mkdir()
+        previous = logs / "check-fixture-0.junit.xml"
+        previous.write_text('<testsuite><testcase name="old"/></testsuite>')
+        with patch(
+            "gufo.qualify.record.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ):
+            result = self.run_command(Command(("ctest",)))
+        self.assertEqual(result["status"], "error")
+        self.assertIn("cannot read CTest results", result["reason"])
 
 
 if __name__ == "__main__":

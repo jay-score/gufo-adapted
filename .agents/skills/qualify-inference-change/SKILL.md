@@ -34,7 +34,8 @@ Establish before running:
   Windows native or inside `nix develop` on Linux
 
 If the baseline binary or a required artifact is missing, stop. A missing
-model, a CTest skip (`77`) or a required `not-applicable` command is not a pass.
+model, a skipped CTest test or an item with no required command for this
+platform is not a pass.
 
 ## Stage 1: plan
 
@@ -133,8 +134,10 @@ enforced by `compare`. A profile is a convenience for iteration, not a
 substitute for the plan.
 
 Use `--env NAME=VALUE` for declared environment placeholders (for example
-`QUALIFY_IMAGE_A`, `QUALIFY_IMAGE_B` or `QUALIFY_IMAGE_DIR`). Relative `--out`
-and `--output` paths are resolved against `--root`.
+`QUALIFY_IMAGE_A`, `QUALIFY_IMAGE_B` or `QUALIFY_IMAGE_DIR`) and child-process
+environment overrides. Command-specific environment entries take precedence.
+Relative `--out` and `--output` paths are resolved against `--root`. Each capture
+invocation writes into a fresh directory so reruns cannot reuse earlier output.
 
 On Linux, run the whole command inside `nix develop -c` so CMake, CTest and the
 optional reference tools see the pinned environment. On Windows the declared
@@ -162,6 +165,7 @@ means `PASS` (or `CONTROL`); exit 1 means `FAIL` or `UNVERIFIED`.
 - the baseline or candidate revision is not the one the plan selected
 - baseline and candidate are the same binary (unless `--control` is explicit)
 - a required check or capture is missing, failed, skipped or not applicable
+  (individual CTest results are retained as JUnit XML and checked for skips)
 - a declared metric is absent or violates its model-owned limit
 - a logit row differs under an exact comparator
 
@@ -185,8 +189,10 @@ fix the missing evidence or state exactly what remains unverified.
   service replay.
 - Missing model/device and CTest skip are not passes. Broadening a suite is
   better than silently accepting a gap.
-- A command marked `optional` is a platform-only extra; `not-applicable` is
-  recorded without failing the check, but it does not qualify that platform.
+- Commands for other platforms are recorded as `not-applicable` and skipped.
+  Each item needs at least one required command for the current platform;
+  commands marked `optional` are platform-only extras and cannot meet that
+  requirement. Applicable commands must pass, including every CTest test.
 - Preserve the exact corpus, tokenizer/template, schedules, seed, temperature
   and batching settings. A changed identity changes the comparison.
 - `qualify.json` is part of the identity. If the declaration changes, re-record

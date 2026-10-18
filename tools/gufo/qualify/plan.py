@@ -205,13 +205,13 @@ def _code_files(packet: dict[str, Any]) -> list[str]:
     """Production inference paths that a qualification trigger should cover."""
     result: list[str] = []
     for item in packet.get("files", []):
-        path = item.get("path", "")
-        if not path.startswith("src/") or Path(path).suffix not in CODE_SUFFIXES:
-            continue
-        if path.startswith(API_ONLY_PREFIXES):
-            continue
-        result.append(path)
-    return sorted(result)
+        for path in (item.get("path"), item.get("old_path")):
+            if not path or not path.startswith("src/") or Path(path).suffix not in CODE_SUFFIXES:
+                continue
+            if path.startswith(API_ONLY_PREFIXES):
+                continue
+            result.append(path)
+    return sorted(set(result))
 
 
 def build_plan(
@@ -227,7 +227,10 @@ def build_plan(
     configs = load_configs(root)
     selected = _requested_models(configs, models)
     packet = _run_review_context(root, base, head, review_context)
-    changed = [item["path"] for item in packet.get("files", [])]
+    changed = sorted({
+        path for item in packet.get("files", [])
+        for path in (item.get("path"), item.get("old_path")) if path
+    })
 
     entries: list[dict[str, Any]] = []
     for config in selected:
