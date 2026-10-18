@@ -795,7 +795,7 @@ class RecordCommandTest(unittest.TestCase):
             )
         result = self.run_command(Command((sys.executable, "tools/probe.py")))
         self.assertEqual(result["status"], "pass", result)
-        self.assertEqual(Path(result["cwd"]), self.ctx.repo)
+        self.assertTrue(Path(result["cwd"]).samefile(self.ctx.repo))
         self.assertTrue((self.ctx.repo / "built.txt").is_file())
         self.assertFalse((self.root / "built.txt").exists())
 
@@ -814,7 +814,7 @@ class RecordCommandTest(unittest.TestCase):
         for executable in (driver, selected):
             executable.parent.mkdir(parents=True)
             executable.write_text("fixture")
-        self.assertEqual(_find_test_executable("fixture", self.ctx), selected)
+        self.assertTrue(_find_test_executable("fixture", self.ctx).samefile(selected))
         selected.unlink()
         with self.assertRaises(RecordError):
             _find_test_executable("fixture", self.ctx)
