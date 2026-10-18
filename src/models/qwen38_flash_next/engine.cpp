@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <type_traits>
@@ -26,6 +27,7 @@ namespace {
 // Larger chunks improve long-prompt throughput on native gfx1151.
 // Measurements and serving limits: docs/plans/prefill-chunk-4096.md.
 constexpr std::uint32_t kPrefillChunkTokens = 4096;
+constexpr std::size_t kPleShelfBytes = 128ULL * 1024 * 1024;
 
 void AssignError(std::string* error_msg, std::string_view message) {
   if (error_msg != nullptr) {
@@ -73,6 +75,12 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     AssignError(error_msg, "decode concurrency must be between one and eight");
     return nullptr;
   }
+  if (!std::isfinite(options.memory_budget_gb) ||
+      options.memory_budget_gb < 0.0) {
+    AssignError(error_msg,
+                "memory budget must be a finite, non-negative GiB value");
+    return nullptr;
+  }
   if (options.max_draft_tokens == 0) {
     AssignError(error_msg, "draft token limit must be positive");
     return nullptr;
@@ -115,7 +123,8 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     const auto& t = m->weights_->ple_table;
     m->ngram_ = NgramTable::Open(
         m->reader_->GetMappedRegions()[t.shard].file_descriptor, t.file_offset,
-        t.rows, c.ple_head_dim, t.type, error_msg);
+        t.rows, c.ple_head_dim, t.type, error_msg,
+        options.ple_shelf ? kPleShelfBytes : 0);
     if (!m->ngram_) {
       return nullptr;
     }
@@ -132,9 +141,9 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     }
     m->mtp_weights_ = std::make_unique<MtpWeights>(std::move(*mtp));
   }
-  m->device_ = rocm::DeviceModel::Upload(*m->weights_, *m->reader_,
-                                         m->mtp_weights_.get(),
-                                         m->mtp_reader_.get(), error_msg);
+  m->device_ = rocm::DeviceModel::Upload(
+      *m->weights_, *m->reader_, m->mtp_weights_.get(), m->mtp_reader_.get(),
+      error_msg, options.memory_budget_gb > 0.0);
   if (!m->device_) {
     return nullptr;
   }
@@ -167,6 +176,42 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
       rocm::Executor::Create(*m->device_, m->ngram_.get(), exec, error_msg);
   if (!m->executor_) {
     return nullptr;
+  }
+  if (options.memory_budget_gb > 0.0) {
+    const auto mode = m->HasMtp() ? core::SessionMode::kSpeculative
+                                  : core::SessionMode::kAutoregressive;
+    const std::size_t per_session = m->SessionBytes(mode, options.max_context);
+    if (per_session >
+        std::numeric_limits<std::size_t>::max() / options.decode_concurrency) {
+      AssignError(error_msg, "reserved session memory exceeds size limits");
+      return nullptr;
+    }
+    const std::size_t backbone_bytes =
+        m->device_->backbone_bytes() +
+        (m->vision_ ? m->vision_->ResidentBytes() : 0);
+    const std::size_t scratch_bytes = m->executor_->ScratchBytes();
+    storage::MemoryBudgetInputs inputs{
+        .budget_gb = options.memory_budget_gb,
+        .backbone_bytes = backbone_bytes,
+        .drafter_bytes = m->device_->draft_bytes(),
+        .ple_shelf_bytes = m->ngram_ ? m->ngram_->CacheBytes() : 0,
+        .kv_reserved_bytes = per_session * options.decode_concurrency,
+        .scratch_bytes = scratch_bytes,
+        .routed_expert_bytes = m->device_->routed_expert_bytes(),
+    };
+    storage::MemoryBudgetPlan plan;
+    if (!storage::PlanMemoryBudget(inputs, &plan, error_msg))
+      return nullptr;
+    if (!plan.fits_fixed) {
+      AssignError(error_msg,
+                  "memory budget is smaller than fixed backbone, drafter, "
+                  "PLE, session, and scratch reservations");
+      return nullptr;
+    }
+    m->memory_budget_ = plan;
+    std::clog << "memory_budget_plan\n" << plan.Format();
+    if (!m->executor_->EnableExpertCache(plan.expert_cache_bytes, error_msg))
+      return nullptr;
   }
   return m;
 }
@@ -239,7 +284,9 @@ const Config& Model::config() const noexcept {
 }
 
 std::size_t Model::ResidentBytes() const noexcept {
-  return device_->resident_bytes() + (vision_ ? vision_->ResidentBytes() : 0);
+  return device_->resident_bytes() + executor_->ScratchBytes() +
+         executor_->ExpertCacheBytes() +
+         (vision_ ? vision_->ResidentBytes() : 0);
 }
 
 std::size_t Model::SessionBytes(core::SessionMode mode,

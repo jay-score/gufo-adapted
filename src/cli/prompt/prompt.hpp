@@ -40,6 +40,8 @@ struct PromptOptions {
   std::string dspark_model_path;
   std::uint32_t draft_tokens = 7;
   std::uint32_t min_draft_tokens = 1;
+  double memory_budget_gb{0.0};
+  bool ple_shelf{false};
 };
 
 /// Prints help for `gufo prompt`.

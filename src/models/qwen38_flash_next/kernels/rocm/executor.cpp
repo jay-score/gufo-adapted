@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -25,6 +26,7 @@
 #include "src/core/platform/tuning.hpp"
 #include "src/models/qwen38_flash_next/draft_vocab.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
+#include "src/storage/expert_cache_manager.hpp"
 
 namespace gufo::models::qwen38_flash_next::rocm {
 namespace {
@@ -318,12 +320,22 @@ void Session::Reset() {
 }
 
 Executor::~Executor() {
+  if (stream_ != nullptr)
+    (void)hipStreamSynchronize(stream_);
   // Readers write pinned staging memory; drain them before freeing it,
   // including when a forward failed before reaching PLE.
   if (ple_pending_) {
     (void)ngram_->WaitRead();
   }
   (void)hipFree(batch_logits_);
+  if (expert_ids_ready_ != nullptr)
+    (void)hipEventDestroy(expert_ids_ready_);
+  if (expert_ids_host_ != nullptr)
+    (void)hipHostFree(expert_ids_host_);
+  if (expert_slot_ids_host_ != nullptr)
+    (void)hipHostFree(expert_slot_ids_host_);
+  if (expert_id_to_slot_host_ != nullptr)
+    (void)hipHostFree(expert_id_to_slot_host_);
   (void)hipHostFree(batch_gdn_host_);
   (void)hipHostFree(batch_controls_);
   (void)hipHostFree(batch_candidates_host_);
@@ -392,22 +404,23 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
   const std::size_t slots = T * c.num_experts_used;
   auto& a = e->allocations_;
   Scratch& s = e->s_;
-  auto f32 = [&](std::size_t n) { return Alloc<float>(a, n, error_msg); };
-  s.tokens = Alloc<std::int32_t>(a, T, error_msg);
-  s.x_half = Alloc<std::uint16_t>(a, T * model.max_half_cols(), error_msg);
+  auto alloc = [&]<typename TAlloc>(std::size_t n) {
+    return Alloc<TAlloc>(a, n, error_msg, &e->scratch_allocated_bytes_);
+  };
+  auto f32 = [&](std::size_t n) { return alloc.template operator()<float>(n); };
+  s.tokens = alloc.template operator()<std::int32_t>(T);
+  s.x_half =
+      alloc.template operator()<std::uint16_t>(T * model.max_half_cols());
   for (void*& slot : s.x_q8) {
-    slot = Alloc<std::uint8_t>(
-        a,
-        qfn_mmq_q8_1_bytes(static_cast<int>(kVecBatch),
-                           static_cast<int>(model.max_q8_cols())),
-        error_msg);
+    slot = alloc.template operator()<std::uint8_t>(qfn_mmq_q8_1_bytes(
+        static_cast<int>(kVecBatch), static_cast<int>(model.max_q8_cols())));
   }
-  s.x_q8t =
-      Alloc<std::uint8_t>(a, Q8TiledBytes(T, model.max_q8_cols()), error_msg);
+  s.x_q8t = alloc.template operator()<std::uint8_t>(
+      Q8TiledBytes(T, model.max_q8_cols()));
   s.res = f32(T * hc_dim);
   s.xn = f32(T * hc_dim);
-  s.xn_half = Alloc<__half>(a, T * hc_dim, error_msg);
-  s.xn_q8t = Alloc<std::uint8_t>(a, Q8TiledBytes(T, hc_dim), error_msg);
+  s.xn_half = alloc.template operator()<__half>(T * hc_dim);
+  s.xn_q8t = alloc.template operator()<std::uint8_t>(Q8TiledBytes(T, hc_dim));
   s.lo = f32(T * c.hc_low_rank);
   s.hc_gate = f32(T * hc_dim);
   s.mixed = f32(T * hidden);
@@ -435,7 +448,7 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
   const std::uint32_t max_blocks =
       (c.context_length + c.compress_ratio - 1) / c.compress_ratio;
   e->mask_words_ = (max_blocks + 31) / 32;
-  s.mask = Alloc<std::uint32_t>(a, T * e->mask_words_, error_msg);
+  s.mask = alloc.template operator()<std::uint32_t>(T * e->mask_words_);
   // Bound score traffic while retaining every row a decode graph can replay.
   const std::size_t score_stride = std::size_t{e->mask_words_} * 32;
   e->select_score_floats_ =
@@ -467,16 +480,17 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
     e->host_rows_.resize(T * c.ple_heads);
   }
   s.router = f32(T * (c.num_experts + 1));
-  s.ids = Alloc<std::int32_t>(a, slots, error_msg);
-  s.expert_counts = Alloc<std::uint32_t>(a, c.num_experts, error_msg);
+  s.ids = alloc.template operator()<std::int32_t>(slots);
+  s.expert_counts = alloc.template operator()<std::uint32_t>(c.num_experts);
   {
     const std::size_t compact = RoutedCompactRows(slots, c.num_experts);
-    s.routed_bounds = Alloc<std::int32_t>(a, c.num_experts + 1, error_msg);
-    s.routed_cursors = Alloc<std::int32_t>(a, c.num_experts, error_msg);
-    s.rows_token = Alloc<std::int32_t>(a, compact, error_msg);
-    s.rows_slot = Alloc<std::int32_t>(a, compact, error_msg);
-    s.routed_tiles =
-        Alloc<std::int32_t>(a, 3 * RoutedTileCapacity(slots, c), error_msg);
+    s.routed_bounds =
+        alloc.template operator()<std::int32_t>(c.num_experts + 1);
+    s.routed_cursors = alloc.template operator()<std::int32_t>(c.num_experts);
+    s.rows_token = alloc.template operator()<std::int32_t>(compact);
+    s.rows_slot = alloc.template operator()<std::int32_t>(compact);
+    s.routed_tiles = alloc.template operator()<std::int32_t>(
+        3 * RoutedTileCapacity(slots, c));
   }
   s.weights = f32(slots);
   s.gate_e = f32(slots * c.expert_ff);
@@ -485,7 +499,7 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
   s.shexp_gate = f32(T * c.shared_expert_ff);
   s.shexp_up = f32(T * c.shared_expert_ff);
   s.shexp_out = f32(T * hidden);
-  s.shexp_half = Alloc<__half>(a, T * c.shared_expert_ff, error_msg);
+  s.shexp_half = alloc.template operator()<__half>(T * c.shared_expert_ff);
   s.logits =
       f32(static_cast<std::size_t>(e->options_.max_logit_rows) * c.vocab_size);
   {
@@ -544,11 +558,11 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
     s.mtp_embd = s.mixed;
     s.mtp_eproj = s.qkvz;
     s.mtp_res = s.res;
-    s.mtp_argmax = Alloc<ArgmaxCandidate>(a, kArgmaxParts, error_msg);
-    s.mtp_token = Alloc<std::int32_t>(a, 1, error_msg);
+    s.mtp_argmax = alloc.template operator()<ArgmaxCandidate>(kArgmaxParts);
+    s.mtp_token = alloc.template operator()<std::int32_t>(1);
     const auto candidate_ids = MtpCandidateWorkspaceSize(c.vocab_size);
-    s.mtp_ids = Alloc<std::uint32_t>(a, candidate_ids, error_msg);
-    s.mtp_scratch_ids = Alloc<std::uint32_t>(a, candidate_ids, error_msg);
+    s.mtp_ids = alloc.template operator()<std::uint32_t>(candidate_ids);
+    s.mtp_scratch_ids = alloc.template operator()<std::uint32_t>(candidate_ids);
     // Final selection consumes intermediate IDs before writing its scores.
     // Pack those scores behind the 64 returned IDs for one host transfer.
     s.mtp_scores = reinterpret_cast<float*>(s.mtp_ids + kMtpCandidates);
@@ -580,9 +594,9 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
       e->draft_prefix_.rows = options.draft_prefix;
       if (!specials.empty()) {
         const std::size_t row_bytes = std::size_t{out.cols} / 32 * 34;
-        auto* rows = Alloc<std::uint8_t>(a, specials.size() * row_bytes + 256,
-                                         error_msg);
-        auto* map = Alloc<std::int32_t>(a, specials.size(), error_msg);
+        auto* rows = alloc.template operator()<std::uint8_t>(
+            specials.size() * row_bytes + 256);
+        auto* map = alloc.template operator()<std::int32_t>(specials.size());
         if (rows == nullptr || map == nullptr ||
             !Check(hipMemcpy(map, specials.data(),
                              specials.size() * sizeof(std::int32_t),
@@ -638,6 +652,149 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
     }
   }
   return e;
+}
+
+bool Executor::EnableExpertCache(std::size_t budget_bytes,
+                                 std::string* error_msg) {
+  if (expert_cache_ != nullptr || budget_bytes == 0) {
+    AssignError(error_msg, "expert cache is already enabled or has no budget");
+    return false;
+  }
+  const auto& layers = model_->layers();
+  const std::size_t num_experts = config().num_experts;
+  if (num_experts == 0 || config().num_experts_used == 0 ||
+      layers.size() > std::numeric_limits<std::size_t>::max() / num_experts ||
+      options_.max_batch >
+          std::numeric_limits<std::size_t>::max() / config().num_experts_used) {
+    AssignError(error_msg, "expert cache staging dimensions overflow");
+    return false;
+  }
+  expert_ids_capacity_ =
+      static_cast<std::size_t>(options_.max_batch) * config().num_experts_used;
+  const std::size_t map_count = layers.size() * num_experts;
+  if (expert_ids_capacity_ >
+          std::numeric_limits<std::size_t>::max() / sizeof(std::int32_t) ||
+      map_count >
+          std::numeric_limits<std::size_t>::max() / sizeof(std::int32_t)) {
+    AssignError(error_msg, "expert cache pinned buffer size overflows");
+    return false;
+  }
+  if (!Check(hipHostMalloc(reinterpret_cast<void**>(&expert_ids_host_),
+                           expert_ids_capacity_ * sizeof(std::int32_t)),
+             "pinned router IDs", error_msg) ||
+      !Check(hipHostMalloc(reinterpret_cast<void**>(&expert_slot_ids_host_),
+                           expert_ids_capacity_ * sizeof(std::int32_t)),
+             "pinned expert slot IDs", error_msg) ||
+      !Check(hipHostMalloc(reinterpret_cast<void**>(&expert_id_to_slot_host_),
+                           map_count * sizeof(std::int32_t)),
+             "pinned expert indirection table", error_msg) ||
+      !Check(hipEventCreateWithFlags(&expert_ids_ready_, hipEventDisableTiming),
+             "expert IDs ready event", error_msg)) {
+    return false;
+  }
+  expert_cache_ = gufo::storage::ExpertCacheManager::Create(
+      layers, budget_bytes, config().num_experts_used, config().num_experts,
+      std::span<std::int32_t>(expert_id_to_slot_host_, map_count), error_msg);
+  return expert_cache_ != nullptr;
+}
+
+std::size_t Executor::ExpertCacheBytes() const noexcept {
+  return expert_cache_ != nullptr ? expert_cache_->allocated_bytes() : 0;
+}
+
+const DeviceLayer& Executor::Layer(std::uint32_t index) const noexcept {
+  if (expert_cache_ != nullptr && index < expert_cache_->device_layers().size())
+    return expert_cache_->device_layers()[index];
+  return model_->layers()[index];
+}
+
+bool Executor::CaptureExpertIds(const std::int32_t* ids, std::size_t count,
+                                std::string* error_msg) const {
+  if (ids == nullptr || count == 0 || count > expert_ids_capacity_ ||
+      expert_ids_host_ == nullptr || expert_ids_ready_ == nullptr) {
+    AssignError(error_msg, "router ID capture exceeds pinned staging capacity");
+    return false;
+  }
+  return Check(
+             hipMemcpyAsync(expert_ids_host_, ids, count * sizeof(std::int32_t),
+                            hipMemcpyDeviceToHost, stream_),
+             "router IDs download", error_msg) &&
+         Check(hipEventRecord(expert_ids_ready_, stream_),
+               "router IDs ready event", error_msg) &&
+         Check(hipEventSynchronize(expert_ids_ready_), "router IDs ready",
+               error_msg);
+}
+
+bool Executor::StreamedMoeRows(const DeviceLayer& layer, const float* x,
+                               float* out, std::uint32_t rows,
+                               std::string* error_msg) const {
+  if (expert_cache_ == nullptr) {
+    AssignError(error_msg, "streamed experts have no enabled cache");
+    return false;
+  }
+  const auto& c = config();
+  const std::uint32_t used = c.num_experts_used;
+  const std::uint32_t rows_per_chunk =
+      expert_cache_->slots_per_layer() / std::max(used, 1u);
+  if (rows_per_chunk == 0) {
+    AssignError(error_msg, "expert cache cannot hold one routed token");
+    return false;
+  }
+
+  const Scratch base = s_;
+  DeviceLayer resident_layer = Layer(layer.layer_index);
+  resident_layer.experts_streamed = false;
+  for (std::uint32_t first = 0; first < rows; first += rows_per_chunk) {
+    const std::uint32_t count = std::min(rows_per_chunk, rows - first);
+    UseScratch(RowScratch(base, first));
+    const std::size_t id_count = static_cast<std::size_t>(count) * used;
+    if (!CaptureExpertIds(s_.ids, id_count, error_msg)) {
+      UseScratch(base);
+      return false;
+    }
+    if (!expert_cache_->Resolve(
+            layer.layer_index,
+            std::span<const std::int32_t>(expert_ids_host_, id_count),
+            std::span<std::int32_t>(expert_slot_ids_host_, id_count),
+            error_msg)) {
+      UseScratch(base);
+      return false;
+    }
+    bool ok = Check(hipMemcpyAsync(s_.ids, expert_slot_ids_host_,
+                                   id_count * sizeof(std::int32_t),
+                                   hipMemcpyHostToDevice, stream_),
+                    "expert slot IDs upload", error_msg);
+    if (ok) {
+      ExpertCounts(s_.ids, s_.expert_counts, count, c.num_experts, used,
+                   stream_);
+      ok = Check(hipMemcpyAsync(counts_host_, s_.expert_counts,
+                                c.num_experts * sizeof(std::uint32_t),
+                                hipMemcpyDeviceToHost, stream_),
+                 "cached expert counts download", error_msg) &&
+           Check(hipEventRecord(counts_ready_, stream_),
+                 "cached expert counts event", error_msg);
+    }
+    if (ok) {
+      ok = MoeExperts(resident_layer,
+                      x + static_cast<std::size_t>(first) * c.hidden_size,
+                      out + static_cast<std::size_t>(first) * c.hidden_size,
+                      count, error_msg);
+    }
+    const hipError_t recorded = hipEventRecord(expert_ids_ready_, stream_);
+    const bool drain_ok =
+        recorded == hipSuccess
+            ? hipEventSynchronize(expert_ids_ready_) == hipSuccess
+            : hipStreamSynchronize(stream_) == hipSuccess;
+    expert_cache_->Release(layer.layer_index);
+    UseScratch(base);
+    if (!ok)
+      return false;
+    if (!drain_ok) {
+      AssignError(error_msg, "waiting for streamed expert kernels failed");
+      return false;
+    }
+  }
+  return true;
 }
 
 std::unique_ptr<Session> Executor::CreateSession(core::SessionMode mode,
@@ -818,6 +975,16 @@ std::size_t Executor::DeferredScratchBytes() const {
                                 c.vocab_size * sizeof(float)
                           : 0;
   return bytes;
+}
+
+std::size_t Executor::ScratchBytes() const noexcept {
+  const std::size_t batch_capacity = std::size_t{8} *
+                                     std::min(8U, options_.max_logit_rows) *
+                                     config().vocab_size * sizeof(float);
+  return batch_capacity > std::numeric_limits<std::size_t>::max() -
+                              scratch_allocated_bytes_
+             ? std::numeric_limits<std::size_t>::max()
+             : scratch_allocated_bytes_ + batch_capacity;
 }
 
 /// Column-tile width for the routed expert GEMMs: the tile at or above twice
@@ -1819,6 +1986,8 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
 bool Executor::MoeExperts(const DeviceLayer& l, const float* x, float* out,
                           std::uint32_t n_tokens,
                           std::string* error_msg) const {
+  if (l.experts_streamed)
+    return StreamedMoeRows(l, x, out, n_tokens, error_msg);
   const Config& c = config();
   const std::uint32_t used = c.num_experts_used;
   const std::uint32_t slots = n_tokens * used;
@@ -2122,8 +2291,8 @@ bool Executor::Forward(Session& session, std::span<const std::int32_t> tokens,
   // Decode-sized batches replay as graphs; a pooling backlog (the first
   // batch past the budget) needs the wider eager grid.
   const std::uint32_t graph_pool_grid = n / std::max(c.compress_ratio, 1u) + 1;
-  const bool graph = !prefill_phase && n <= kVecBatch &&
-                     pool_grid <= graph_pool_grid &&
+  const bool graph = expert_cache_ == nullptr && !prefill_phase &&
+                     n <= kVecBatch && pool_grid <= graph_pool_grid &&
                      session.position_ >= session.VisionLayout().PrefixLength();
   // Tuning::verify_graph_candidates: a verify pass whose rows stay on the
   // GPU (null logits) also selects every row's candidate list inside its
@@ -2216,12 +2385,11 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
     session.vision_input_.Inject(s_.res, start_pos, n, c.hidden_size,
                                  c.hc_count, stream_);
   }
-  const auto& layers = model_->layers();
   bool normed = false;  ///< xn holds the next mixer's grouped norm of res
   for (std::uint32_t il = first_layer; il < end_layer; ++il) {
     if (!session.CheckCancellation(error_msg))
       return false;
-    const DeviceLayer& l = layers[il];
+    const DeviceLayer& l = Layer(il);
     if (c.IsPleLayer(il) &&
         !Ple(l, session, n, s_.res, speculative, error_msg)) {
       return false;
@@ -2251,7 +2419,7 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
     const float* next_norm =
         il + 1 < c.num_layers
             ? (c.IsPleLayer(il + 1) ? nullptr
-                                    : layers[il + 1].hc_attn.norm.f32())
+                                    : Layer(il + 1).hc_attn.norm.f32())
             : model_->hc_head().norm.f32();
     Combine(s_.res, next_norm, n);
     normed = next_norm != nullptr;

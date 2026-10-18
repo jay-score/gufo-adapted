@@ -864,12 +864,11 @@ bool Executor::ForwardBatch(std::span<const BatchItem> items,
           items[i].session->position_, items[i].tokens.size(), c.hidden_size,
           c.hc_count, stream_);
     }
-    const auto& layers = model_->layers();
     bool normed = false;
     for (std::uint32_t il = 0; il < c.num_layers; ++il) {
       if (!AnyActive(items))
         return true;
-      const auto& l = layers[il];
+      const auto& l = Layer(il);
       if (c.IsPleLayer(il)) {
         if (!WaitPle(error) ||
             !Check(hipMemcpyAsync(base.ple_emb, host_emb_,
@@ -995,7 +994,7 @@ bool Executor::ForwardBatch(std::span<const BatchItem> items,
       const float* next_norm =
           il + 1 < c.num_layers
               ? (c.IsPleLayer(il + 1) ? nullptr
-                                      : layers[il + 1].hc_attn.norm.f32())
+                                      : Layer(il + 1).hc_attn.norm.f32())
               : model_->hc_head().norm.f32();
       UseScratch(base);
       CombineBatch(base.res, next_norm, rows);

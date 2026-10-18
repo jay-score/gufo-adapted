@@ -103,6 +103,12 @@ static void RegisterTextOptions(ArgParser& parser, PromptOptions& opt,
   parser.AddOption("", "--system", "PROMPT",
                    "Optional system role instructions prepended to the prompt",
                    "Prompt", &opt.system_prompt);
+  parser.AddOption("", "--memory-budget-gb", "GB",
+                   "Qwen3.8-Flash-Next memory budget in GiB (default: off)",
+                   "Memory", &opt.memory_budget_gb);
+  parser.AddFlag("", "--ple-shelf",
+                 "Cache PLE rows in a 128 MiB bounded RAM shelf (default: off)",
+                 "Memory", &opt.ple_shelf);
   if (command == "prompt") {
     parser.AddInverseFlag("", "--raw",
                           "Disable chat template framing and pass raw tokens",
@@ -673,6 +679,8 @@ std::shared_ptr<models::qwen38_flash_next::Model> LoadFlashNextModel(
   auto model = models::qwen38_flash_next::Model::Load(
       opt.model_path,
       {.max_context = kDefaultContext,
+       .memory_budget_gb = opt.memory_budget_gb,
+       .ple_shelf = opt.ple_shelf,
        .mtp_model_path =
            opt.speculative_backend == "mtp" ? opt.mtp_model_path : "",
        .max_draft_tokens = opt.draft_tokens,
