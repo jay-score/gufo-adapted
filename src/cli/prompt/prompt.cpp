@@ -109,6 +109,13 @@ static void RegisterTextOptions(ArgParser& parser, PromptOptions& opt,
   parser.AddFlag("", "--ple-shelf",
                  "Cache PLE rows in a 128 MiB bounded RAM shelf (default: off)",
                  "Memory", &opt.ple_shelf);
+  parser.AddFlag("", "--ssd-stats",
+                 "Print SSD, cache, memory and session-write telemetry",
+                 "Memory", &opt.ssd_stats);
+  parser.AddOption(
+      "", "--cache-prior-bias", "FLOAT",
+      "Weight expert routing priors in cache retention (default: 0)", "Memory",
+      &opt.cache_prior_bias);
   if (command == "prompt") {
     parser.AddInverseFlag("", "--raw",
                           "Disable chat template framing and pass raw tokens",
@@ -680,6 +687,8 @@ std::shared_ptr<models::qwen38_flash_next::Model> LoadFlashNextModel(
       opt.model_path,
       {.max_context = kDefaultContext,
        .memory_budget_gb = opt.memory_budget_gb,
+       .ssd_stats = opt.ssd_stats,
+       .cache_prior_bias = opt.cache_prior_bias,
        .ple_shelf = opt.ple_shelf,
        .mtp_model_path =
            opt.speculative_backend == "mtp" ? opt.mtp_model_path : "",
@@ -705,10 +714,15 @@ int GenerateFlashNextResponse(const PromptOptions& opt,
   }
   const std::vector<std::int32_t> input(prompt.begin(), prompt.end());
   std::string error;
+  const auto prefill_start = std::chrono::steady_clock::now();
   if (!session.Sync(input, &error)) {
     std::cerr << "Flash-Next prefill failed: " << error << '\n';
     return 1;
   }
+  const double prefill_seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                    prefill_start)
+          .count();
   sampling::SamplerState sampler(opt.sampling, prompt);
   std::vector<tokenization::TokenId> generated;
   const auto start = std::chrono::steady_clock::now();
@@ -730,13 +744,20 @@ int GenerateFlashNextResponse(const PromptOptions& opt,
       break;
   }
   std::cout << '\n';
-  if (opt.verbose) {
-    const double seconds =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
-            .count();
+  const double seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
+          .count();
+  if (opt.verbose || opt.ssd_stats) {
+    std::cerr << "Prefill " << prompt.size() << " tokens in " << prefill_seconds
+              << " s (" << prompt.size() / prefill_seconds << " tok/s)\n";
     std::cerr << "Generated " << generated.size() << " tokens ("
               << generated.size() / seconds << " tok/s)\n";
     PrintTokenTrace(generated);
+  }
+  if (opt.ssd_stats) {
+    const auto report = model.SsdStatsReport();
+    if (!report.empty())
+      std::cerr << report;
   }
   return 0;
 }

@@ -451,7 +451,9 @@ void PrintServeHelp(std::string_view program_name,
     std::string served_model_name;
     std::uint32_t max_context = 0;
     double memory_budget_gb = 0.0;
+    float cache_prior_bias = 0.0F;
     bool ple_shelf = false;
+    bool ssd_stats = false;
     std::int64_t max_tokens = -1;
     sampling::SamplingConfig sampling_config;
     std::string reasoning_mode = "auto";
@@ -507,6 +509,14 @@ void PrintServeHelp(std::string_view program_name,
         "", "--ple-shelf",
         "Cache PLE rows in a 128 MiB bounded RAM shelf (default: off)",
         "Memory", &ple_shelf);
+    parser.AddFlag(
+        "", "--ssd-stats",
+        "Print SSD, cache, memory and session-write telemetry on shutdown",
+        "Memory", &ssd_stats);
+    parser.AddOption(
+        "", "--cache-prior-bias", "FLOAT",
+        "Weight learned expert priors in cache retention (default: 0)",
+        "Memory", &cache_prior_bias);
 
     // Sampling Defaults
     parser.AddOption(
@@ -756,6 +766,7 @@ int RunServe(std::span<const char* const> args) {
   std::shared_ptr<server::TtsService> tts;
   std::shared_ptr<server::AsrService> asr;
   std::shared_ptr<server::ImageService> images;
+  bool print_ssd_stats = false;
 
   if (subcommand == "image") {
     std::filesystem::path model;
@@ -935,7 +946,9 @@ int RunServe(std::span<const char* const> args) {
     std::string served_model_name;
     std::uint32_t max_context = 0;
     double memory_budget_gb = 0.0;
+    float cache_prior_bias = 0.0F;
     bool ple_shelf = false;
+    bool ssd_stats = false;
     std::int64_t max_tokens = -1;
     sampling::SamplingConfig sampling_config;
     std::string reasoning_mode = "auto";
@@ -991,6 +1004,14 @@ int RunServe(std::span<const char* const> args) {
         "", "--ple-shelf",
         "Cache PLE rows in a 128 MiB bounded RAM shelf (default: off)",
         "Memory", &ple_shelf);
+    llm_parser.AddFlag(
+        "", "--ssd-stats",
+        "Print SSD, cache, memory and session-write telemetry on shutdown",
+        "Memory", &ssd_stats);
+    llm_parser.AddOption(
+        "", "--cache-prior-bias", "FLOAT",
+        "Weight learned expert priors in cache retention (default: 0)",
+        "Memory", &cache_prior_bias);
     llm_parser.AddOption(
         "-n", "--max-tokens", "N",
         "Default new-token limit (default: -1 = until EOS or context full)",
@@ -1128,6 +1149,11 @@ int RunServe(std::span<const char* const> args) {
       std::cerr << "Error: speculative draft limits are invalid\n";
       return 2;
     }
+    if (!std::isfinite(cache_prior_bias) || cache_prior_bias < 0.0F) {
+      std::cerr
+          << "Error: --cache-prior-bias must be finite and non-negative\n";
+      return 2;
+    }
     const auto reasoning_defaults = ResolveReasoningDefaults(
         reasoning_mode, reasoning_effort, preserve_thinking, &parse_err);
     if (!reasoning_defaults.has_value()) {
@@ -1191,7 +1217,10 @@ int RunServe(std::span<const char* const> args) {
     speculative_config.mtp_prefix_draft_vocabulary = mtp_draft_vocab != "full";
     speculative_config.prompt_lookup = prompt_lookup;
     speculative_config.memory_budget_gb = memory_budget_gb;
+    speculative_config.cache_prior_bias = cache_prior_bias;
     speculative_config.ple_shelf = ple_shelf;
+    speculative_config.ssd_stats = ssd_stats;
+    print_ssd_stats = ssd_stats;
     std::string err;
     ModelLoadLog load_log("text", model);
     backend = std::make_shared<server::InferenceBackend>();
@@ -1264,6 +1293,11 @@ int RunServe(std::span<const char* const> args) {
     return 1;
   }
   server.run(/*handle_signals=*/true);
+  if (print_ssd_stats && backend != nullptr) {
+    const auto report = backend->ssd_stats_report();
+    if (!report.empty())
+      std::cerr << report;
+  }
   return 0;
 }
 

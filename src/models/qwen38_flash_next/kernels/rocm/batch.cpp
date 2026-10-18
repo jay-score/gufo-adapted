@@ -7,6 +7,7 @@
 #include "src/models/qwen38_flash_next/kernels/rocm/executor.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
+#include "src/storage/expert_cache_manager.hpp"
 
 namespace gufo::models::qwen38_flash_next::rocm {
 namespace {
@@ -364,7 +365,8 @@ bool Executor::MtpForwardBatch(std::span<const MtpBatchItem> items,
       return false;
     if (!AnyActive(items))
       return true;
-    if (!MoeBatch(l, tail.mixed, tail.block_out, tail_rows, error))
+    if (!MoeBatch(l, tail.mixed, tail.block_out, tail_rows, error,
+                  tail.mtp_res))
       return false;
     CombineBatch(tail.mtp_res, nullptr, tail_rows);
     for (std::size_t i = 0; i < items.size(); ++i) {
@@ -681,19 +683,56 @@ bool Executor::GatedDenseBatch(const DeviceTensor& up, const DeviceTensor& gate,
 }
 
 bool Executor::MoeBatch(const DeviceLayer& l, const float* x, float* out,
-                        std::uint32_t rows, std::string* error) const {
+                        std::uint32_t rows, std::string* error,
+                        const float* lookahead_residual) const {
   if (rows <= kDecodeRows)
-    return Moe(l, x, out, rows, error);
+    return Moe(l, x, out, rows, error, false, lookahead_residual);
   const auto& c = config();
   const Scratch base = s_;
   if (!DenseBatch(l.router, x, base.router, rows, error))
     return false;
   RouterTopK(base.router, c.num_experts + 1, base.ids, base.weights, rows,
              c.num_experts, c.num_experts_used, stream_);
+  if (!LookaheadPrefetch(
+          l, lookahead_residual != nullptr ? lookahead_residual : base.res,
+          rows, error))
+    return false;
+  const auto cancel_future_prefetch = [&] {
+    if (expert_cache_ == nullptr)
+      return;
+    for (std::uint32_t distance = 1; distance <= 2; ++distance) {
+      if (distance < c.num_layers - l.layer_index)
+        expert_cache_->FinishPrefetch(l.layer_index + distance);
+    }
+  };
   if (!GatedDenseBatch(l.shexp_up, l.shexp_gate, x, base.shexp_up, rows,
                        error) ||
-      !DenseBatch(l.shexp_down, base.shexp_up, base.shexp_out, rows, error))
+      !DenseBatch(l.shexp_down, base.shexp_up, base.shexp_out, rows, error)) {
+    cancel_future_prefetch();
     return false;
+  }
+  // Streamed tensors contain cache slots, while the batched Q4_K fast path
+  // below indexes weights with global router IDs. Preserve the original
+  // eight-row arithmetic grouping while resolving each streamed chunk first.
+  if (l.experts_streamed) {
+    for (std::uint32_t r = 0; r < rows; r += kDecodeRows) {
+      UseScratch(RowScratch(base, r));
+      const bool ok = MoeExperts(l, x + std::size_t{r} * c.hidden_size,
+                                 out + std::size_t{r} * c.hidden_size,
+                                 std::min(kDecodeRows, rows - r), error);
+      UseScratch(base);
+      if (!ok) {
+        if (expert_cache_ != nullptr) {
+          expert_cache_->FinishPrefetch(l.layer_index);
+          cancel_future_prefetch();
+        }
+        return false;
+      }
+    }
+    if (expert_cache_ != nullptr)
+      expert_cache_->FinishPrefetch(l.layer_index);
+    return true;
+  }
   if (l.ffn_gate_exps.type == core::GgmlType::kQ4_K &&
       l.ffn_up_exps.type == core::GgmlType::kQ4_K) {
     // Share expert weights across request boundaries while retaining the
@@ -706,11 +745,17 @@ bool Executor::MoeBatch(const DeviceLayer& l, const float* x, float* out,
         qfn_mmq_moe_vec(
             static_cast<int>(l.ffn_down_exps.type), l.ffn_down_exps.data,
             base.gate_e, base.ids, base.down_e, c.hidden_size, c.expert_ff,
-            rows * c.num_experts_used, c.num_experts, 1, stream_) != 0)
+            rows * c.num_experts_used, c.num_experts, 1, stream_) != 0) {
+      cancel_future_prefetch();
+      if (expert_cache_ != nullptr)
+        expert_cache_->FinishPrefetch(l.layer_index);
       return Fail(error, "batched routed vector projection failed");
+    }
     MoeEpilogue(base.down_e, base.weights, base.shexp_out,
                 base.router + c.num_experts, c.num_experts + 1, out, rows,
                 c.num_experts_used, c.hidden_size, stream_);
+    if (expert_cache_ != nullptr)
+      expert_cache_->FinishPrefetch(l.layer_index);
     return true;
   }
   for (std::uint32_t r = 0; r < rows; r += kDecodeRows) {
@@ -719,9 +764,16 @@ bool Executor::MoeBatch(const DeviceLayer& l, const float* x, float* out,
                                out + std::size_t{r} * c.hidden_size,
                                std::min(kDecodeRows, rows - r), error);
     UseScratch(base);
-    if (!ok)
+    if (!ok) {
+      if (expert_cache_ != nullptr) {
+        expert_cache_->FinishPrefetch(l.layer_index);
+        cancel_future_prefetch();
+      }
       return false;
+    }
   }
+  if (expert_cache_ != nullptr)
+    expert_cache_->FinishPrefetch(l.layer_index);
   return true;
 }
 

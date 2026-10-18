@@ -26,6 +26,10 @@ namespace gufo::models::qwen38_flash_next {
 class Model;
 }
 
+namespace gufo::storage {
+class SsdStats;
+}
+
 namespace gufo::tokenization {
 class QwenTokenizer;
 }
@@ -51,7 +55,9 @@ struct TextSpeculativeConfig {
   bool mtp_prefix_draft_vocabulary{true};
   bool prompt_lookup{false};
   double memory_budget_gb{0.0};
+  float cache_prior_bias{0.0F};
   bool ple_shelf{false};
+  bool ssd_stats{false};
 };
 
 struct TextDiskCacheConfig {
@@ -128,6 +134,7 @@ public:
   [[nodiscard]] bool supports_image_input() const override;
   [[nodiscard]] SamplingDefaults sampling_defaults() const override;
   [[nodiscard]] std::uint32_t max_context() const;
+  [[nodiscard]] std::string ssd_stats_report() const;
   [[nodiscard]] ReasoningOptions reasoning_defaults() const override;
   [[nodiscard]] InitialOutputState initial_output_state(
       const ChatRequest& request) const override;

@@ -509,6 +509,16 @@ struct TextRunnerPool::Impl {
         throw std::invalid_argument(
             "text runner does not support persistent snapshots");
       }
+      const auto write_observer = disk_cache_options->on_session_write_bytes;
+      const auto event_sink =
+          [write_observer](const ContinuationDiskEvent& event) {
+            EmitDiskEvent(event);
+            if (event.action == ContinuationDiskEventAction::kStored &&
+                event.reason == ContinuationDiskEventReason::kSaved &&
+                write_observer) {
+              write_observer(event.file_bytes);
+            }
+          };
       disk_store = std::make_shared<ContinuationDiskStore>(
           ContinuationDiskStoreOptions{
               .directory = std::move(disk_cache_options->directory),
@@ -518,7 +528,7 @@ struct TextRunnerPool::Impl {
               .min_checkpoint_step_tokens =
                   disk_cache_options->min_checkpoint_step_tokens,
           },
-          EmitDiskEvent);
+          event_sink);
       Logger::Info("cache",
                    "event=disk_cache_configured capacity_bytes=" +
                        std::to_string(disk_store->capacity_bytes()) +

@@ -42,6 +42,7 @@
 #include "src/models/qwen/hip/dflash.hpp"
 #include "src/models/qwen/hip/executor.hpp"
 #include "src/models/qwen38_flash_next/engine.hpp"
+#include "src/storage/ssd_stats.hpp"
 #endif
 
 namespace gufo::server {
@@ -2799,6 +2800,7 @@ struct InferenceBackend::Impl {
     std::uint32_t max_context{0};
     bool supports_image_input{false};
     ReasoningOptions reasoning_defaults;
+    std::shared_ptr<storage::SsdStats> ssd_stats;
   };
 
   class ScheduledGenerationRequest final : public GenerationRequest {
@@ -3013,6 +3015,8 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
         models::qwen38_flash_next::ModelOptions{
             .max_context = max_context,
             .memory_budget_gb = speculative_config.memory_budget_gb,
+            .ssd_stats = speculative_config.ssd_stats,
+            .cache_prior_bias = speculative_config.cache_prior_bias,
             .ple_shelf = speculative_config.ple_shelf,
             .mtp_model_path =
                 speculative_config.backend == TextSpeculativeBackend::kMtp
@@ -3377,6 +3381,8 @@ bool InferenceBackend::load(
   try {
     auto new_state = std::make_shared<Impl::State>();
     new_state->supports_image_input = model->VisionEncoder() != nullptr;
+    new_state->ssd_stats = model->SsdStatsHandle();
+    const auto stats = new_state->ssd_stats;
     auto runner = std::make_shared<QwenFlashNextTextRunner>(
         std::move(model), max_context,
         speculative_config.backend == TextSpeculativeBackend::kMtp,
@@ -3391,6 +3397,12 @@ bool InferenceBackend::load(
           .directory = std::move(disk_cache_config.directory),
           .capacity_bytes = disk_cache_config.capacity_bytes,
           .staging_capacity_bytes = disk_cache_config.staging_capacity_bytes,
+          .on_session_write_bytes =
+              stats ? std::function<void(std::size_t)>(
+                          [stats](std::size_t bytes) {
+                            stats->RecordSessionWrite(bytes);
+                          })
+                    : std::function<void(std::size_t)>{},
       };
     }
     auto runner_pool = std::make_shared<TextRunnerPool>(
@@ -3442,6 +3454,17 @@ std::uint32_t InferenceBackend::max_context() const {
   return state != nullptr ? state->max_context : 0;
 #else
   return 0;
+#endif
+}
+
+std::string InferenceBackend::ssd_stats_report() const {
+#if defined(ENGINE_ENABLE_HIP)
+  const auto state = impl_->Snapshot();
+  return state != nullptr && state->ssd_stats != nullptr
+             ? state->ssd_stats->Format()
+             : std::string{};
+#else
+  return {};
 #endif
 }
 

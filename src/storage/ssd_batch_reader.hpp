@@ -1,12 +1,15 @@
 #ifndef GUFO_STORAGE_SSD_BATCH_READER_HPP_
 #define GUFO_STORAGE_SSD_BATCH_READER_HPP_
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace gufo::storage {
 
@@ -21,6 +24,7 @@ struct SsdReadRequest {
   std::size_t payload_offset{0};
   std::size_t file_subpage_offset{0};
   std::size_t aligned_bytes{0};
+  std::size_t transferred_bytes{0};
   std::uint32_t system_error{0};
   bool completed{false};
   bool used_scratch{false};
@@ -28,6 +32,13 @@ struct SsdReadRequest {
   [[nodiscard]] const std::uint8_t* Payload() const noexcept {
     return static_cast<const std::uint8_t*>(destination) + payload_offset;
   }
+};
+
+struct SsdReadBatchResult {
+  std::vector<SsdReadRequest> requests;
+  std::string error;
+  std::chrono::nanoseconds elapsed{0};
+  bool success{false};
 };
 
 /// Batched direct reads into caller-owned, GPU-visible host allocations.
@@ -53,6 +64,11 @@ public:
   /// alive and unmodified until this call returns.
   [[nodiscard]] bool ReadBatch(std::span<SsdReadRequest> requests,
                                std::string* error_msg = nullptr);
+
+  /// Starts a batch on a background thread. The reader must outlive the
+  /// returned future; destination storage must remain valid until it is ready.
+  [[nodiscard]] std::future<SsdReadBatchResult> SubmitBatchAsync(
+      std::vector<SsdReadRequest> requests);
 
   [[nodiscard]] static constexpr std::size_t Alignment() noexcept {
     return 4096;

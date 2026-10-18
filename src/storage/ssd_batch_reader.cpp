@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <future>
 #include <limits>
 #include <mutex>
 #include <new>
@@ -60,6 +61,7 @@ bool PrepareRequest(SsdReadRequest& request, std::string* error_msg) {
   request.payload_offset = 0;
   request.file_subpage_offset = 0;
   request.aligned_bytes = 0;
+  request.transferred_bytes = 0;
   request.system_error = 0;
   request.completed = false;
   request.used_scratch = false;
@@ -275,6 +277,7 @@ struct SsdBatchReader::Impl {
 
   void Complete(Operation* operation, DWORD bytes, DWORD error) {
     SsdReadRequest* request = operation->request;
+    request->transferred_bytes = bytes;
     request->completed =
         bytes >= request->file_subpage_offset + request->bytes &&
         (error == ERROR_SUCCESS || error == ERROR_HANDLE_EOF);
@@ -421,6 +424,7 @@ struct SsdBatchReader::Impl {
       }
       request.system_error = error;
       request.completed = error == 0 && done >= required;
+      request.transferred_bytes = done;
       if (request.completed && job.uses_scratch) {
         std::memcpy(request.destination,
                     destination + request.file_subpage_offset, request.bytes);
@@ -506,6 +510,20 @@ SsdBatchReader& SsdBatchReader::operator=(SsdBatchReader&&) noexcept = default;
 bool SsdBatchReader::ReadBatch(std::span<SsdReadRequest> requests,
                                std::string* error_msg) {
   return impl_ != nullptr && impl_->ReadBatch(requests, error_msg);
+}
+
+std::future<SsdReadBatchResult> SsdBatchReader::SubmitBatchAsync(
+    std::vector<SsdReadRequest> requests) {
+  return std::async(
+      std::launch::async, [this, requests = std::move(requests)]() mutable {
+        SsdReadBatchResult result;
+        result.requests = std::move(requests);
+        const auto start = std::chrono::steady_clock::now();
+        result.success = ReadBatch(result.requests, &result.error);
+        result.elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start);
+        return result;
+      });
 }
 
 }  // namespace gufo::storage

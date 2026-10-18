@@ -27,6 +27,7 @@
 
 namespace gufo::storage {
 class ExpertCacheManager;
+class SsdStats;
 }
 
 namespace gufo::models::qwen38_flash_next::rocm {
@@ -193,6 +194,8 @@ public:
     /// (token ids at or above the prefix). 0 = drafts score the full head.
     std::uint32_t draft_prefix{0};
     std::vector<std::int32_t> draft_specials;
+    /// Allocate bounded lookahead router scratch when expert weights stream.
+    bool streamed_experts{false};
   };
 
   ~Executor();
@@ -204,7 +207,12 @@ public:
       const DeviceModel& model, NgramTable* ngram, Options options,
       std::string* error_msg = nullptr);
   [[nodiscard]] bool EnableExpertCache(std::size_t budget_bytes,
+                                       gufo::storage::SsdStats* stats,
+                                       float cache_prior_bias,
                                        std::string* error_msg);
+  [[nodiscard]] bool PrefetchCandidates(
+      std::span<const std::int32_t> candidate_tokens,
+      std::string* error_msg) const;
   [[nodiscard]] std::size_t ExpertCacheBytes() const noexcept;
 
   [[nodiscard]] std::unique_ptr<Session> CreateSession(
@@ -460,12 +468,14 @@ private:
                  bool project_output = true) const;
   bool Moe(const DeviceLayer& l, const float* x, float* out,
            std::uint32_t n_tokens, std::string* error_msg,
-           bool last_only = false) const;
+           bool last_only = false,
+           const float* lookahead_residual = nullptr) const;
   /// Runs routed experts after the router and shared expert are ready.
   bool MoeExperts(const DeviceLayer& l, const float* x, float* out,
                   std::uint32_t n_tokens, std::string* error_msg) const;
   bool MoeBatch(const DeviceLayer& l, const float* x, float* out,
-                std::uint32_t rows, std::string* error) const;
+                std::uint32_t rows, std::string* error,
+                const float* lookahead_residual = nullptr) const;
   [[nodiscard]] const DeviceLayer& Layer(std::uint32_t index) const noexcept;
   [[nodiscard]] bool CaptureExpertIds(const std::int32_t* ids,
                                       std::size_t count,
@@ -473,6 +483,10 @@ private:
   [[nodiscard]] bool StreamedMoeRows(const DeviceLayer& layer, const float* x,
                                      float* out, std::uint32_t rows,
                                      std::string* error_msg) const;
+  [[nodiscard]] bool LookaheadPrefetch(const DeviceLayer& layer,
+                                       const float* residual,
+                                       std::uint32_t rows,
+                                       std::string* error_msg) const;
   /// Selects the greedy token or compact candidates from the MTP logits of
   /// the full head, or of the small head when `subset`.
   bool MtpHead(const DeviceMixer& head, const float* res, bool token,
@@ -605,6 +619,13 @@ private:
   std::int32_t* expert_id_to_slot_host_{nullptr};
   std::size_t expert_ids_capacity_{0};
   hipEvent_t expert_ids_ready_{nullptr};
+  float* lookahead_norm_{nullptr};
+  float* lookahead_mixed_{nullptr};
+  float* lookahead_inject_{nullptr};
+  float* lookahead_router_{nullptr};
+  std::int32_t* lookahead_ids_{nullptr};
+  float* lookahead_weights_{nullptr};
+  std::int32_t* tokens_device_base_{nullptr};
   mutable Session::Control* batch_controls_{nullptr};
   mutable MtpCandidateLogits* batch_candidates_host_{nullptr};
   // Mapped descriptors, one slice per layer: GPU reads cannot race the host

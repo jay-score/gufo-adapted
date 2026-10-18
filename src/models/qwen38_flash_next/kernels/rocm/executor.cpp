@@ -409,6 +409,7 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
   };
   auto f32 = [&](std::size_t n) { return alloc.template operator()<float>(n); };
   s.tokens = alloc.template operator()<std::int32_t>(T);
+  e->tokens_device_base_ = s.tokens;
   s.x_half =
       alloc.template operator()<std::uint16_t>(T * model.max_half_cols());
   for (void*& slot : s.x_q8) {
@@ -496,6 +497,14 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
   s.gate_e = f32(slots * c.expert_ff);
   s.up_e = f32(slots * c.expert_ff);
   s.down_e = f32(slots * hidden);
+  if (options.streamed_experts) {
+    e->lookahead_norm_ = f32(T * hc_dim);
+    e->lookahead_mixed_ = f32(T * hidden);
+    e->lookahead_inject_ = f32(T * c.hc_count * HcInjectParts(hidden));
+    e->lookahead_router_ = f32(T * (c.num_experts + 1));
+    e->lookahead_ids_ = alloc.template operator()<std::int32_t>(slots);
+    e->lookahead_weights_ = f32(slots);
+  }
   s.shexp_gate = f32(T * c.shared_expert_ff);
   s.shexp_up = f32(T * c.shared_expert_ff);
   s.shexp_out = f32(T * hidden);
@@ -655,6 +664,8 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
 }
 
 bool Executor::EnableExpertCache(std::size_t budget_bytes,
+                                 gufo::storage::SsdStats* stats,
+                                 float cache_prior_bias,
                                  std::string* error_msg) {
   if (expert_cache_ != nullptr || budget_bytes == 0) {
     AssignError(error_msg, "expert cache is already enabled or has no budget");
@@ -694,12 +705,29 @@ bool Executor::EnableExpertCache(std::size_t budget_bytes,
   }
   expert_cache_ = gufo::storage::ExpertCacheManager::Create(
       layers, budget_bytes, config().num_experts_used, config().num_experts,
-      std::span<std::int32_t>(expert_id_to_slot_host_, map_count), error_msg);
+      std::span<std::int32_t>(expert_id_to_slot_host_, map_count), error_msg,
+      stats, cache_prior_bias);
   return expert_cache_ != nullptr;
 }
 
 std::size_t Executor::ExpertCacheBytes() const noexcept {
   return expert_cache_ != nullptr ? expert_cache_->allocated_bytes() : 0;
+}
+
+bool Executor::PrefetchCandidates(
+    std::span<const std::int32_t> candidate_tokens,
+    std::string* error_msg) const {
+  if (expert_cache_ == nullptr || candidate_tokens.empty())
+    return true;
+  const std::size_t max_prefetch =
+      std::min<std::size_t>(16, expert_cache_->slots_per_layer() / 3);
+  if (max_prefetch == 0)
+    return true;
+  const bool ok = expert_cache_->PrefetchTokenPriors(0, candidate_tokens,
+                                                     max_prefetch, error_msg);
+  if (!ok)
+    expert_cache_->FinishPrefetch(0);
+  return ok;
 }
 
 const DeviceLayer& Executor::Layer(std::uint32_t index) const noexcept {
@@ -735,7 +763,8 @@ bool Executor::StreamedMoeRows(const DeviceLayer& layer, const float* x,
   const auto& c = config();
   const std::uint32_t used = c.num_experts_used;
   const std::uint32_t rows_per_chunk =
-      expert_cache_->slots_per_layer() / std::max(used, 1u);
+      expert_cache_->demand_slots_available(layer.layer_index) /
+      std::max(used, 1u);
   if (rows_per_chunk == 0) {
     AssignError(error_msg, "expert cache cannot hold one routed token");
     return false;
@@ -751,6 +780,14 @@ bool Executor::StreamedMoeRows(const DeviceLayer& layer, const float* x,
     if (!CaptureExpertIds(s_.ids, id_count, error_msg)) {
       UseScratch(base);
       return false;
+    }
+    if (tokens_device_base_ != nullptr && tokens_host_ != nullptr) {
+      const auto token_offset =
+          static_cast<std::size_t>(s_.tokens - tokens_device_base_);
+      expert_cache_->RecordTokenRouting(
+          layer.layer_index,
+          std::span<const std::int32_t>(tokens_host_ + token_offset, count),
+          std::span<const std::int32_t>(expert_ids_host_, id_count));
     }
     if (!expert_cache_->Resolve(
             layer.layer_index,
@@ -794,6 +831,85 @@ bool Executor::StreamedMoeRows(const DeviceLayer& layer, const float* x,
       return false;
     }
   }
+  return true;
+}
+
+bool Executor::LookaheadPrefetch(const DeviceLayer& layer,
+                                 const float* residual, std::uint32_t rows,
+                                 std::string* error_msg) const {
+  if (expert_cache_ == nullptr || !layer.experts_streamed || rows == 0)
+    return true;
+  const Config& c = config();
+  const std::uint32_t first = layer.layer_index + 1;
+  if (first >= c.num_layers)
+    return true;
+  const std::size_t prefetch_limit =
+      std::min<std::size_t>(16, expert_cache_->slots_per_layer() / 3);
+  if (prefetch_limit == 0)
+    return true;
+  if (residual == nullptr || lookahead_norm_ == nullptr ||
+      lookahead_mixed_ == nullptr || lookahead_inject_ == nullptr ||
+      lookahead_router_ == nullptr || lookahead_ids_ == nullptr ||
+      lookahead_weights_ == nullptr) {
+    AssignError(error_msg, "lookahead router scratch is not allocated");
+    return false;
+  }
+
+  const Scratch base = s_;
+  const std::uint32_t base_inject_parts = inject_parts_;
+  const auto cancel_predictions = [&] {
+    for (std::uint32_t distance = 1; distance <= 2; ++distance) {
+      if (distance <= c.num_layers - first)
+        expert_cache_->FinishPrefetch(first + distance - 1);
+    }
+    UseScratch(base);
+    inject_parts_ = base_inject_parts;
+  };
+  Scratch lookahead = base;
+  lookahead.xn = lookahead_norm_;
+  lookahead.mixed = lookahead_mixed_;
+  lookahead.inject = lookahead_inject_;
+  const std::size_t id_count =
+      static_cast<std::size_t>(rows) * c.num_experts_used;
+  for (std::uint32_t distance = 1; distance <= 2; ++distance) {
+    if (distance > c.num_layers - first)
+      break;
+    const std::uint32_t target_index = first + distance - 1;
+    const DeviceLayer& target = Layer(target_index);
+    if (!target.experts_streamed || target.hc_ffn.norm.empty() ||
+        target.hc_ffn.down.empty() || target.hc_ffn.up.empty() ||
+        target.router.empty())
+      continue;
+
+    UseScratch(lookahead);
+    const bool prepared =
+        HcMix(target.hc_ffn, residual, false, s_.mixed, s_.inject, rows,
+              error_msg) &&
+        Dense(target.router, s_.mixed, lookahead_router_, rows, error_msg);
+    if (!prepared) {
+      cancel_predictions();
+      return false;
+    }
+    RouterTopK(lookahead_router_, c.num_experts + 1, lookahead_ids_,
+               lookahead_weights_, rows, c.num_experts, c.num_experts_used,
+               stream_);
+    if (!Check(hipGetLastError(), "lookahead router", error_msg) ||
+        !CaptureExpertIds(lookahead_ids_, id_count, error_msg)) {
+      cancel_predictions();
+      return false;
+    }
+    std::string prefetch_error;
+    if (!expert_cache_->Prefetch(
+            target_index,
+            std::span<const std::int32_t>(expert_ids_host_, id_count),
+            prefetch_limit, &prefetch_error)) {
+      std::clog << "expert_prefetch_skipped layer=" << target_index
+                << " reason=" << prefetch_error << '\n';
+      expert_cache_->FinishPrefetch(target_index);
+    }
+  }
+  UseScratch(base);
+  inject_parts_ = base_inject_parts;
   return true;
 }
 
@@ -1920,7 +2036,7 @@ bool Executor::Attention(const DeviceLayer& l, Session::AttentionState& s,
 
 bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
                    std::uint32_t n_tokens, std::string* error_msg,
-                   bool last_only) const {
+                   bool last_only, const float* lookahead_residual) const {
   const Config& c = config();
   const std::uint32_t used = c.num_experts_used;
   // Router logits and the shared-expert gate come out of one GEMM.
@@ -1929,6 +2045,18 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
   }
   RouterTopK(s_.router, c.num_experts + 1, s_.ids, s_.weights, n_tokens,
              c.num_experts, used, stream_);
+  if (!LookaheadPrefetch(
+          l, lookahead_residual != nullptr ? lookahead_residual : s_.res,
+          n_tokens, error_msg))
+    return false;
+  const auto cancel_future_prefetch = [&] {
+    if (expert_cache_ == nullptr)
+      return;
+    for (std::uint32_t distance = 1; distance <= 2; ++distance) {
+      if (distance < c.num_layers - l.layer_index)
+        expert_cache_->FinishPrefetch(l.layer_index + distance);
+    }
+  };
   if (ExpertMatrixRows(n_tokens)) {
     ExpertCounts(s_.ids, s_.expert_counts, n_tokens, c.num_experts, used,
                  stream_);
@@ -1938,6 +2066,7 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
                "expert counts download", error_msg) ||
         !Check(hipEventRecord(counts_ready_, stream_), "expert counts event",
                error_msg)) {
+      cancel_future_prefetch();
       return false;
     }
   }
@@ -1947,6 +2076,7 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
   shexp_half_ready_ = false;
   if (!GatedDense(l.shexp_up, l.shexp_gate, x, s_.shexp_up, n_tokens,
                   &l.shexp_down, error_msg)) {
+    cancel_future_prefetch();
     return false;
   }
   if (shexp_half_ready_) {
@@ -1954,10 +2084,12 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
     if (!DenseF16Gemm(l.shexp_down.data, s_.shexp_half, s_.shexp_out, n_tokens,
                       l.shexp_down.rows, l.shexp_down.cols, stream_)) {
       AssignError(error_msg, "shared expert F16 GEMM failed");
+      cancel_future_prefetch();
       return false;
     }
   } else if (!Dense(l.shexp_down, s_.shexp_up, s_.shexp_out, n_tokens,
                     error_msg)) {
+    cancel_future_prefetch();
     return false;
   }
   if (last_only && l.ffn_gate_exps.type == GgmlType::kQ8_0 &&
@@ -1980,7 +2112,13 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
       throw;
     }
   }
-  return MoeExperts(l, x, out, n_tokens, error_msg);
+  const bool ok = MoeExperts(l, x, out, n_tokens, error_msg);
+  if (expert_cache_ != nullptr) {
+    expert_cache_->FinishPrefetch(l.layer_index);
+    if (!ok)
+      cancel_future_prefetch();
+  }
+  return ok;
 }
 
 bool Executor::MoeExperts(const DeviceLayer& l, const float* x, float* out,
@@ -3388,7 +3526,8 @@ bool Executor::MtpBody(Session& session, std::uint32_t n, std::uint32_t pos,
       (trace && !copy_trace(s_.mixed + static_cast<std::size_t>(tail_rows - 1) *
                                            c.hidden_size,
                             trace->ffn_input)) ||
-      !Moe(l, s_.mixed, s_.block_out, tail_rows, error_msg, last_only)) {
+      !Moe(l, s_.mixed, s_.block_out, tail_rows, error_msg, last_only,
+           s_.mtp_res)) {
     return false;
   }
   Combine(s_.mtp_res, nullptr, tail_rows);
