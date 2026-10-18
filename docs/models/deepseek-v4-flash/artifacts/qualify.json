@@ -1,0 +1,187 @@
+{
+  "schema": "gufo-model-qualify/1",
+  "model": {
+    "id": "DeepSeek V4 Flash",
+    "docs": "deepseek-v4-flash",
+    "source": "deepseek_v4_flash",
+    "category": "llm"
+  },
+  "files": {
+    "gguf": "Flash 0731 mixed IQ2/Q2/Q8 target GGUF",
+    "dspark": "DSpark support GGUF"
+  },
+  "corpus": {},
+  "tools": {},
+  "triggers": [
+    {
+      "scope": "arithmetic",
+      "paths": [
+        "src/models/deepseek_v4_flash/engine",
+        "src/models/deepseek_v4_flash/runtime/",
+        "src/models/deepseek_v4_flash/kernels/",
+        "src/models/deepseek_v4_flash/dspark_sampler",
+        "src/core/quant/",
+        "src/core/hip/",
+        "src/core/speculative/"
+      ],
+      "requires": ["build", "fast", "kernels", "model"]
+    },
+    {
+      "scope": "loader",
+      "paths": [
+        "src/core/gguf",
+        "src/core/crypto",
+        "src/models/deepseek_v4_flash/engine",
+        "src/models/deepseek_v4_flash/runtime/",
+        "src/models/deepseek_v4_flash/weights"
+      ],
+      "requires": ["build", "fast", "model"]
+    },
+    {
+      "scope": "tokenizer",
+      "paths": [
+        "src/models/deepseek_v4_flash/chat_template",
+        "src/models/deepseek_v4_flash/reference/artifact_chat_template.jinja"
+      ],
+      "requires": ["build", "fast"]
+    },
+    {
+      "scope": "prefill",
+      "paths": [
+        "src/models/deepseek_v4_flash/engine",
+        "src/models/deepseek_v4_flash/runtime/",
+        "src/models/deepseek_v4_flash/kernels/"
+      ],
+      "requires": ["build", "model"]
+    },
+    {
+      "scope": "sampling",
+      "paths": [
+        "src/core/sampling",
+        "src/core/speculative/",
+        "src/models/deepseek_v4_flash/dspark_sampler"
+      ],
+      "requires": ["build", "fast", "model"]
+    },
+    {
+      "scope": "state",
+      "paths": [
+        "src/cli/serve/continuation_",
+        "src/cli/serve/text_model_runner",
+        "src/cli/serve/text_generation_scheduler",
+        "src/cli/serve/inference_backend",
+        "src/core/json.hpp",
+        "src/models/deepseek_v4_flash/engine"
+      ],
+      "requires": ["build", "model"]
+    },
+    {
+      "scope": "speculation",
+      "paths": [
+        "src/core/speculative/",
+        "src/models/deepseek_v4_flash/dspark"
+      ],
+      "requires": ["build", "fast", "model"]
+    }
+  ],
+  "profiles": {
+    "fast": ["build", "fast"],
+    "full": ["build", "fast", "kernels", "model"]
+  },
+  "checks": {
+    "build": {
+      "description": "Configure and build the gpu-test tree.",
+      "commands": [
+        {
+          "argv": [
+            "powershell",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "tools/windows/build.ps1",
+            "-Preset",
+            "gpu-test",
+            "-Jobs",
+            "4"
+          ],
+          "platforms": ["windows"],
+          "timeout": 14400
+        },
+        {
+          "argv": ["cmake", "--preset", "gpu-test"],
+          "platforms": ["linux"],
+          "timeout": 600
+        },
+        {
+          "argv": [
+            "cmake",
+            "--build",
+            "--preset",
+            "gpu-test",
+            "--parallel",
+            "4"
+          ],
+          "platforms": ["linux"],
+          "timeout": 14400
+        }
+      ]
+    },
+    "fast": {
+      "description": "CPU/CLI, template, dataset, eval and loader contracts.",
+      "commands": [
+        {
+          "argv": [
+            "ctest",
+            "--test-dir",
+            "build/gpu-test",
+            "-R",
+            "^ds4\\.(sampling|template|cli|dataset|eval|load)$",
+            "--output-on-failure",
+            "--no-tests=error"
+          ],
+          "timeout": 3600
+        }
+      ]
+    },
+    "kernels": {
+      "description": "Independent projection and attention operators.",
+      "commands": [
+        {
+          "argv": [
+            "ctest",
+            "--test-dir",
+            "build/gpu-test",
+            "-R",
+            "^ds4\\.(projections|attention)$",
+            "--output-on-failure",
+            "--no-tests=error"
+          ],
+          "timeout": 7200
+        }
+      ]
+    },
+    "model": {
+      "description": "Target, DSpark, serving and sampled-chat replay with the pinned artifacts.",
+      "commands": [
+        {
+          "argv": [
+            "ctest",
+            "--test-dir",
+            "build/gpu-test",
+            "-R",
+            "^ds4\\.(target|dspark|serving|chat)$",
+            "--output-on-failure",
+            "--no-tests=error"
+          ],
+          "env": {
+            "GUFO_DEEPSEEK_V4_FLASH_MODEL": "{file:gguf}",
+            "GUFO_DEEPSEEK_V4_FLASH_DSPARK_MODEL": "{file:dspark}"
+          },
+          "timeout": 14400
+        }
+      ]
+    }
+  },
+  "captures": {},
+  "limits": []
+}

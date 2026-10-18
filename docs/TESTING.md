@@ -188,6 +188,16 @@ inputs across runs. Require exact full-logit equality for unchanged arithmetic;
 use declared model-owned numerical limits for intentional arithmetic changes.
 Never treat a missing model, skipped check or uninvestigated mismatch as a pass.
 
+The gated workflow is
+[`qualify-inference-change`](../.agents/skills/qualify-inference-change/SKILL.md)
+with [`tools/models/qualify.py`](../tools/models/qualify.py). Model declarations
+live in `docs/models/<model>/artifacts/qualify.json`. `plan` selects the
+affected model and scopes from the diff; `record` hashes the binary,
+model/sidecar shards, corpus and config and runs one side; `compare` refuses
+mismatched inputs, missing coverage, skipped checks or differing raw rows before
+writing `qualification.json` and `qualification.md`. Use the Nix release or the
+same Windows toolchain for both sides.
+
 For Flash-Next, `gufo bench --logit-eval corpus.txt --logit-schedules "1:1:2,4,8"`
 with the appropriate model and MTP options reports perplexity for repeated decode
 and mixed verification widths. Set `--logit-out` separately for baseline and

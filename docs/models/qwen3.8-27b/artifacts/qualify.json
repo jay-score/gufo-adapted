@@ -1,0 +1,328 @@
+{
+  "schema": "gufo-model-qualify/1",
+  "model": {
+    "id": "Qwen3.8 27B",
+    "docs": "qwen3.8-27b",
+    "source": "qwen",
+    "category": "llm"
+  },
+  "files": {
+    "gguf": "target GGUF (UD-Q4_K_XL, UD-Q8_K_XL or another supported variant)",
+    "mtp": "MTP draft GGUF used by the model suite",
+    "dflash": "DFlash2 draft GGUF (Q4_K_M)",
+    "mmproj": "BF16 projector (vision checks only)",
+    "reference_model": "BF16 target GGUF for the reference suite"
+  },
+  "corpus": {},
+  "tools": {
+    "target_test": "qwen27b_target_test built by the gpu-test preset"
+  },
+  "triggers": [
+    {
+      "scope": "arithmetic",
+      "paths": [
+        "src/models/qwen/forward",
+        "src/models/qwen/generator",
+        "src/models/qwen/oracles",
+        "src/models/qwen/ssm",
+        "src/models/qwen/state",
+        "src/models/qwen/modules/",
+        "src/models/qwen/hip/",
+        "src/models/qwen/gemm_route",
+        "src/models/qwen/dflash_weights",
+        "src/models/qwen/dflash_policy",
+        "src/models/qwen/mtp_reference",
+        "src/core/quant/",
+        "src/core/hip/",
+        "src/core/speculative/"
+      ],
+      "requires": [
+        "build",
+        "fast",
+        "kernels",
+        "logits",
+        "prefill-logits",
+        "reference",
+        "model"
+      ]
+    },
+    {
+      "scope": "loader",
+      "paths": [
+        "src/core/gguf",
+        "src/core/crypto",
+        "src/models/qwen/config",
+        "src/models/qwen/weights"
+      ],
+      "requires": ["build", "fast", "logits", "prefill-logits", "reference"]
+    },
+    {
+      "scope": "tokenizer",
+      "paths": [
+        "src/models/qwen/tokenizer",
+        "src/models/qwen/chat_template"
+      ],
+      "requires": ["build", "fast", "logits", "prefill-logits"]
+    },
+    {
+      "scope": "prefill",
+      "paths": [
+        "src/models/qwen/forward",
+        "src/models/qwen/hip/attention",
+        "src/models/qwen/ssm",
+        "src/models/qwen/state"
+      ],
+      "requires": ["build", "logits", "prefill-logits", "model"]
+    },
+    {
+      "scope": "sampling",
+      "paths": [
+        "src/core/sampling",
+        "src/core/speculative/",
+        "src/models/qwen/dflash_policy",
+        "src/models/qwen/generator"
+      ],
+      "requires": ["build", "fast", "model"]
+    },
+    {
+      "scope": "state",
+      "paths": [
+        "src/cli/serve/continuation_",
+        "src/cli/serve/text_model_runner",
+        "src/cli/serve/text_generation_scheduler",
+        "src/cli/serve/inference_backend",
+        "src/core/json.hpp",
+        "src/models/qwen/state"
+      ],
+      "requires": ["build", "model", "serving"]
+    },
+    {
+      "scope": "speculation",
+      "paths": [
+        "src/core/speculative/",
+        "src/models/qwen/dflash",
+        "src/models/qwen/mtp"
+      ],
+      "requires": ["build", "fast", "logits", "prefill-logits", "model"]
+    },
+    {
+      "scope": "vision",
+      "paths": [
+        "src/models/qwen/vision",
+        "src/cli/serve/image_api"
+      ],
+      "requires": ["build", "vision"]
+    }
+  ],
+  "profiles": {
+    "fast": ["build", "fast"],
+    "full": ["build", "fast", "kernels", "model", "serving", "vision"],
+    "reference": ["build", "reference"],
+    "logits": ["logits", "prefill-logits"]
+  },
+  "checks": {
+    "build": {
+      "description": "Configure and build the gpu-test tree.",
+      "commands": [
+        {
+          "argv": [
+            "powershell",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "tools/windows/build.ps1",
+            "-Preset",
+            "gpu-test",
+            "-Jobs",
+            "4"
+          ],
+          "platforms": ["windows"],
+          "timeout": 14400
+        },
+        {
+          "argv": ["cmake", "--preset", "gpu-test"],
+          "platforms": ["linux"],
+          "timeout": 600
+        },
+        {
+          "argv": [
+            "cmake",
+            "--build",
+            "--preset",
+            "gpu-test",
+            "--parallel",
+            "4"
+          ],
+          "platforms": ["linux"],
+          "timeout": 14400
+        }
+      ]
+    },
+    "fast": {
+      "description": "Small CPU/CLI contracts plus the CPU vision fixture.",
+      "commands": [
+        {
+          "argv": [
+            "ctest",
+            "--test-dir",
+            "build/gpu-test",
+            "-R",
+            "^(logit_sampler_test|prompt_cli_test|bench_cli_test|openai_chat_test|speculative_verification_test|qwen27b_vision_test|qwen27b\\.tools|qwen27b\\.cli-options)$",
+            "--output-on-failure",
+            "--no-tests=error"
+          ],
+          "timeout": 3600
+        }
+      ]
+    },
+    "kernels": {
+      "description": "Qwen kernel oracles, including DFlash2, quantization and sampling.",
+      "commands": [
+        {
+          "argv": [
+            "ctest",
+            "--test-dir",
+            "build/gpu-test",
+            "-R",
+            "^(qwen_gpu_ops_test|qwen_ssm_ops_test|qwen_attention_kv_storage_ops_test|qwen_attention_fusion_ops_test|qwen_attention_wmma_prefill_ops_test|qwen_dflash_noncausal_attention_ops_test|qwen_prefill_quant_gemm_ops_test|qwen_q4kxl_quant_ops_test|qwen_quant_gemv_ops_test|qwen_sampling_hip_test|speculative_verification_test)$",
+            "--output-on-failure",
+            "--no-tests=error"
+          ],
+          "timeout": 7200
+        },
+        {
+          "argv": ["tools/bench/build.sh", "tools/qwen27b/deltanet_bench.hip"],
+          "platforms": ["linux"],
+          "optional": true,
+          "timeout": 1200
+        },
+        {
+          "argv": ["/tmp/deltanet_bench", "1", "1"],
+          "platforms": ["linux"],
+          "optional": true,
+          "timeout": 1800
+        },
+        {
+          "argv": ["/tmp/deltanet_bench", "8", "1"],
+          "platforms": ["linux"],
+          "optional": true,
+          "timeout": 1800
+        }
+      ]
+    },
+    "model": {
+      "description": "Target, MTP and DFlash2 replay with the documented artifacts.",
+      "commands": [
+        {
+          "argv": [
+            "ctest",
+            "--test-dir",
+            "build/gpu-test",
+            "-R",
+            "^(qwen27b_target_test|qwen_mtp_gpu_test|qwen_dflash_gpu_test|qwen27b\\.cli)$",
+            "--output-on-failure",
+            "--no-tests=error"
+          ],
+          "env": {
+            "GUFO_QWEN27B_MODEL": "{file:gguf}",
+            "GUFO_QWEN27B_MTP_MODEL": "{file:mtp}",
+            "GUFO_QWEN27B_DFLASH_MODEL": "{file:dflash}"
+          },
+          "timeout": 14400
+        }
+      ]
+    },
+    "serving": {
+      "description": "HTTP serving, continuation, cancellation and replay.",
+      "commands": [
+        {
+          "argv": [
+            "ctest",
+            "--test-dir",
+            "build/gpu-test",
+            "-R",
+            "^inference_backend_gpu_test$",
+            "--output-on-failure",
+            "--no-tests=error"
+          ],
+          "env": {
+            "GUFO_QWEN27B_MODEL": "{file:gguf}",
+            "GUFO_QWEN27B_DFLASH_MODEL": "{file:dflash}"
+          },
+          "timeout": 7200
+        }
+      ]
+    },
+    "reference": {
+      "description": "Target logits against the explicitly supplied BF16 artifact.",
+      "commands": [
+        {
+          "argv": [
+            "{tool:target_test}",
+            "{file:gguf}",
+            "{file:reference_model}"
+          ],
+          "timeout": 14400
+        }
+      ]
+    },
+    "vision": {
+      "description": "Projector preparation and image serving/replay checks.",
+      "commands": [
+        {
+          "argv": [
+            "{test:qwen_vision_prepare_test}",
+            "{file:mmproj}"
+          ],
+          "timeout": 3600
+        },
+        {
+          "argv": [
+            "{test:qwen_vision_serving_test}",
+            "{file:gguf}",
+            "{file:dflash}",
+            "{env:QUALIFY_IMAGE_DIR}"
+          ],
+          "timeout": 7200
+        }
+      ]
+    }
+  },
+  "captures": {
+    "logits": {
+      "description": "Complete FP32 next-token rows for the fixed short histories.",
+      "baseline": true,
+      "commands": [
+        {
+          "argv": [
+            "{tool:target_test}",
+            "{file:gguf}",
+            "--capture-logits",
+            "{out}/logits.bin"
+          ],
+          "timeout": 7200
+        }
+      ],
+      "outputs": ["{out}/logits.bin"],
+      "compare": "file-sha256"
+    },
+    "prefill-logits": {
+      "description": "Complete rows after 8/9/64/95/96/129/2048-token prefixes and continuations.",
+      "baseline": true,
+      "commands": [
+        {
+          "argv": [
+            "{tool:target_test}",
+            "{file:gguf}",
+            "--capture-prefill-logits",
+            "{out}/prefill.bin"
+          ],
+          "timeout": 7200
+        }
+      ],
+      "outputs": ["{out}/prefill.bin"],
+      "compare": "file-sha256"
+    }
+  },
+  "limits": []
+}

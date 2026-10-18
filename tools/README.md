@@ -11,6 +11,7 @@ benchmark/tuning executables; Python tools run from this source tree.
 | `bench/` | Kernel microbenchmarks, hipBLASLt tuning, and direct speculative-corpus checks; `model-bench.py` drives per-model BENCHMARKS.md tables against each model's reference |
 | `prof/` | rocprofv3 capture, stage summaries, and ISA inspection |
 | `serving/` | HTTP benchmarks, interrupted-chat/disk replay and official OpenAI SDK checks |
+| `models/` | Per-model qualification entry point (`qualify.py`): plan affected scopes, record baseline/candidate provenance, compare matched-token logits and declared limits, and render evidence |
 | `ds4/` | DeepSeek-specific validation and experiments |
 | `qwen27b/` | Qwen27B/DFlash2 kernels, reference checks, and vision validation |
 | `qwen-flash/` | Flash-Next projection and MoE microbenchmarks |
@@ -19,7 +20,7 @@ benchmark/tuning executables; Python tools run from this source tree.
 | `ci/` | Repository, dependency, and documentation checks |
 | [`upstream-sync.py`](upstream-sync.py) | Official upstream review report and isolated worktree preparation; [fix-first workflow](../docs/UPSTREAM_SYNC.md) |
 | [`gui/`](gui/README.md) | Optional local web launcher: model files, saved settings, process controls and logs |
-| `gufo/` | Shared Python helpers and model-specific reference implementations |
+| `gufo/` | Shared Python helpers, the `qualify/` workflow package, and model-specific reference implementations |
 
 `gufo/gguf.py` reads metadata and decodes existing GGUF tensors for independent
 Qwen reference tests. `gufo/safetensors.py` validates source snapshots used by

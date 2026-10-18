@@ -1,0 +1,341 @@
+{
+  "schema": "gufo-model-qualify/1",
+  "model": {
+    "id": "Qwen3.8-Flash-Next",
+    "docs": "qwen3.8-flash-next",
+    "source": "qwen38_flash_next",
+    "category": "llm"
+  },
+  "files": {
+    "gguf": "first shard of the UD-Q4_K_XL GGUF; sibling shards are discovered and hashed",
+    "mtp": "shared Q8_0 MTP sidecar",
+    "mmproj": "BF16 projector (vision checks only)"
+  },
+  "corpus": {
+    "logits": "artifacts/host-snapshot-corpus.txt"
+  },
+  "tools": {
+    "session_test": "qwen38_flash_next_session_test built by the gpu-test preset"
+  },
+  "triggers": [
+    {
+      "scope": "arithmetic",
+      "paths": [
+        "src/models/qwen38_flash_next/engine",
+        "src/models/qwen38_flash_next/kernels/",
+        "src/models/qwen38_flash_next/hip/",
+        "src/models/qwen38_flash_next/modules/",
+        "src/models/qwen38_flash_next/cpu_ops",
+        "src/models/qwen38_flash_next/reference",
+        "src/models/qwen38_flash_next/mtp_",
+        "src/models/qwen38_flash_next/ngram",
+        "src/models/qwen38_flash_next/prompt_lookup",
+        "src/models/qwen38_flash_next/draft_vocab",
+        "src/core/quant/",
+        "src/core/hip/",
+        "src/core/speculative/"
+      ],
+      "requires": ["build", "fast", "kernels", "logits", "prefill-logits", "state"]
+    },
+    {
+      "scope": "loader",
+      "paths": [
+        "src/core/gguf",
+        "src/core/crypto",
+        "src/models/qwen38_flash_next/config",
+        "src/models/qwen38_flash_next/weights",
+        "src/models/qwen38_flash_next/engine"
+      ],
+      "requires": ["build", "fast", "logits"]
+    },
+    {
+      "scope": "tokenizer",
+      "paths": [
+        "src/models/qwen/tokenizer",
+        "src/models/qwen/chat_template"
+      ],
+      "requires": ["build", "fast", "logits", "prefill-logits"]
+    },
+    {
+      "scope": "prefill",
+      "paths": [
+        "src/models/qwen38_flash_next/engine",
+        "src/models/qwen38_flash_next/kernels/rocm/executor",
+        "src/models/qwen38_flash_next/ngram",
+        "src/models/qwen38_flash_next/prompt_lookup"
+      ],
+      "requires": ["build", "logits", "prefill-logits", "state"]
+    },
+    {
+      "scope": "sampling",
+      "paths": [
+        "src/core/sampling",
+        "src/core/speculative/",
+        "src/models/qwen38_flash_next/mtp_sampling",
+        "src/models/qwen38_flash_next/mtp_policy",
+        "src/models/qwen38_flash_next/cpu_ops"
+      ],
+      "requires": ["build", "fast", "state"]
+    },
+    {
+      "scope": "state",
+      "paths": [
+        "src/cli/serve/continuation_",
+        "src/cli/serve/text_model_runner",
+        "src/cli/serve/text_generation_scheduler",
+        "src/cli/serve/inference_backend",
+        "src/core/json.hpp",
+        "src/models/qwen38_flash_next/engine",
+        "src/models/qwen38_flash_next/kernels/rocm/executor"
+      ],
+      "requires": ["build", "state"]
+    },
+    {
+      "scope": "speculation",
+      "paths": [
+        "src/core/speculative/",
+        "src/models/qwen38_flash_next/mtp_",
+        "src/models/qwen38_flash_next/ngram",
+        "src/models/qwen38_flash_next/prompt_lookup"
+      ],
+      "requires": ["build", "fast", "logits", "prefill-logits", "state"]
+    },
+    {
+      "scope": "vision",
+      "paths": [
+        "src/models/qwen38_flash_next/vision",
+        "src/models/qwen/vision",
+        "src/cli/serve/image_api"
+      ],
+      "requires": ["build", "vision"]
+    }
+  ],
+  "profiles": {
+    "fast": ["build", "fast"],
+    "full": ["build", "fast", "kernels", "state", "vision"],
+    "logits": ["logits", "prefill-logits"]
+  },
+  "checks": {
+    "build": {
+      "description": "Configure and build the gpu-test tree, then the explicit model-test targets.",
+      "commands": [
+        {
+          "argv": [
+            "powershell",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "tools/windows/build.ps1",
+            "-Preset",
+            "gpu-test",
+            "-Jobs",
+            "4"
+          ],
+          "platforms": ["windows"],
+          "timeout": 14400
+        },
+        {
+          "argv": [
+            "powershell",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "tools/windows/build.ps1",
+            "-Preset",
+            "gpu-test",
+            "-Target",
+            "qwen38_flash_next_model_tests",
+            "-Jobs",
+            "4"
+          ],
+          "platforms": ["windows"],
+          "timeout": 14400
+        },
+        {
+          "argv": ["cmake", "--preset", "gpu-test"],
+          "platforms": ["linux"],
+          "timeout": 600
+        },
+        {
+          "argv": [
+            "cmake",
+            "--build",
+            "--preset",
+            "gpu-test",
+            "--parallel",
+            "4"
+          ],
+          "platforms": ["linux"],
+          "timeout": 14400
+        },
+        {
+          "argv": [
+            "cmake",
+            "--build",
+            "--preset",
+            "gpu-test",
+            "--target",
+            "qwen38_flash_next_model_tests",
+            "--parallel",
+            "4"
+          ],
+          "platforms": ["linux"],
+          "timeout": 14400
+        }
+      ]
+    },
+    "fast": {
+      "description": "Model-owned CPU contracts; no model files required.",
+      "commands": [
+        {
+          "argv": [
+            "ctest",
+            "--test-dir",
+            "build/gpu-test",
+            "-R",
+            "^qwen38_flash_next\\.(config|ngram|mtp_sampling|prompt_lookup)$",
+            "--output-on-failure",
+            "--no-tests=error"
+          ],
+          "timeout": 1800
+        }
+      ]
+    },
+    "kernels": {
+      "description": "GPU operator contracts for the Flash-Next kernel families.",
+      "commands": [
+        {
+          "argv": [
+            "ctest",
+            "--test-dir",
+            "build/gpu-test",
+            "-R",
+            "^qwen38_flash_next\\.(mtp_ops|blaslt_ops|hc_mix_ops|gdn_ops|attention_ops|moe_epilogue_ops|moe_ids_ops|projection_ops|routed_wmma_ops|iq_experts_ops|select_ops)$",
+            "--output-on-failure",
+            "--no-tests=error"
+          ],
+          "timeout": 7200
+        }
+      ]
+    },
+    "state": {
+      "description": "Session, snapshot, rollback and EOS replay with the target and MTP sidecar.",
+      "commands": [
+        {
+          "argv": [
+            "{test:qwen38_flash_next_session_test}",
+            "--model",
+            "{file:gguf}",
+            "--mtp-model",
+            "{file:mtp}"
+          ],
+          "timeout": 14400
+        },
+        {
+          "argv": [
+            "{test:qwen38_flash_next_rollback_test}",
+            "--model",
+            "{file:gguf}",
+            "--mtp-model",
+            "{file:mtp}"
+          ],
+          "timeout": 7200
+        },
+        {
+          "argv": [
+            "{test:qwen38_flash_next_snapshot_test}",
+            "--model",
+            "{file:gguf}",
+            "--mtp-model",
+            "{file:mtp}"
+          ],
+          "timeout": 7200
+        },
+        {
+          "argv": [
+            "{test:qwen38_flash_next_eos_test}",
+            "--model",
+            "{file:gguf}",
+            "--mtp-model",
+            "{file:mtp}"
+          ],
+          "timeout": 7200
+        }
+      ]
+    },
+    "vision": {
+      "description": "Image-prefix cache parity with the BF16 projector and two screenshots.",
+      "commands": [
+        {
+          "argv": [
+            "{test:qwen38_flash_next_image_prefix_test}",
+            "{file:gguf}",
+            "{file:mtp}",
+            "{file:mmproj}",
+            "{env:QUALIFY_IMAGE_A}",
+            "{env:QUALIFY_IMAGE_B}"
+          ],
+          "timeout": 7200
+        }
+      ]
+    }
+  },
+  "captures": {
+    "logits": {
+      "description": "Teacher-forced full-row logit hashes through decode, verify and prefill schedules.",
+      "baseline": true,
+      "commands": [
+        {
+          "argv": [
+            "{gufo}",
+            "bench",
+            "--model",
+            "{file:gguf}",
+            "--mtp-model",
+            "{file:mtp}",
+            "--speculative",
+            "mtp",
+            "--temperature",
+            "0",
+            "--seed",
+            "459",
+            "--logit-eval",
+            "{corpus:logits}",
+            "--logit-out",
+            "{out}/logits",
+            "--logit-schedules",
+            "1:2,4,8:p8"
+          ],
+          "timeout": 7200
+        }
+      ],
+      "outputs": [
+        "{out}/logits-s0.bin.sha256",
+        "{out}/logits-s1.bin.sha256",
+        "{out}/logits-s2.bin.sha256"
+      ],
+      "compare": "logit-sha256"
+    },
+    "prefill-logits": {
+      "description": "Complete raw-logit rows after normal prefill through 32K (session test).",
+      "baseline": true,
+      "commands": [
+        {
+          "argv": [
+            "{tool:session_test}",
+            "--model",
+            "{file:gguf}",
+            "--mtp-model",
+            "{file:mtp}",
+            "--capture-prefill-logits",
+            "{out}/prefill.bin"
+          ],
+          "timeout": 14400
+        }
+      ],
+      "outputs": ["{out}/prefill.bin"],
+      "compare": "file-sha256"
+    }
+  },
+  "limits": []
+}

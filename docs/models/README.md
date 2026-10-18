@@ -22,6 +22,9 @@ Each model folder contains:
 - `QUALITY.md`: measured quality, reference/scope, replay guarantees and unresolved gaps.
 - `EXPERIMENTS.md`: short retained/rejected decisions.
 - `artifacts/`: only useful machine-readable results/calibration, when present.
+  Text models also declare their inference-qualification gate in
+  `artifacts/qualify.json`; see the
+  [qualification workflow](../../.agents/skills/qualify-inference-change/SKILL.md).
 
 Keep executable fixtures with their tests. New logit/trace dumps and local
 profiles belong in ignored top-level `artifacts/`; commit only independent
