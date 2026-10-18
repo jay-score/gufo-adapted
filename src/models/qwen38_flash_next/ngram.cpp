@@ -6,10 +6,12 @@
 #include <algorithm>
 #include <bit>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <unordered_map>
 
 #include "src/core/quant/ggml_dequant.hpp"
+#include "src/storage/ssd_stats.hpp"
 
 namespace gufo::models::qwen38_flash_next {
 namespace {
@@ -77,7 +79,7 @@ NgramTable::~NgramTable() {
 std::unique_ptr<NgramTable> NgramTable::Open(
     int file_descriptor, std::uint64_t file_offset, std::uint64_t rows,
     std::uint32_t row_dim, core::GgmlType type, std::string* error_msg,
-    std::size_t cache_bytes) {
+    std::size_t cache_bytes, storage::SsdStats* stats) {
   std::unique_ptr<NgramTable> t(new NgramTable());
   const std::size_t block = type == core::GgmlType::kIQ4_NL ? 32 : 1;
   const std::size_t block_bytes = type == core::GgmlType::kIQ4_NL ? 18 : 2;
@@ -89,6 +91,7 @@ std::unique_ptr<NgramTable> NgramTable::Open(
     return nullptr;
   }
   t->type_ = type;
+  t->stats_ = stats;
   t->row_dim_ = row_dim;
   t->row_bytes_ = row_dim / block * block_bytes;
   const auto effective_cache_bytes =
@@ -179,8 +182,12 @@ bool NgramTable::ReadOne(std::uint32_t row, float* dst,
     return false;
   }
   if (ReadCached(row, dst)) {
+    if (stats_ != nullptr)
+      stats_->RecordPleLookup(true);
     return true;
   }
+  if (stats_ != nullptr)
+    stats_->RecordPleLookup(false);
   const std::uint64_t offset = base_offset_ + row * row_bytes_;
   const std::uint64_t begin = direct_ ? offset & ~(kPage - 1) : offset;
   const std::uint64_t end =
@@ -215,6 +222,8 @@ bool NgramTable::ReadOne(std::uint32_t row, float* dst,
     }
     got += static_cast<std::size_t>(n);
   }
+  if (stats_ != nullptr)
+    stats_->RecordStorageBytes(got);
   // Cache only a complete row, still in its original quantized format.
   // A busy slot is skipped; readers never wait for another row's I/O.
   if (entry != nullptr &&
@@ -292,14 +301,19 @@ bool NgramTable::StartRead(std::span<const std::uint32_t> rows,
   } else {
     // Small cached gathers avoid waking the I/O pool for every decode
     // token. Large prefills still parallelize their row conversions.
-    std::erase_if(
-        jobs_, [this](const Job& job) { return ReadCached(job.row, job.dst); });
+    std::erase_if(jobs_, [this](const Job& job) {
+      const bool hit = ReadCached(job.row, job.dst);
+      if (hit && stats_ != nullptr)
+        stats_->RecordPleLookup(true);
+      return hit;
+    });
   }
   next_job_ = 0;
   pending_ = jobs_.size();
   failed_ = false;
   active_ = true;
   if (pending_ != 0) {
+    read_started_ = std::chrono::steady_clock::now();
     wake_.notify_all();
   }
   return true;
@@ -311,6 +325,11 @@ bool NgramTable::WaitRead() {
     return false;
   }
   done_.wait(lock, [&] { return pending_ == 0; });
+  const auto read_elapsed = std::chrono::steady_clock::now() - read_started_;
+  if (stats_ != nullptr && !jobs_.empty()) {
+    stats_->RecordStorageElapsed(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(read_elapsed));
+  }
   if (!failed_) {
     for (const Copy& copy : copies_) {
       std::copy_n(copy.src, row_dim_, copy.dst);

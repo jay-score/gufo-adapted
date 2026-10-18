@@ -20,6 +20,7 @@
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
 #include "src/models/qwen38_flash_next/ngram.hpp"
 #include "src/models/qwen38_flash_next/weights.hpp"
+#include "src/storage/ssd_stats.hpp"
 
 namespace gufo::models::qwen38_flash_next {
 namespace {
@@ -81,6 +82,11 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
                 "memory budget must be a finite, non-negative GiB value");
     return nullptr;
   }
+  if (!std::isfinite(options.cache_prior_bias) ||
+      options.cache_prior_bias < 0.0F) {
+    AssignError(error_msg, "cache prior bias must be finite and non-negative");
+    return nullptr;
+  }
   if (options.max_draft_tokens == 0) {
     AssignError(error_msg, "draft token limit must be positive");
     return nullptr;
@@ -92,6 +98,8 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     return nullptr;
   }
   m->options_ = options;
+  if (options.ssd_stats)
+    m->ssd_stats_ = std::make_shared<storage::SsdStats>();
   m->reader_ = core::GgufReader::OpenFile(model_path, error_msg);
   if (!m->reader_) {
     return nullptr;
@@ -124,7 +132,7 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     m->ngram_ = NgramTable::Open(
         m->reader_->GetMappedRegions()[t.shard].file_descriptor, t.file_offset,
         t.rows, c.ple_head_dim, t.type, error_msg,
-        options.ple_shelf ? kPleShelfBytes : 0);
+        options.ple_shelf ? kPleShelfBytes : 0, m->ssd_stats_.get());
     if (!m->ngram_) {
       return nullptr;
     }
@@ -149,6 +157,7 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
   }
   rocm::Executor::Options exec;
   exec.max_batch = m->PrefillCapacity();
+  exec.streamed_experts = options.memory_budget_gb > 0.0;
   exec.max_logit_rows =
       m->mtp_weights_
           ? static_cast<std::uint32_t>(std::min<std::uint64_t>(
@@ -210,8 +219,14 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     }
     m->memory_budget_ = plan;
     std::clog << "memory_budget_plan\n" << plan.Format();
-    if (!m->executor_->EnableExpertCache(plan.expert_cache_bytes, error_msg))
+    if (!m->executor_->EnableExpertCache(plan.expert_cache_bytes,
+                                         m->ssd_stats_.get(),
+                                         options.cache_prior_bias, error_msg))
       return nullptr;
+  }
+  if (m->ssd_stats_ != nullptr) {
+    m->ssd_stats_->Start(m->memory_budget_ ? m->memory_budget_->budget_bytes
+                                           : 0);
   }
   return m;
 }
@@ -305,6 +320,10 @@ std::size_t Model::SessionBytes(core::SessionMode mode,
 
 std::size_t Model::DeferredScratchBytes() const {
   return executor_->DeferredScratchBytes();
+}
+
+std::string Model::SsdStatsReport() const {
+  return ssd_stats_ != nullptr ? ssd_stats_->Format() : std::string{};
 }
 
 std::size_t Session::AllocatedBytes() const noexcept {
@@ -1055,6 +1074,14 @@ bool Session::PrepareDecode(const DecodeRequest& request,
         return false;
       }
     }
+    if (pending->speculative) {
+      std::string prefetch_error;
+      if (!exec.PrefetchCandidates(pending->chain, &prefetch_error) &&
+          !prefetch_error.empty()) {
+        std::clog << "expert_prefetch_skipped layer=0 reason=" << prefetch_error
+                  << '\n';
+      }
+    }
   }
   return true;
 }
@@ -1473,6 +1500,20 @@ bool Session::DecodeBatchImpl(std::span<const DecodeRequest> requests,
     }
     if (!bodies.empty() && !exec.MtpForwardBatch(bodies, error_msg))
       return false;
+  }
+  std::vector<std::int32_t> candidate_tokens;
+  for (std::size_t i = 0; i < requests.size(); ++i) {
+    if (!requests[i].session->session_->Cancelled() && pending[i].speculative)
+      candidate_tokens.insert(candidate_tokens.end(), pending[i].chain.begin(),
+                              pending[i].chain.end());
+  }
+  if (!candidate_tokens.empty()) {
+    std::string prefetch_error;
+    if (!exec.PrefetchCandidates(candidate_tokens, &prefetch_error) &&
+        !prefetch_error.empty()) {
+      std::clog << "expert_prefetch_skipped layer=0 reason=" << prefetch_error
+                << '\n';
+    }
   }
   std::vector<rocm::Executor::BatchItem> items;
   for (std::size_t i = 0; i < requests.size(); ++i) {

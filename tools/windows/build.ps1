@@ -68,6 +68,7 @@ cmd /c "`"$vcvars`" >nul && set" | ForEach-Object {
 if ($LASTEXITCODE -ne 0) { throw "Visual Studio environment setup failed (exit $LASTEXITCODE): $vcvars" }
 
 $env:HIP_PATH = $Rocm.Replace('\', '/')
+$env:ROCM_PATH = $Rocm.Replace('\', '/')
 $env:HIP_DEVICE_LIB_PATH = "$Rocm/lib/llvm/amdgcn/bitcode".Replace('\', '/')
 $env:PATH = "$Rocm\bin;$Rocm\lib\llvm\bin;$(Split-Path $Ninja);$env:PATH"
 $clang = "$Rocm\lib\llvm\bin\clang.exe".Replace('\', '/')

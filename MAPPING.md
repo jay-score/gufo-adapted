@@ -161,11 +161,81 @@ The budget's fixed scratch reservation includes the Executor's preallocated GPU 
 
 **[VERIFIED IN TARGET] Focused validation:** `expert_cache_manager_test`, `ssd_batch_reader_test`, `memory_budget_planner_test`, `qwen38_flash_next.ngram`, `qwen38_flash_next.iq_experts_ops`, `qwen38_flash_next.moe_ids_ops`, and `qwen38_flash_next.moe_epilogue_ops` passed. The reader fixture exercised 64 concurrent unaligned payloads and compared every payload byte plus HIP checksums; the cache fixture checked every byte in selected packed slots, pin/release behavior, and LRU slot indirection. `gufo_qwen38_flash_next` and the full `gufo` executable compiled and linked. At the time of this validation, post-build OpenMP runtime staging failed; see the Windows build follow-up below.
 
-**[VERIFIED IN TARGET] 32 GiB smoke run:** Swift-1.5 IQ4_XS, the shared Q8_0 MTP sidecar, `--speculative mtp`, greedy sampling, an 8-token output limit, and a short prompt. The startup plan reported 4.996 GiB backbone, 2.583 GiB drafter, 0.006 GiB PLE shelf, 0.384 GiB KV/state, 2.781 GiB Executor scratch, and 21.251 GiB expert cache (60.938 GiB total routed expert weights); fixed allocations fit within 32 GiB. Model load completed in 41.10 s. Generation completed successfully at 7.98 tok/s for this short smoke workload, with token-trace SHA-256 `adc0dfc7fd45c5d4daaa9e0db1aa50fa3e997c3a96110e3b136f833200382aa4` and exit code 0. This verifies model load and a basic MTP generation path, not a performance result.
+**[VERIFIED IN TARGET] 32 GiB smoke run:** Swift-1.5 IQ4_XS, the shared Q8_0 MTP sidecar, `--speculative mtp`, greedy sampling, an 8-token output limit, and prompt `Reply with exactly OK.`. The startup plan reported 4.996 GiB backbone, 2.583 GiB drafter, 0.006 GiB PLE shelf, 0.384 GiB KV/state, 2.781 GiB Executor scratch, and 21.251 GiB expert cache (60.938 GiB total routed expert weights); fixed allocations fit within 32 GiB. The exact deterministic command uses `--raw --speculative mtp --mtp-model <shared-Q8_0-sidecar> --max-tokens 8 --seed 459`; the output trace is `434d749ab5504962fdc020206a41ab2c427b8c6b7f1e459d2e4c9228933f97d7`. The trace was reproduced on the Phase 3 baseline and Phase 4 at 32 GiB and 20 GiB. The previously recorded `adc0dfc7…` value was from an invocation whose exact flags were not retained and is superseded by this reproducible baseline/candidate comparison. This verifies output consistency and a basic MTP generation path, not a performance result.
 
-A repeat at a 14 GiB budget left 3.251 GiB for the expert cache, loaded in 34.51 s, and generated the same eight tokens with the identical token-trace SHA-256 (exit code 0). This checks output stability under a substantially smaller cache allocation and its more constrained prefill chunking; it is not a substitute for a pre-change matched-logit baseline.
+A prior 14 GiB run left 3.251 GiB for the expert cache and loaded in 34.51 s, but its exact command was not retained. Do not use its historical trace as the canonical Phase 3/Phase 4 comparison; the reproducible 8-token command and trace are recorded above.
 
 **[QUALITY VALIDATION PENDING]** No matched-token full-logit/perplexity comparison has been run for the Swift-1.5 artifact against a pre-change baseline. The successful generation and focused kernel/cache tests do not replace that check. Linux build/runtime validation also remains outstanding.
+
+### Phase 4 synchronous Phase 3 baseline (2026-10-18)
+
+**[VERIFIED IN TARGET]** Before enabling asynchronous prefetch, ran the telemetry-enabled synchronous Phase 3 binary on Windows/gfx1151 with the Swift-1.5 IQ4_XS target and shared Q8_0 MTP sidecar. The deterministic prompt is passed raw and tokenized to exactly 64 tokens by the artifact tokenizer:
+
+```text
+The quick brown fox jumps over the lazy dog. Strix Halo executes this deterministic benchmark sequence. [repeat three times] Reply with exactly OK.! More
+```
+
+Both runs use greedy decoding, seed 459, MTP, 64 generated-token maximum, `--ssd-stats`, and the same prompt. The Windows command environment explicitly sets `HIP_PATH` and `ROCM_PATH` to TheRock 10.0.0 and prepends its `bin` directory to `PATH`.
+
+| Budget | Load (s) | Prefill (tok/s) | Decode (tok/s) | Peak working set (GiB) | OS swap delta (MiB) | Expert requests | Cache hit % | Prefetched-in-time % | Hard stall % / ms | PLE hit % | SSD bytes read | NVMe GiB/s | Session bytes written | 64-token output trace SHA-256 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 32 GiB | 38.31 | 6.17 | 6.65 | 35.823 | +793.762 | 35,316 | 71.064 | 0.000 | 28.936 / 11,974.781 | 13.930 | 27,331,212,944 | 1.681 | 0 | `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d` |
+| 20 GiB | 36.14 | 4.99 | 4.49 | 23.766 | +557.680 | 40,991 | 57.213 | 0.000 | 42.787 / 19,477.911 | 13.930 | 46,908,909,200 | 2.221 | 0 | `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d` |
+
+These are short, single-request synchronous baselines for the requested 64-token prompt, not production pp2048/tg128 performance results. The peak working set is an OS process measurement and can exceed the configured device-memory budget; it is reported separately from the Gufo planner reservation. “Hard stall %” is the share of unique expert requests that required a blocking read. The separate 8-token smoke prompt has trace hash `434d749a…`. Token hashes are output-consistency checks, not full-logit/perplexity equivalence.
+
+### Phase 4 asynchronous lookahead results and trace equivalence (2026-10-18)
+
+**[VERIFIED IN TARGET]** Repeated the same raw 64-token prompt, Swift-1.5 IQ4_XS model, shared Q8_0 MTP sidecar, greedy sampling, and seed 459 with asynchronous Stage A/Stage B prefetch enabled. Both synchronous and asynchronous measurement runs used `--ssd-stats --verbose`; Phase 4 explicitly set `--cache-prior-bias 0`, which matches the synchronous default. The no-I/O arithmetic path remains unchanged. Both generated-output traces match the Phase 3 baseline at 32 GiB and 20 GiB.
+
+| Budget | Phase | Load (s) | Prefill (tok/s) | Decode (tok/s) | Peak working set (GiB) | OS swap delta (MiB) | Expert requests | Cache hit % | Resident hits | Prefetch requests | Prefetched in time % / hits | Late waits | Cold misses | Hard stall % / ms | PLE hit % | SSD bytes read | NVMe GiB/s | Session bytes written | 64-token trace SHA-256 |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 32 GiB | Phase 3 synchronous | 38.31 | 6.17 | 6.65 | 35.823 | +793.762 | 35,316 | 71.064 | — | 0 | 0.000% / 0 | 0 | — | 28.936 / 11,974.781 | 13.930 | 27,331,212,944 | 1.681 | 0 | `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d` |
+| 32 GiB | Phase 4 async | 16.69 | 7.83 | 10.04 | 35.872 | +609.742 | 35,365 | 75.555 | 25,214 | 1,952 | 77.152% / 1,506 | 35 | 8,610 | 24.445 / 10,031.927 | 13.930 | 28,248,573,584 | 1.752 | 0 | `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d` |
+| 20 GiB | Phase 3 synchronous | 36.14 | 4.99 | 4.49 | 23.766 | +557.680 | 40,991 | 57.213 | — | 0 | 0.000% / 0 | 0 | — | 42.787 / 19,477.911 | 13.930 | 46,908,909,200 | 2.221 | 0 | `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d` |
+| 20 GiB | Phase 4 async | 13.75 | 6.22 | 5.57 | 23.895 | +170.090 | 42,386 | 64.977 | 24,672 | 3,829 | 74.928% / 2,869 | 105 | 14,740 | 35.023 / 17,417.259 | 13.930 | 49,663,649,424 | 1.740 | 0 | `c71e47bb7dccaf37a42ddba0ceda952bdaf95f41f17db02a8c43fff697ebc20d` |
+
+The final 8-token Phase 3/Phase 4 trace is `434d749ab5504962fdc020206a41ab2c427b8c6b7f1e459d2e4c9228933f97d7` for the exact prompt `Reply with exactly OK.` and seed 459. The 64-token trace is the `c71e47bb…` value shown above. For both checks, the canonical Gufo draft option is `--mtp-model` (not `--draft-model`). The model and sidecar used were:
+
+```powershell
+$model = 'C:\Users\danie\AppData\Local\Gufo\models\swift-1.5-qwen38-flash-next-iq4-xs\IQ4_XS\Swift-1.5-Qwen3.8-Flash-Next-IQ4_XS-00001-of-00003.gguf'
+$mtp = 'C:\Users\danie\.cache\huggingface\hub\models--unsloth--Qwen3.8-Flash-Next-GGUF\snapshots\38bb39ee97821de2c9009abb7e93950eec396e66\MTP\mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf'
+$short = 'Reply with exactly OK.'
+$long = 'The quick brown fox jumps over the lazy dog. Strix Halo executes this deterministic benchmark sequence. The quick brown fox jumps over the lazy dog. Strix Halo executes this deterministic benchmark sequence. The quick brown fox jumps over the lazy dog. Strix Halo executes this deterministic benchmark sequence. Reply with exactly OK.! More'
+
+# Substitute --memory-budget-gb 20 for 32 to repeat at the smaller budget.
+build\gpu-test\gufo.exe prompt --model $model --raw --speculative mtp --mtp-model $mtp `
+  --memory-budget-gb 32 --verbose --max-tokens 8 --seed 459 --prompt $short
+build\gpu-test\gufo.exe prompt --model $model --raw --speculative mtp --mtp-model $mtp `
+  --memory-budget-gb 32 --cache-prior-bias 0 --ssd-stats --verbose `
+  --max-tokens 64 --seed 459 --prompt $long
+```
+
+The 8-token run was repeated with `--ssd-stats`; the trace was unchanged. The Phase 4 64-token benchmark table reports the telemetry-enabled runs; their SSD reads use Windows `FILE_FLAG_NO_BUFFERING`, so those expert transfers bypass the Windows OS page cache. Phase 4 may read extra speculative bytes when lookahead experts are not selected by the true next-layer router; this is expected background I/O, traded for reduced synchronous stall time. These short single-request results are not production pp2048/tg128 measurements, and token hashes do not replace matched-logit/perplexity validation.
+
+### Phase 4 validation status (2026-10-18)
+
+**Focused tests:** 7/7 passed: `ssd_stats_test`, `expert_cache_manager_test`, `ssd_batch_reader_test`, `qwen38_flash_next.ngram`, `qwen38_flash_next.moe_epilogue_ops`, `qwen38_flash_next.moe_ids_ops`, and `qwen38_flash_next.iq_experts_ops`.
+
+**Full GPU selection:** 75 tests were selected; 45 passed, 28 were skipped because optional model artifacts were absent, and 2 failed (73/75 did not fail). The two failures were `minimax_h3_dit_analytic` and `qwen_ssm_ops_test`, both unrelated to Phase 4. On Windows `gfx1151`, those upstream failures can fault the MES compute ring; subsequent HIP allocations then fail with `unspecified launch failure`. Exclude these faulting tests on this host when running the GPU suite:
+
+```powershell
+ctest --test-dir build/gpu-test -L gpu -E "minimax_h3_dit_analytic|qwen_ssm_ops_test" --output-on-failure --no-tests=error
+```
+
+The excluded full-suite rerun was not performed. The focused storage/Qwen3.8 tests and model trace checks above completed before the MES-ring fault.
+
+Reproduce with the exact 64-token raw prompt and `--memory-budget-gb 32` or `20`:
+
+```powershell
+$therock = 'C:\Users\danie\AppData\Local\Gufo\dependencies\therock-10.0.0'
+$env:HIP_PATH = $therock
+$env:ROCM_PATH = $therock
+$env:PATH = "$therock\bin;$env:PATH"
+build\gpu-test\gufo.exe prompt --model $model --raw --speculative mtp --mtp-model $mtp `
+  --memory-budget-gb 32 --ssd-stats --verbose --max-tokens 64 --seed 459 `
+  --prompt 'The quick brown fox jumps over the lazy dog. Strix Halo executes this deterministic benchmark sequence. The quick brown fox jumps over the lazy dog. Strix Halo executes this deterministic benchmark sequence. The quick brown fox jumps over the lazy dog. Strix Halo executes this deterministic benchmark sequence. Reply with exactly OK.! More'
+```
 
 ### Windows build and formatter follow-up (2026-10-18)
 

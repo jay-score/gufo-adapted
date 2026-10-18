@@ -157,9 +157,56 @@ void Run() {
     }
   }
   manager->Release(0);
+
+  constexpr std::size_t three_slot_budget =
+      3 * 3 * kExpertBytes + 3 * kTailMargin;
+  std::array<std::int32_t, kExperts> async_indirection{};
+  async_indirection.fill(-1);
+  auto async_manager = gufo::storage::ExpertCacheManager::Create(
+      std::span<const DeviceLayer>(&layer, 1), three_slot_budget, kExpertsUsed,
+      kExperts, async_indirection, &error);
+  if (!async_manager)
+    throw std::runtime_error("async cache creation failed: " + error);
+  if (async_manager->slots_per_layer() != 3)
+    throw std::runtime_error("async cache did not allocate three slots");
+  const std::array<std::int32_t, 1> predicted{2};
+  if (!async_manager->Prefetch(0, predicted, 8, &error))
+    throw std::runtime_error("async prefetch submission failed: " + error);
+  const std::array<std::int32_t, kExpertsUsed> async_ids{2, 3};
+  std::array<std::int32_t, kExpertsUsed> async_slots{};
+  if (!async_manager->Resolve(0, async_ids, async_slots, &error))
+    throw std::runtime_error("async resolve failed: " + error);
+  const auto& async_view = async_manager->device_layers()[0];
+  for (std::size_t weight = 0; weight < 3; ++weight) {
+    const DeviceTensor* tensor = weight == 0   ? &async_view.ffn_gate_exps
+                                 : weight == 1 ? &async_view.ffn_up_exps
+                                               : &async_view.ffn_down_exps;
+    for (std::size_t i = 0; i < async_ids.size(); ++i) {
+      CheckExpertBytes(
+          *tensor, static_cast<std::uint32_t>(async_slots[i]),
+          kTensorOffsets[weight] +
+              static_cast<std::uint64_t>(async_ids[i]) * kExpertBytes);
+    }
+  }
+  async_manager->Release(0);
+  async_manager->FinishPrefetch(0);
+
+  // A prediction that is already resident submits no I/O batch. Resolve must
+  // consume the READY pin without waiting for a nonexistent completion.
+  if (!async_manager->Prefetch(
+          0, std::span<const std::int32_t>(async_ids).first(1), 8, &error))
+    throw std::runtime_error("resident prefetch failed: " + error);
+  const std::array<std::int32_t, 1> resident_id{2};
+  std::array<std::int32_t, 1> resident_slot{};
+  if (!async_manager->Resolve(0, resident_id, resident_slot, &error))
+    throw std::runtime_error("resident prefetch resolve failed: " + error);
+  async_manager->Release(0);
+  async_manager->FinishPrefetch(0);
+
   std::cout
-      << "expert_cache_manager_test: packed GTT arenas, unaligned scratch "
-         "reads, pin release, and LRU indirection passed\n";
+      << "expert_cache_manager_test: packed GTT arenas, asynchronous and empty "
+         "prefetch batches, scratch reads, pin release, and LRU indirection "
+         "passed\n";
 }
 
 }  // namespace

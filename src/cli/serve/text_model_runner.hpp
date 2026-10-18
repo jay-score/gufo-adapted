@@ -63,6 +63,7 @@ struct TextRunnerDiskCacheOptions {
   /// checkpoints are cheaper to re-prefill than that write. Zero disables the
   /// gate.
   std::size_t min_checkpoint_step_tokens{2048};
+  std::function<void(std::size_t)> on_session_write_bytes;
 };
 
 /// Host snapshot budget after accounting for cgroup limits and headroom.

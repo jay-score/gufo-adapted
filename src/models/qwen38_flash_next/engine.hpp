@@ -24,6 +24,10 @@
 #include "src/models/qwen38_flash_next/prompt_lookup.hpp"
 #include "src/storage/memory_budget_planner.hpp"
 
+namespace gufo::storage {
+class SsdStats;
+}
+
 namespace gufo::core {
 class GgufReader;
 }
@@ -55,6 +59,10 @@ struct ModelOptions {
   std::uint32_t max_context = 4096;
   /// Zero keeps the legacy unlimited device budget. Positive values are GiB.
   double memory_budget_gb{0.0};
+  /// Print SSD/cache/process-memory telemetry after inference.
+  bool ssd_stats{false};
+  /// Weight learned expert priors during cache victim selection (default off).
+  float cache_prior_bias{0.0F};
   /// Opt into a 128 MiB compressed-row PLE cache; off preserves the legacy
   /// 8 MiB row cache.
   bool ple_shelf{false};
@@ -123,6 +131,11 @@ public:
       const noexcept {
     return memory_budget_;
   }
+  [[nodiscard]] std::string SsdStatsReport() const;
+  [[nodiscard]] std::shared_ptr<storage::SsdStats> SsdStatsHandle()
+      const noexcept {
+    return ssd_stats_;
+  }
   [[nodiscard]] const std::shared_ptr<qwen::vision::Encoder>& VisionEncoder()
       const noexcept {
     return vision_;
@@ -132,6 +145,7 @@ private:
   Model() = default;
 
   ModelOptions options_;
+  std::shared_ptr<storage::SsdStats> ssd_stats_;
   std::shared_ptr<core::GgufReader> reader_;
   std::shared_ptr<core::GgufReader> mtp_reader_;
   std::unique_ptr<ModelWeights> weights_;

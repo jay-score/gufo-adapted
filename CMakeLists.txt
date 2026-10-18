@@ -187,10 +187,14 @@ target_link_libraries(gufo_core PUBLIC ICU::uc ICU::i18n Threads::Threads
 
 add_library(gufo_storage STATIC
   src/storage/memory_budget_planner.cpp
+  src/storage/ssd_stats.cpp
   src/storage/ssd_batch_reader.cpp)
 target_include_directories(gufo_storage PUBLIC ${CMAKE_SOURCE_DIR})
 target_compile_features(gufo_storage PUBLIC cxx_std_20)
 target_link_libraries(gufo_storage PUBLIC Threads::Threads)
+if (WIN32)
+  target_link_libraries(gufo_storage PUBLIC Psapi)
+endif()
 target_link_libraries(gufo_core PUBLIC gufo_storage)
 if (ENGINE_ENABLE_HIP)
   add_library(gufo_expert_cache STATIC src/storage/expert_cache_manager.cpp)
@@ -385,6 +389,11 @@ if (BUILD_TESTING)
   target_link_libraries(memory_budget_planner_test PRIVATE gufo_storage)
   add_test(NAME memory_budget_planner_test COMMAND memory_budget_planner_test)
   set_tests_properties(memory_budget_planner_test PROPERTIES LABELS "cpu;storage")
+
+  add_executable(ssd_stats_test tests/storage/ssd_stats_test.cpp)
+  target_link_libraries(ssd_stats_test PRIVATE gufo_storage)
+  add_test(NAME ssd_stats_test COMMAND ssd_stats_test)
+  set_tests_properties(ssd_stats_test PROPERTIES LABELS "cpu;storage")
 
   add_subdirectory(tests/models/qwen)
   add_subdirectory(tests/models/qwen27b)
