@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -21,6 +22,7 @@
 #include "src/models/qwen38_flash_next/mtp_policy.hpp"
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
 #include "src/models/qwen38_flash_next/prompt_lookup.hpp"
+#include "src/storage/memory_budget_planner.hpp"
 
 namespace gufo::core {
 class GgufReader;
@@ -51,6 +53,11 @@ enum class DraftVocabulary {
 
 struct ModelOptions {
   std::uint32_t max_context = 4096;
+  /// Zero keeps the legacy unlimited device budget. Positive values are GiB.
+  double memory_budget_gb{0.0};
+  /// Opt into a 128 MiB compressed-row PLE cache; off preserves the legacy
+  /// 8 MiB row cache.
+  bool ple_shelf{false};
   /// Optional MTP draft sidecar (`mtp-...-shared-*.gguf`). Empty leaves
   /// speculative decoding off.
   std::string mtp_model_path;
@@ -112,6 +119,10 @@ public:
   [[nodiscard]] std::size_t SessionBytes(core::SessionMode mode,
                                          std::uint32_t context) const noexcept;
   [[nodiscard]] std::size_t DeferredScratchBytes() const;
+  [[nodiscard]] const std::optional<storage::MemoryBudgetPlan>& MemoryBudget()
+      const noexcept {
+    return memory_budget_;
+  }
   [[nodiscard]] const std::shared_ptr<qwen::vision::Encoder>& VisionEncoder()
       const noexcept {
     return vision_;
@@ -130,6 +141,7 @@ private:
   std::unique_ptr<rocm::DeviceModel> device_;
   std::unique_ptr<rocm::Executor> executor_;
   std::shared_ptr<qwen::vision::Encoder> vision_;
+  std::optional<storage::MemoryBudgetPlan> memory_budget_;
   MtpBatchController batch_policy_;
   /// DraftVocabulary::kPrefix is in effect: drafts may use the small head.
   bool draft_subset_{false};

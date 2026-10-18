@@ -146,6 +146,8 @@ struct GgufMappedRegion {
   std::size_t size{0};
   /// Borrowed descriptor, valid for the reader lifetime; -1 for memory images.
   int file_descriptor{-1};
+  /// Original backing path; empty for in-memory readers.
+  std::filesystem::path file_path;
 };
 
 /// Zero-copy, lightweight GGUF binary reader and tensor indexer.

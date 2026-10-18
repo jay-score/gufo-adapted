@@ -97,6 +97,17 @@ endif()
 # Qwen3.8-Flash-Next — model-private CPU reference plus ROCm runtime.
 add_subdirectory(src/models/qwen38_flash_next)
 
+# Phase 0 Windows-only I/O probe; run explicitly on the target machine.
+if (WIN32 AND ENGINE_ENABLE_HIP)
+  add_executable(spike_ssd_gtt_dma tests/spike_ssd_gtt_dma.cpp)
+  set_source_files_properties(tests/spike_ssd_gtt_dma.cpp PROPERTIES
+    LANGUAGE HIP)
+  set_target_properties(spike_ssd_gtt_dma PROPERTIES
+    HIP_STANDARD 20
+    HIP_STANDARD_REQUIRED ON)
+  target_link_libraries(spike_ssd_gtt_dma PRIVATE hip::host)
+endif()
+
 # Qwen3-TTS — CPU reference + HIP kernels (CustomVoice 12Hz).
 add_subdirectory(src/models/qwen3_tts)
 
@@ -173,6 +184,21 @@ target_compile_definitions(gufo_core PRIVATE
   GUFO_FFPROBE_EXECUTABLE="${GUFO_FFPROBE_EXECUTABLE}")
 target_link_libraries(gufo_core PUBLIC ICU::uc ICU::i18n Threads::Threads
   PNG::PNG JPEG::JPEG WebP::webp CURL::libcurl OpenSSL::Crypto)
+
+add_library(gufo_storage STATIC
+  src/storage/memory_budget_planner.cpp
+  src/storage/ssd_batch_reader.cpp)
+target_include_directories(gufo_storage PUBLIC ${CMAKE_SOURCE_DIR})
+target_compile_features(gufo_storage PUBLIC cxx_std_20)
+target_link_libraries(gufo_storage PUBLIC Threads::Threads)
+target_link_libraries(gufo_core PUBLIC gufo_storage)
+if (ENGINE_ENABLE_HIP)
+  add_library(gufo_expert_cache STATIC src/storage/expert_cache_manager.cpp)
+  target_include_directories(gufo_expert_cache PUBLIC ${CMAKE_SOURCE_DIR})
+  target_compile_features(gufo_expert_cache PUBLIC cxx_std_20)
+  target_link_libraries(gufo_expert_cache PUBLIC gufo_storage hip::host)
+  target_link_libraries(gufo_qwen38_flash_next PUBLIC gufo_expert_cache)
+endif()
 
 add_subdirectory(src/models/qwen)
 add_subdirectory(src/models/qwen_image_21)
@@ -354,6 +380,12 @@ if (BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/logit_eval_test.py)
   set_tests_properties(logit_eval_test PROPERTIES LABELS "cpu;quality;tools")
 
+  add_executable(memory_budget_planner_test
+    tests/storage/memory_budget_planner_test.cpp)
+  target_link_libraries(memory_budget_planner_test PRIVATE gufo_storage)
+  add_test(NAME memory_budget_planner_test COMMAND memory_budget_planner_test)
+  set_tests_properties(memory_budget_planner_test PROPERTIES LABELS "cpu;storage")
+
   add_subdirectory(tests/models/qwen)
   add_subdirectory(tests/models/qwen27b)
   gufo_qwen3_asr_register_tests()
@@ -462,6 +494,33 @@ if (BUILD_TESTING)
 
   add_subdirectory(tests/models/deepseek_v4_flash)
   add_subdirectory(tests/models/qwen38_flash_next)
+
+  if (ENGINE_ENABLE_HIP)
+    add_executable(expert_cache_manager_test
+      tests/storage/expert_cache_manager_test.cpp)
+    set_source_files_properties(tests/storage/expert_cache_manager_test.cpp
+      PROPERTIES LANGUAGE HIP)
+    set_target_properties(expert_cache_manager_test PROPERTIES
+      HIP_STANDARD 20
+      HIP_STANDARD_REQUIRED ON)
+    target_link_libraries(expert_cache_manager_test PRIVATE
+      gufo_expert_cache hip::host)
+    add_test(NAME expert_cache_manager_test COMMAND expert_cache_manager_test)
+    set_tests_properties(expert_cache_manager_test PROPERTIES
+      LABELS "hip;gpu;gfx1151;storage;experts")
+
+    add_executable(ssd_batch_reader_test
+      tests/storage/ssd_batch_reader_test.cpp)
+    set_source_files_properties(tests/storage/ssd_batch_reader_test.cpp
+      PROPERTIES LANGUAGE HIP)
+    set_target_properties(ssd_batch_reader_test PROPERTIES
+      HIP_STANDARD 20
+      HIP_STANDARD_REQUIRED ON)
+    target_link_libraries(ssd_batch_reader_test PRIVATE gufo_storage hip::host)
+    add_test(NAME ssd_batch_reader_test COMMAND ssd_batch_reader_test)
+    set_tests_properties(ssd_batch_reader_test PROPERTIES
+      LABELS "hip;gpu;gfx1151;storage;ssd")
+  endif()
 
   if(ENGINE_ENABLE_HIP)
     add_executable(chat_template_hf_token_golden_test

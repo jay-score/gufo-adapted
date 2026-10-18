@@ -25,6 +25,10 @@
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
 #include "src/models/qwen38_flash_next/ngram.hpp"
 
+namespace gufo::storage {
+class ExpertCacheManager;
+}
+
 namespace gufo::models::qwen38_flash_next::rocm {
 
 class Executor;
@@ -199,6 +203,9 @@ public:
   [[nodiscard]] static std::unique_ptr<Executor> Create(
       const DeviceModel& model, NgramTable* ngram, Options options,
       std::string* error_msg = nullptr);
+  [[nodiscard]] bool EnableExpertCache(std::size_t budget_bytes,
+                                       std::string* error_msg);
+  [[nodiscard]] std::size_t ExpertCacheBytes() const noexcept;
 
   [[nodiscard]] std::unique_ptr<Session> CreateSession(
       core::SessionMode mode, std::uint32_t max_context,
@@ -208,6 +215,7 @@ public:
   [[nodiscard]] std::size_t SessionBytes(
       core::SessionMode mode, std::uint32_t max_context,
       std::uint32_t rollback_depth) const noexcept;
+  [[nodiscard]] std::size_t ScratchBytes() const noexcept;
   [[nodiscard]] std::size_t DeferredScratchBytes() const;
 
   enum class ForwardMode { kDecode, kVerify, kPrefill };
@@ -458,6 +466,13 @@ private:
                   std::uint32_t n_tokens, std::string* error_msg) const;
   bool MoeBatch(const DeviceLayer& l, const float* x, float* out,
                 std::uint32_t rows, std::string* error) const;
+  [[nodiscard]] const DeviceLayer& Layer(std::uint32_t index) const noexcept;
+  [[nodiscard]] bool CaptureExpertIds(const std::int32_t* ids,
+                                      std::size_t count,
+                                      std::string* error_msg) const;
+  [[nodiscard]] bool StreamedMoeRows(const DeviceLayer& layer, const float* x,
+                                     float* out, std::uint32_t rows,
+                                     std::string* error_msg) const;
   /// Selects the greedy token or compact candidates from the MTP logits of
   /// the full head, or of the small head when `subset`.
   bool MtpHead(const DeviceMixer& head, const float* res, bool token,
@@ -584,6 +599,12 @@ private:
   bool AllocateBatch(std::string* error_msg) const;
   /// Allocated only when concurrent decoding is first requested.
   mutable float* batch_logits_{nullptr};
+  std::unique_ptr<gufo::storage::ExpertCacheManager> expert_cache_;
+  std::int32_t* expert_ids_host_{nullptr};
+  std::int32_t* expert_slot_ids_host_{nullptr};
+  std::int32_t* expert_id_to_slot_host_{nullptr};
+  std::size_t expert_ids_capacity_{0};
+  hipEvent_t expert_ids_ready_{nullptr};
   mutable Session::Control* batch_controls_{nullptr};
   mutable MtpCandidateLogits* batch_candidates_host_{nullptr};
   // Mapped descriptors, one slice per layer: GPU reads cannot race the host
@@ -598,6 +619,7 @@ private:
   std::uint32_t mask_words_{0};
   /// Bounded score scratch, shared by sequential selector chunks.
   std::size_t select_score_floats_{0};
+  std::size_t scratch_allocated_bytes_{0};
   std::vector<void*> allocations_;
   /// Pinned: the n-gram rows go up with hipMemcpyAsync, and a pageable
   /// source would not be ordered against the kernels behind it.

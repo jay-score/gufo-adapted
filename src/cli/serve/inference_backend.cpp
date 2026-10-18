@@ -3012,6 +3012,8 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
         model_path,
         models::qwen38_flash_next::ModelOptions{
             .max_context = max_context,
+            .memory_budget_gb = speculative_config.memory_budget_gb,
+            .ple_shelf = speculative_config.ple_shelf,
             .mtp_model_path =
                 speculative_config.backend == TextSpeculativeBackend::kMtp
                     ? speculative_config.draft_model_path

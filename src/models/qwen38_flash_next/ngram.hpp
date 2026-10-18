@@ -48,7 +48,7 @@ public:
   [[nodiscard]] static std::unique_ptr<NgramTable> Open(
       int file_descriptor, std::uint64_t file_offset, std::uint64_t rows,
       std::uint32_t row_dim, core::GgmlType type,
-      std::string* error_msg = nullptr);
+      std::string* error_msg = nullptr, std::size_t cache_bytes = 0);
 
   /// Gathers `rows.size()` rows into `out` (rows.size() * row_dim floats).
   /// Duplicate ids are read once. Returns false on any failed read.
@@ -64,6 +64,7 @@ public:
   [[nodiscard]] std::uint32_t RowDim() const noexcept { return row_dim_; }
   [[nodiscard]] std::uint64_t Rows() const noexcept { return rows_; }
   [[nodiscard]] std::size_t RowBytes() const noexcept { return row_bytes_; }
+  [[nodiscard]] std::size_t CacheBytes() const noexcept;
 
 private:
   NgramTable() = default;

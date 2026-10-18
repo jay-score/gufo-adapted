@@ -76,7 +76,8 @@ NgramTable::~NgramTable() {
 
 std::unique_ptr<NgramTable> NgramTable::Open(
     int file_descriptor, std::uint64_t file_offset, std::uint64_t rows,
-    std::uint32_t row_dim, core::GgmlType type, std::string* error_msg) {
+    std::uint32_t row_dim, core::GgmlType type, std::string* error_msg,
+    std::size_t cache_bytes) {
   std::unique_ptr<NgramTable> t(new NgramTable());
   const std::size_t block = type == core::GgmlType::kIQ4_NL ? 32 : 1;
   const std::size_t block_bytes = type == core::GgmlType::kIQ4_NL ? 18 : 2;
@@ -90,7 +91,13 @@ std::unique_ptr<NgramTable> NgramTable::Open(
   t->type_ = type;
   t->row_dim_ = row_dim;
   t->row_bytes_ = row_dim / block * block_bytes;
-  t->cache_count_ = std::bit_floor(kCacheBytes / t->row_bytes_);
+  const auto effective_cache_bytes =
+      cache_bytes == 0 ? kCacheBytes : cache_bytes;
+  const auto rows_per_shelf = effective_cache_bytes / t->row_bytes_;
+  const auto shelf_rows = cache_bytes == 0
+                              ? rows_per_shelf
+                              : std::min<std::uint64_t>(rows_per_shelf, rows);
+  t->cache_count_ = std::bit_floor(static_cast<std::size_t>(shelf_rows));
   t->cache_entries_ = std::make_unique<CacheEntry[]>(t->cache_count_);
   t->cache_rows_.resize(t->cache_count_ * t->row_bytes_);
   t->rows_ = rows;
@@ -130,6 +137,10 @@ std::unique_ptr<NgramTable> NgramTable::Open(
     t->workers_.emplace_back([raw = t.get()] { raw->Worker(); });
   }
   return t;
+}
+
+std::size_t NgramTable::CacheBytes() const noexcept {
+  return cache_rows_.size() + cache_count_ * sizeof(CacheEntry);
 }
 
 void NgramTable::DecodeRow(const std::uint8_t* src, float* dst) const {

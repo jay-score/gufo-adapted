@@ -50,6 +50,8 @@ struct TextSpeculativeConfig {
   /// default.
   bool mtp_prefix_draft_vocabulary{true};
   bool prompt_lookup{false};
+  double memory_budget_gb{0.0};
+  bool ple_shelf{false};
 };
 
 struct TextDiskCacheConfig {

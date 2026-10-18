@@ -147,9 +147,30 @@ if ($env:VCToolsRedistDir) {
 }
 $openmp = Select-String -LiteralPath "$build\CMakeCache.txt" -Pattern '^OpenMP_libomp_LIBRARY:FILEPATH=(.*)$'
 if ($openmp -and $openmp.Matches[0].Groups[1].Value -match '^(.*)/VC/Tools/MSVC/([^/]+)/lib/x64/libomp\.lib$') {
-  $runtime = Get-ChildItem -LiteralPath "$($Matches[1])/VC/Redist/MSVC/$($Matches[2])/debug_nonredist/x64" -Directory -Filter 'Microsoft.VC*.OpenMP.LLVM' -ErrorAction SilentlyContinue |
-    ForEach-Object { Get-Item -LiteralPath (Join-Path $_.FullName 'libomp140.x86_64.dll') -ErrorAction SilentlyContinue }
-  if (-not $runtime) { throw "Cannot find this build's local Visual Studio OpenMP runtime; repair the C++ Build Tools installation." }
+  $redistRoot = Join-Path $Matches[1] 'VC\Redist\MSVC'
+  $toolVersion = $Matches[2]
+  $redistVersions = @()
+  $exactRedist = Join-Path $redistRoot $toolVersion
+  if (Test-Path -LiteralPath $exactRedist) {
+    $redistVersions += Get-Item -LiteralPath $exactRedist
+  }
+  $redistVersions += Get-ChildItem -LiteralPath $redistRoot -Directory -Filter '14.*' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -ne $toolVersion } |
+    Sort-Object { [version]$_.Name } -Descending
+  $runtime = $null
+  foreach ($redistVersion in $redistVersions) {
+    $runtimeRoot = Join-Path $redistVersion.FullName 'debug_nonredist\x64'
+    $runtime = Get-ChildItem -LiteralPath $runtimeRoot -Directory -Filter 'Microsoft.VC*.OpenMP.LLVM' -ErrorAction SilentlyContinue |
+      ForEach-Object { Get-Item -LiteralPath (Join-Path $_.FullName 'libomp140.x86_64.dll') -ErrorAction SilentlyContinue } |
+      Where-Object { $_ } |
+      Select-Object -First 1
+    if ($runtime) { break }
+  }
+  if (-not $runtime) {
+    $available = ($redistVersions | ForEach-Object Name) -join ', '
+    throw "Cannot find a Visual Studio LLVM OpenMP runtime for MSVC $toolVersion or an installed fallback ($available)."
+  }
+  Write-Host "gufo: staging Visual Studio LLVM OpenMP runtime from $($runtime.FullName)"
   $runtime | Copy-RuntimeItem -Destination $bin
 }
 Write-Host "gufo: built $build"

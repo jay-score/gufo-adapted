@@ -450,6 +450,8 @@ void PrintServeHelp(std::string_view program_name,
     std::string model;
     std::string served_model_name;
     std::uint32_t max_context = 0;
+    double memory_budget_gb = 0.0;
+    bool ple_shelf = false;
     std::int64_t max_tokens = -1;
     sampling::SamplingConfig sampling_config;
     std::string reasoning_mode = "auto";
@@ -498,6 +500,13 @@ void PrintServeHelp(std::string_view program_name,
         "-c", "--context", "N",
         "Context tokens per session (default: 0 = model native context)",
         "Model", &max_context);
+    parser.AddOption("", "--memory-budget-gb", "GB",
+                     "Qwen3.8-Flash-Next memory budget in GiB (default: off)",
+                     "Memory", &memory_budget_gb);
+    parser.AddFlag(
+        "", "--ple-shelf",
+        "Cache PLE rows in a 128 MiB bounded RAM shelf (default: off)",
+        "Memory", &ple_shelf);
 
     // Sampling Defaults
     parser.AddOption(
@@ -925,6 +934,8 @@ int RunServe(std::span<const char* const> args) {
     std::string model;
     std::string served_model_name;
     std::uint32_t max_context = 0;
+    double memory_budget_gb = 0.0;
+    bool ple_shelf = false;
     std::int64_t max_tokens = -1;
     sampling::SamplingConfig sampling_config;
     std::string reasoning_mode = "auto";
@@ -972,6 +983,14 @@ int RunServe(std::span<const char* const> args) {
         "-c", "--context", "N",
         "Context tokens per session (default: 0 = model native context)",
         "Model", &max_context);
+    llm_parser.AddOption(
+        "", "--memory-budget-gb", "GB",
+        "Qwen3.8-Flash-Next memory budget in GiB (default: off)", "Memory",
+        &memory_budget_gb);
+    llm_parser.AddFlag(
+        "", "--ple-shelf",
+        "Cache PLE rows in a 128 MiB bounded RAM shelf (default: off)",
+        "Memory", &ple_shelf);
     llm_parser.AddOption(
         "-n", "--max-tokens", "N",
         "Default new-token limit (default: -1 = until EOS or context full)",
@@ -1171,6 +1190,8 @@ int RunServe(std::span<const char* const> args) {
     }
     speculative_config.mtp_prefix_draft_vocabulary = mtp_draft_vocab != "full";
     speculative_config.prompt_lookup = prompt_lookup;
+    speculative_config.memory_budget_gb = memory_budget_gb;
+    speculative_config.ple_shelf = ple_shelf;
     std::string err;
     ModelLoadLog load_log("text", model);
     backend = std::make_shared<server::InferenceBackend>();
