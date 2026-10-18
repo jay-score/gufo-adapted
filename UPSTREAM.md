@@ -106,7 +106,8 @@ Use this entry format:
 
 - Source: [gufo-org/gufo@6a4c89784adb1c99830889b42fc3e243c3fcb7d8](https://github.com/gufo-org/gufo/commit/6a4c89784adb1c99830889b42fc3e243c3fcb7d8)
   (PR #292).
-- Local: commit introducing this entry.
+- Local: `bebff14c63b2c08ed2317a0a07dcf73c1a61a313`; snapshot compatibility
+  correction in the commit updating this entry.
 - Adaptation: imported the `AttentionKernel` change that cuts key tiles from
   the running compacted block list, carrying a partial tile of at most
   `kTile / 4` blocks into the next 1024-block window, and deals the tiles
@@ -116,8 +117,13 @@ Use this entry format:
   and softmax accumulation order differ. Also imported the FP64 structured
   attention tests. Upstream's `gpu_probe` additions, model-identity record and
   benchmark artifacts are omitted (Linux-specific harness data).
+  The local snapshot compatibility version is 20 because accumulation order
+  changes: version-19 and earlier checkpoints are rebuilt from the prompt.
+  Older builds cannot read version-20 checkpoints after a rollback.
 - Areas: `src/models/qwen38_flash_next/kernels/rocm/kernels.hip.cpp`,
-  `tests/models/qwen38_flash_next/attention_ops_test.cpp`.
+  `src/models/qwen38_flash_next/engine.hpp`,
+  `tests/models/qwen38_flash_next/attention_ops_test.cpp`,
+  `tests/models/qwen38_flash_next/snapshot_test.cpp`, `docs/SERVER.md`.
 - Validation: Windows `gpu-test` build; `qwen38_flash_next.attention_ops`
   passes with FP64 worst absolute errors ≤ ~3e-7. Arithmetic changes
   intentionally, so the declared limit is drift below the existing
@@ -135,6 +141,16 @@ Use this entry format:
   28.33/28.43 → 28.45 tok/s at depth 0, 26.38/26.34 → 27.34 at 32K (+3.7%),
   24.58/24.57 → 26.60 at 128K (+8.2%); pp512 unchanged within noise. Linux CI
   not run.
+- Snapshot compatibility follow-up: native Windows/gfx1151, TheRock 10.0.0
+  (clang 23), `gpu-test`; `gufo` and the snapshot test build. Running
+  `qwen38_flash_next_snapshot_test --model "$MODEL" --mtp-model "$MTP"`
+  on UD-IQ4_XS with the shared Q8_0 MTP sidecar (8192 context, seed 7,
+  temperature 0.8, top-k 40, top-p 0.9) fails before the bump with
+  `incompatible snapshot version accepted`, then passes at version 20.
+  AR/MTP incremental captures, persistent round trips, exact restored logits,
+  sampled replay and deferred-residual RNG replay pass. The disk-cache test,
+  repository formatting and docs checks pass. This follow-up changes metadata
+  only; no new logit/perplexity measurements or Linux execution.
 - Status: retained.
 
 ### 2026-10-17 — Flat-table Flash-Next n-gram gather

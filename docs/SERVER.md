@@ -182,8 +182,10 @@ boundary. Appending a screenshot can reuse earlier text and images, including
 an earlier snapshot; changing an image inside that prefix still rejects reuse.
 An image partially inside the prefix contributes its entire pixel fingerprint.
 Disk lookup remains keyed by the complete request's image identity. Flash-Next
-snapshot payload version 15 stores the image identity at the snapshot boundary;
-older disk checkpoints are not reused by this version.
+snapshot payload version 20 stores the image identity at the snapshot boundary
+and invalidates checkpoints from older sparse-attention arithmetic. Version-19
+and earlier checkpoints are rebuilt from the prompt; version-20 checkpoints
+are not readable by older builds.
 
 A loaded Qwen vision sidecar is prepared while the model loads, before the RAM
 cache is sized and before readiness: Gufo hashes the complete sidecar for image
