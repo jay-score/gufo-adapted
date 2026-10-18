@@ -44,6 +44,38 @@ embedding bytes but do not resolve this gap. [Evidence](artifacts/vision-parity.
 
 ## Reproduce
 
+### Windows inference-qualification workflow exercise
+
+October 18, 2026: clean builds at `24c0a99f8576` and `fe8469b56630` exercise
+the qualification runner on the snapshot payload version 19 -> 20 fix, with
+unchanged inference arithmetic. Native Windows/gfx1151, TheRock 10.0.0/clang
+23, the same four-shard UD-Q4_K_XL target and Q8_0 MTP sidecar:
+
+- The runner reports **PASS**, with distinct binaries, matched artifacts and
+  no control or mismatch overrides.
+- All **999 complete vocabulary rows** match exactly: 675 teacher-forced rows
+  across schedules `1:2,4,8:p8` and 324 normal-prefill rows in AR/MTP through
+  32K. Every row contains 248,320 logits; the complete normal-prefill capture
+  file is byte-identical.
+- The 288 normal-prefill continuation labels retain mean NLL
+  **0.14113513363171917** and perplexity **1.1515802546926903** exactly.
+  All three printed teacher-forced perplexities also match. These fixed
+  fixtures measure regression consistency, not broad model capability.
+- All four CPU contracts, eleven GPU operator tests and four model/state
+  executables pass. Session checks include fresh-load replay, private batching
+  and all 23 serving sampler strategies in AR/MTP. Rollback, rejection of
+  version-19 snapshots by the version-20 build, and EOS checks pass.
+
+[Identities, settings, results and reproduction](artifacts/qualification-snapshot-v20.json)
+are retained compactly; raw runner records, command logs and captures remain
+under ignored `artifacts/qualify/snapshot-v20-20261018/`. The runner's
+cross-checkout command/test lookup was fixed and fixture-tested during this
+exercise; the engine builds themselves are clean. Actual compiler, dependency
+and runtime identities match independently of the Windows diagnostic
+fingerprint's default compiler/driver labels. Linux, other quantizations,
+vision/HTTP/parser contracts, original-checkpoint/conversion accuracy and
+performance were not qualified by this exercise.
+
 ### Windows 4096-token internal chunk default
 
 October 15, 2026: on top of the selected upstream prefill changes, raising the

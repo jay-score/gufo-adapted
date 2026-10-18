@@ -16,7 +16,9 @@ TOOL = Path(__file__).resolve().parents[2] / "tools/models/qualify.py"
 sys.path.insert(0, str(TOOL.parents[1]))
 
 from gufo.qualify.config import Check, Command, config_for
-from gufo.qualify.record import _context, _run_command, _run_item
+from gufo.qualify.record import (
+    RecordError, _context, _find_test_executable, _run_command, _run_item,
+)
 
 MAKE_LOGITS = """\
 import hashlib
@@ -781,6 +783,41 @@ class RecordCommandTest(unittest.TestCase):
                 command, self.ctx, kind="check", item_id="fixture",
                 index=0, item_out=self.root,
             )
+
+    def test_commands_run_in_selected_source_checkout(self) -> None:
+        self.ctx.repo = self.root / "source"
+        for checkout in (self.root, self.ctx.repo):
+            tools = checkout / "tools"
+            tools.mkdir(parents=True)
+            (tools / "probe.py").write_text(
+                "from pathlib import Path; Path('built.txt').write_text('source')"
+                if checkout == self.ctx.repo else "raise SystemExit(1)"
+            )
+        result = self.run_command(Command((sys.executable, "tools/probe.py")))
+        self.assertEqual(result["status"], "pass", result)
+        self.assertTrue(Path(result["cwd"]).samefile(self.ctx.repo))
+        self.assertTrue((self.ctx.repo / "built.txt").is_file())
+        self.assertFalse((self.root / "built.txt").exists())
+
+        (self.ctx.repo / "checks").mkdir()
+        result = self.run_command(Command((
+            sys.executable, "-c", "from pathlib import Path; Path('checked.txt').touch()",
+        ), cwd="checks"))
+        self.assertEqual(result["status"], "pass", result)
+        self.assertTrue((self.ctx.repo / "checks/checked.txt").is_file())
+
+    def test_test_executable_cannot_fall_back_to_driver_checkout(self) -> None:
+        self.ctx.repo = self.root / "nested/source"
+        suffix = ".exe" if sys.platform == "win32" else ""
+        driver = self.root / "build/gpu-test" / f"fixture{suffix}"
+        selected = self.ctx.repo / "build/gpu-test/tests" / f"fixture{suffix}"
+        for executable in (driver, selected):
+            executable.parent.mkdir(parents=True)
+            executable.write_text("fixture")
+        self.assertTrue(_find_test_executable("fixture", self.ctx).samefile(selected))
+        selected.unlink()
+        with self.assertRaises(RecordError):
+            _find_test_executable("fixture", self.ctx)
 
     def test_model_build_commands_select_each_platform(self) -> None:
         for model in ("qwen3.8-flash-next", "qwen3.8-27b", "deepseek-v4-flash"):

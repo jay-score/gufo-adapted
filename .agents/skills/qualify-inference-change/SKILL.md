@@ -96,10 +96,16 @@ python tools/models/qualify.py record \
   `gufo --version` plus `gufo diagnose --fingerprint --json`. If an older
   baseline binary cannot produce a fingerprint, pass the same
   `--fingerprint <json>` from this host to both records.
+- On Windows, retain actual TheRock/clang, dependency and runtime identities
+  separately. The built-in fingerprint can retain default compiler/driver
+  labels; equal IDs alone do not establish matching toolchains.
 - `{repo}` in a declaration means `--repo`, the checkout that built the binary;
   `--root` is the checkout that owns `qualify.json` and the corpus.
+- Commands run in `--repo` by default; a relative declared `cwd` is relative
+  to that checkout, so builds and CTest use the selected side's source tree.
 - `{test:name}` locates a `gpu-test` executable in the build tree on either
-  platform; `{tool:name}` is an explicitly supplied path, used when the
+  platform under `--repo`; it never falls back to the driver's build tree.
+  `{tool:name}` is an explicitly supplied path, used when the
   baseline and candidate need different test builds.
 - Baseline records captures only. Checks run on the candidate. A manual
   baseline capture can use `--profile logits`; the plan is preferred because it
