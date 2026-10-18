@@ -49,6 +49,8 @@ jobs:
         run: python tests/tools/upstream_sync_test.py
       - name: Check review context tool
         run: python tests/tools/review_context_test.py
+      - name: Check inference qualification tool
+        run: python tests/tools/qualify_test.py
       - name: Check optional GUI launcher
         shell: pwsh
         run: |
@@ -105,6 +107,9 @@ jobs:
 
       - name: Check review context tool
         run: python3 tests/tools/review_context_test.py
+
+      - name: Check inference qualification tool
+        run: python3 tests/tools/qualify_test.py
 
       - name: Compute CMake compiler cache key
         id: ccache-key

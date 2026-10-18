@@ -45,7 +45,7 @@ pattern rather than add more prose.
 | Workflow | Status | Skill | Tooling | Acceptance |
 | --- | --- | --- | --- | --- |
 | Review a change | Done | [`review-change`](../.agents/skills/review-change/SKILL.md) | [`tools/ci/review-context.py`](../tools/ci/review-context.py) | Classifies a diff, selects required checks, flags hazards, runs cheap checks, produces a severity-ranked report with an explicit unverified list |
-| Qualify an inference change | Next | proposed | proposed `tools/models/qualify.py` | Selects and runs the affected model's fast suite, matched-token logits/PPL and state checks against a recorded baseline |
+| Qualify an inference change | Done | [`qualify-inference-change`](../.agents/skills/qualify-inference-change/SKILL.md) | [`tools/models/qualify.py`](../tools/models/qualify.py), per-model `qualify.json` | Selects and runs the affected model's fast suite, matched-token logits/PPL and state checks against a recorded baseline |
 | Qualify a quantization variant | Next | proposed | proposed GGUF support-matrix tool | Enumerates tensor-role types, maps them to loaders/kernels, runs quality gates, then benchmarks and docs |
 | Add a model | Proposed | proposed | proposed scaffold + completeness checker | Staged bring-up with an independent-reference parity gate before generation, API or performance work |
 | Triage a bug | Proposed | proposed | none initially | Reproduces, minimizes, bisects, fixes and adds a regression test; handles device fault/OOM/hang branches |
@@ -107,24 +107,48 @@ Acceptance:
 
 ## 2. Qualify an inference change
 
+Status: done (2026-10-17).
+
 Goal: make the numerical gate a single, repeatable workflow.
 
 The repository requires matched-token logits and perplexity for changes to
 kernels, loading, tokenization, prefill/decode, sampling, caching and
-speculation. That requirement is currently spread across
-[testing](TESTING.md) and per-model `QUALITY.md` files.
+speculation. That requirement is now executable instead of spread across
+prose:
 
-Proposed shape:
+- `.agents/skills/qualify-inference-change/SKILL.md`
+- `tools/models/qualify.py` (implementation under `tools/gufo/qualify/`)
+- `docs/models/<model>/artifacts/qualify.json` for the three text models
+- `tests/tools/qualify_test.py` (13 focused tests, no model or GPU required)
+- CI hooks in both the Windows CPU and Ubuntu repository-check jobs
 
-- a declarative `qualify.json` per model (fast suite, full suite, logit
-  commands, tolerances, required artifacts)
-- a runner that selects the affected model from the diff, captures baseline
-  and candidate provenance, and writes an evidence artifact
-- a report that lists exact commands, revisions, binary hashes, model/sidecar
-  identities, corpus hashes and limits
+Delivered shape:
 
-This should reuse the benchmark driver's provenance discipline rather than
-invent a second format.
+- a declarative declaration per model: file/tool roles, path-prefix triggers,
+  scope-to-check/capture requirements, fast/full/reference/logit profiles,
+  capture commands, comparators, declared metric limits and required outputs
+- `plan` delegates diff collection to `review-context.py`, selects affected
+  models and scopes, and reports uncovered inference paths
+- `record` runs one side, hashes the binary, model/sidecar shards, corpus,
+  config and tools, captures source revision/fingerprint, and writes logs plus
+  a resumable JSON record
+- `compare` refuses mismatched config/model/corpus identities and fingerprints,
+  enforces plan coverage, compares complete raw-logit rows with the existing
+  `tools/bench/logit-eval.py`, evaluates declared metric limits, and writes
+  `qualification.json` plus `qualification.md`
+- `report` re-renders retained evidence
+
+Exercise: a real Flash-Next UD-Q4_K_XL run on Windows/gfx1151 recorded both
+sides of the `1:2,4,8:p8` teacher-forced schedule (225 positions, 248,320-token
+vocabulary), hashed all four shards and the Q8_0 MTP sidecar, and compared all
+three raw-row files. The same-binary control reported `CONTROL` with three
+matches. This validates the harness; it is not evidence that a changed build is
+qualified.
+
+`gufo bench --logit-eval` is implemented for Flash-Next. Qwen27B uses explicit
+`--capture-logits`/`--capture-prefill-logits` file comparisons. DeepSeek keeps
+its model-owned DSpark/AR replay and independent reference suites; it has no
+two-build logit capture. Do not invent a weaker gate for it.
 
 ## 3. Qualify a quantization variant
 
@@ -207,11 +231,20 @@ actual engineering.
   state, API, platform, model-doc and churn hazards, and can run the cheap
   format/docs/dependency checks. Eight focused tests pass; `check-docs.py`
   passes; the tool was smoke-tested on a real commit range.
+- 2026-10-17: `qualify-inference-change` workflow implemented. Declarative
+  `qualify.json` files cover Flash-Next, Qwen3.8 27B and DeepSeek V4 Flash;
+  `plan`/`record`/`compare`/`report` retain provenance and refuse mismatched
+  artifacts, coverage gaps and exact-logit differences. Thirteen fixture tests
+  pass; the plan was exercised on real commit ranges and the logit path was
+  exercised on Windows/gfx1151 with the real Q4_K_XL target and Q8_0 MTP
+  sidecar (control run, three exact row comparisons).
 
 ## Open questions
 
-- Should model qualification be declarative (`qualify.json`) or inferred from
-  each `QUALITY.md`?
+- ~~Should model qualification be declarative (`qualify.json`) or inferred from
+  each `QUALITY.md`?~~ Resolved 2026-10-17: declarative `qualify.json`, seeded
+  from each `QUALITY.md`. The declaration is the executable gate; `QUALITY.md`
+  remains the measured record and explanation.
 - What is the Windows substitute for `rocprofv3`-based profiling: kernel-bench,
   end-to-end model-bench, or both?
 - Should skills be indexed in `.agents/skills/README.md` and checked for dead

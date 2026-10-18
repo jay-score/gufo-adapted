@@ -53,6 +53,11 @@ ARITHMETIC_RE = re.compile(
     r"executor|engine|logits?)(/|\.|$)",
     re.IGNORECASE,
 )
+LOADER_TOKENIZER_RE = re.compile(
+    r"^src/(core/(gguf|tokenizer)|models/[^/]+/"
+    r"(config|weights|tokenizer|chat_template|model_loader))",
+    re.IGNORECASE,
+)
 STATE_RE = re.compile(
     r"(snapshot|continuation|cache|kv[_-]?cache|rollback|checkpoint|session|"
     r"recurrent|draft)",
@@ -84,6 +89,7 @@ class ChangedFile:
     deleted: int
     binary: bool
     areas: list[str] = field(default_factory=list)
+    old_path: str | None = None
 
 
 @dataclass
@@ -201,18 +207,9 @@ def merge_base(repo: Path, base: str, head: str,
     return result.stdout.strip()
 
 
-def normalize_rename_path(path: str) -> str:
-    if " => " not in path:
-        return path
-    if path.startswith("{") and "}" in path:
-        prefix, rest = path[1:].split("}", 1)
-        return prefix.split(" => ", 1)[1] + rest
-    return path.split(" => ", 1)[1]
-
-
-def parse_name_status(raw: str) -> dict[str, str]:
-    """Parse `git diff --name-status -z` into new-path -> status."""
-    statuses: dict[str, str] = {}
+def parse_name_status(raw: str) -> dict[str, tuple[str, str | None]]:
+    """Parse `git diff --name-status -z` into path -> (status, old path)."""
+    statuses: dict[str, tuple[str, str | None]] = {}
     parts = raw.split("\0")
     index = 0
     while index < len(parts):
@@ -223,28 +220,33 @@ def parse_name_status(raw: str) -> dict[str, str]:
         if status[0] in "RC":
             if index + 1 >= len(parts):
                 break
-            index += 1  # old path
+            old_path = parts[index]
+            index += 1
             new_path = parts[index]
             index += 1
-            statuses[new_path] = status
+            statuses[new_path] = (status, old_path)
         else:
             if index >= len(parts):
                 break
             path = parts[index]
             index += 1
-            statuses[path] = status
+            statuses[path] = (status, None)
     return statuses
 
 
 def parse_numstat(raw: str) -> dict[str, tuple[int, int, bool]]:
-    """Parse `git diff --numstat` into path -> (added, deleted, binary)."""
+    """Parse `git diff --numstat -z` into path -> (added, deleted, binary)."""
     stats: dict[str, tuple[int, int, bool]] = {}
-    for line in raw.splitlines():
-        columns = line.split("\t")
+    parts = iter(raw.split("\0"))
+    for entry in parts:
+        columns = entry.split("\t", 2)
         if len(columns) < 3:
             continue
         added, deleted = columns[0], columns[1]
-        path = normalize_rename_path("\t".join(columns[2:]))
+        path = columns[2]
+        if not path:
+            next(parts)  # old path
+            path = next(parts)
         binary = added == "-" and deleted == "-"
         try:
             counts = (
@@ -327,10 +329,10 @@ def collect_files(repo: Path, base: str, head: str) -> list[ChangedFile]:
                 base, head)
     )
     stats = parse_numstat(
-        git_out(repo, "diff", "--numstat", "--find-renames", base, head)
+        git_out(repo, "diff", "--numstat", "-z", "--find-renames", base, head)
     )
     files: list[ChangedFile] = []
-    for path, status in statuses.items():
+    for path, (status, old_path) in statuses.items():
         added, deleted, binary = stats.get(path, (0, 0, False))
         files.append(ChangedFile(
             path=path,
@@ -338,7 +340,10 @@ def collect_files(repo: Path, base: str, head: str) -> list[ChangedFile]:
             added=added,
             deleted=deleted,
             binary=binary,
-            areas=classify_path(path),
+            areas=sorted(set(classify_path(path)) | (
+                set(classify_path(old_path)) if old_path else set()
+            )),
+            old_path=old_path,
         ))
     return sorted(files, key=lambda item: item.path)
 
@@ -364,23 +369,24 @@ def collect_commits(repo: Path, base: str, head: str) -> list[Commit]:
 
 def changed_files_matching(files: Iterable[ChangedFile],
                            pattern: re.Pattern[str]) -> list[str]:
-    return [item.path for item in files if pattern.search(item.path)]
+    return [path for path in changed_paths(files) if pattern.search(path)]
+
+
+def changed_paths(files: Iterable[ChangedFile]) -> list[str]:
+    """Include the source of a rename when selecting affected ownership."""
+    return sorted({
+        path for item in files for path in (item.path, item.old_path) if path
+    })
 
 
 def total_changed_lines(repo: Path, base: str, head: str,
                         ignore_whitespace: bool) -> int:
-    args = ["diff", "--numstat", "--find-renames"]
+    args = ["diff", "--numstat", "-z", "--find-renames"]
     if ignore_whitespace:
         args.append("-w")
     args.extend([base, head])
-    total = 0
-    for line in git_out(repo, *args).splitlines():
-        columns = line.split("\t")
-        if len(columns) < 2:
-            continue
-        if columns[0].isdigit() and columns[1].isdigit():
-            total += int(columns[0]) + int(columns[1])
-    return total
+    return sum(added + deleted for added, deleted, _ in
+               parse_numstat(git_out(repo, *args)).values())
 
 
 def file_size_in_head(repo: Path, head: str, path: str) -> int:
@@ -453,7 +459,7 @@ def ctest_pattern(targets: Iterable[str]) -> str:
 
 
 def recommend_checks(files: Sequence[ChangedFile], platform_name: str) -> list[Check]:
-    paths = [item.path for item in files]
+    paths = changed_paths(files)
     code_paths = [path for path in paths if Path(path).suffix in CODE_SUFFIXES]
     any_code = bool(code_paths)
     any_docs = any(path.endswith(".md") for path in paths)
@@ -484,7 +490,10 @@ def recommend_checks(files: Sequence[ChangedFile], platform_name: str) -> list[C
     any_perf_tools = any(PERF_TOOL_RE.search(path) for path in paths)
     any_state = any(STATE_RE.search(path) for path in paths)
     any_api = any(API_RE.search(path) for path in paths)
-    any_arith = any(ARITHMETIC_RE.search(path) for path in paths)
+    any_arith = any(
+        ARITHMETIC_RE.search(path) or LOADER_TOKENIZER_RE.search(path)
+        for path in paths
+    )
     any_vision = any(
         "vision" in path or "mmproj" in path or "projector" in path
         for path in paths
@@ -568,7 +577,18 @@ def recommend_checks(files: Sequence[ChangedFile], platform_name: str) -> list[C
             cpu_targets.update(targets)
 
     if cpu_targets:
-        pattern = ctest_pattern(cpu_targets)
+        test_names = {
+            "qwen38_flash_next_config_test": "qwen38_flash_next.config",
+            "qwen38_flash_next_mtp_sampling_test": "qwen38_flash_next.mtp_sampling",
+            "ds4_sampling_test": "ds4.sampling",
+            "ds4_chat_template_test": "ds4.template",
+            "ds4_cli_test": "ds4.cli",
+        }
+        pattern = ctest_pattern(
+            re.escape(test_names.get(target, target)) for target in cpu_targets
+        )
+        build_targets = {"gufo" if target == "gufo_help" else target
+                         for target in cpu_targets}
         if platform_name == "windows":
             command = (
                 "powershell -ExecutionPolicy Bypass -File "
@@ -581,15 +601,15 @@ def recommend_checks(files: Sequence[ChangedFile], platform_name: str) -> list[C
                 "Build each target below, then run the focused CTest "
                 "selection."
             )
-            target_list = ", ".join(sorted(cpu_targets))
+            target_list = ", ".join(sorted(build_targets))
             command += f"\n# targets: {target_list}"
         else:
-            targets = " ".join(sorted(cpu_targets))
+            targets = " ".join(sorted(build_targets))
             command = (
                 f"nix develop -c cmake --build --preset gpu-test "
                 f"--target {targets}\n"
                 f"nix develop -c ctest --preset gpu-full -R "
-                f"'^({pattern})$' --output-on-failure"
+                f"'^({pattern})$' --output-on-failure --no-tests=error"
             )
             reason = "Build and run the focused CPU/contract targets."
         add_check(checks, "cpu-targets", "required", command, reason)
@@ -623,7 +643,7 @@ def recommend_checks(files: Sequence[ChangedFile], platform_name: str) -> list[C
             "docs/TESTING.md#matched-token-and-layer-comparisons. Record "
             "baseline/candidate revisions, binary hashes, model/sidecar "
             "identities, corpus hash, settings and exact commands.",
-            "Arithmetic-sensitive paths changed. Require exact full-logit "
+            "Arithmetic, loader or tokenizer paths changed. Require exact full-logit "
             "equality for unchanged arithmetic, or declared limits for an "
             "intentional numerical change.",
         )
@@ -736,7 +756,7 @@ def recommend_checks(files: Sequence[ChangedFile], platform_name: str) -> list[C
 def detect_flags(repo: Path, base: str, head: str,
                  files: Sequence[ChangedFile]) -> list[Flag]:
     flags: list[Flag] = []
-    paths = [item.path for item in files]
+    paths = changed_paths(files)
     added_paths = [item.path for item in files if item.status.startswith("A")]
 
     def add_flag(severity: str, title: str, detail: str) -> None:
@@ -928,7 +948,7 @@ def detect_flags(repo: Path, base: str, head: str,
 
 
 def run_cheap_checks(repo: Path, files: Sequence[ChangedFile]) -> list[CheapCheck]:
-    paths = [item.path for item in files]
+    paths = changed_paths(files)
     any_code = any(Path(path).suffix in CODE_SUFFIXES for path in paths)
     any_docs = any(path.endswith(".md") for path in paths)
     any_model = any(path.startswith("src/models/") for path in paths)
@@ -995,6 +1015,11 @@ def build_packet(args: argparse.Namespace) -> Packet:
     base_sha = resolve_commit(repo, base_ref)
     head_ref = args.head
     head_sha = resolve_commit(repo, head_ref)
+    if args.run_checks and resolve_commit(repo, "HEAD") != head_sha:
+        raise ReviewError(
+            "--run-checks requires the checkout HEAD to match --head; "
+            "use a checkout at the reviewed revision or omit --run-checks"
+        )
     merge_base_sha = merge_base(repo, base_sha, head_sha, warnings)
 
     files = collect_files(repo, merge_base_sha, head_sha)
@@ -1101,8 +1126,9 @@ def render_markdown(packet: Packet, max_files: int) -> str:
             delta_add = "-" if item.binary else str(item.added)
             delta_del = "-" if item.binary else str(item.deleted)
             areas = ", ".join(f"`{md_escape(area)}`" for area in item.areas)
+            path = (f"{item.old_path} -> {item.path}" if item.old_path else item.path)
             lines.append(
-                f"| {md_escape(item.status)} | {md_escape(item.path)} | "
+                f"| {md_escape(item.status)} | {md_escape(path)} | "
                 f"{delta_add} | {delta_del} | {areas} |"
             )
         if len(packet.files) > max_files:
