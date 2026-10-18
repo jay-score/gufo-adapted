@@ -37,6 +37,34 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-17 — Compact Flash-Next sparse attention selections once per row
+
+- Source: [gufo-org/gufo@baf5a1bbab5b99a8278c4869122fd173b205671b](https://github.com/gufo-org/gufo/commit/baf5a1bbab5b99a8278c4869122fd173b205671b)
+  (PR #622).
+- Local: commit introducing this entry; builds on `bebff14c` (PR #292).
+- Adaptation: imported the per-row selection compaction: for narrow split
+  batches (at most 8 rows) at ratio 4, each row's selected blocks are written
+  once to `attn_lists` (row × `indexer_top_k / compress_ratio` entries) with a
+  count in `attn_counts`, and every split reads that list instead of
+  re-scanning the mask. Null lists keep the mask walk, which wide batches still
+  use. The executor call conflicted with upstream's #518 `SigmoidMulQ8_1`
+  epilogue, which this fork does not have; the list arguments were added to
+  the existing `Attention` + `SigmoidMul` sequence. Upstream's benchmark
+  artifacts are omitted.
+- Areas: `src/models/qwen38_flash_next/kernels/rocm/{kernels.hip.cpp,kernels.hpp,executor.cpp,executor.hpp}`,
+  `tests/models/qwen38_flash_next/attention_ops_test.cpp`.
+- Validation: Windows `gpu-test` build; `qwen38_flash_next.attention_ops`
+  passes, and the list path is bitwise equal to the mask walk for 1, 3 and 8
+  rows at starts 1,500, 8,192, 32,768 and 163,840. `gufo bench --logit-eval`
+  on UD-IQ4_XS with the Q8_0 MTP sidecar, same 64 KB corpus and `2,4,8:p8`
+  schedules as the #292 entry: all 15,834 raw-logit rows match `bebff14c`
+  exactly in both schedules. AR `gufo bench -p 512 -n 128 -d 0,32768,131072
+  -r 2`, same session as the #292 timing: decode 28.31 tok/s at depth 0
+  (28.45 for #292), 27.50 at 32K (27.34, +0.6%) and 26.91 at 128K (26.60,
+  +1.2%); against `daf56a19` that is +4.4% at 32K and +9.5% at 128K. pp512
+  unchanged within noise. Linux CI not run.
+- Status: retained.
+
 ### 2026-10-17 — Cut Flash-Next sparse attention tiles across selection windows
 
 - Source: [gufo-org/gufo@6a4c89784adb1c99830889b42fc3e243c3fcb7d8](https://github.com/gufo-org/gufo/commit/6a4c89784adb1c99830889b42fc3e243c3fcb7d8)
