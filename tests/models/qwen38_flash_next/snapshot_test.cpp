@@ -331,9 +331,10 @@ int main(int argc, char** argv) {
                         prompt_logits.size() * sizeof(float)) == 0,
             "extension after restore differs");
 
-    // Cached state from older prefill arithmetic must be rebuilt.
+    // Version 19 predates cross-window sparse attention tile grouping.
+    // Its cached state must be rebuilt after the accumulation order changes.
     auto incompatible = bytes;
-    const std::uint32_t old_version = qfn::Session::kSnapshotPayloadVersion - 1;
+    const std::uint32_t old_version = 19;
     std::memcpy(incompatible.data() + 8, &old_version, sizeof(old_version));
     Require(!restored->RestoreSnapshot(incompatible, &error),
             "incompatible snapshot version accepted");

@@ -37,6 +37,204 @@ Use this entry format:
 
 ## Recorded adaptations
 
+### 2026-10-17 — Keep the cached conversation when tool choice changes
+
+- Source: [gufo-org/gufo@23d970d0ca0ef694dafec64131269f9c24590940](https://github.com/gufo-org/gufo/commit/23d970d0ca0ef694dafec64131269f9c24590940)
+  (PR #623), adapted.
+- Local: commit introducing this entry.
+- Adaptation: same goal, different route. Upstream deletes the `required`
+  instruction from the system prompt because its grammar forces a tool call.
+  This fork enforces `required` only after generation
+  (`tool_choice_unsatisfied`), so the instruction is kept and moved after the
+  cacheable prefix instead. Qwen renders it as a trailing user turn after
+  `stable_prefix_bytes` (system turns must lead), only with tools and a
+  generation prompt. DeepSeek appends it after the last message, before the
+  generation prompt; its continuation-render frontier already stops before
+  it. `require_tool_call` options and the server wiring are unchanged.
+  Upstream's functional suite is omitted (absent here). Cost: the request after
+  a `required` one resumes from the last-message checkpoint rather than the
+  live frontier, re-processing that assistant reply.
+- Areas: `src/models/qwen/chat_template.cpp`,
+  `src/models/deepseek_v4_flash/chat_template.cpp`, `docs/SERVER.md`,
+  `tests/models/qwen/tokenization/chat_template_test.cpp`,
+  `tests/models/deepseek_v4_flash/chat_template_test.cpp`.
+- Validation: Windows `gpu-test` build; `qwen_chat_template_test` (required
+  and auto share the stable prefix; the turn follows it; absent without a
+  generation prompt) and `ds4_chat_template_test` (required only appends
+  after the last message; pinned golden unchanged) pass and fail against the
+  previous renderers. `openai_chat_test` and `text_model_runner_test` pass.
+  Real-model check on Flash-Next UD-IQ4_XS, `gufo serve -c 16384`,
+  temperature 0, thinking off, three tools, 20 prompts that need no tool, all
+  with `tool_choice: "required"`: the previous system-prompt placement gave
+  18 `tool_choice_unsatisfied`, 1 call and 1 length-limited text reply; the
+  trailing turn gave 19 calls and 1 unsatisfied. Upstream's deletion renders
+  `required` like `auto`, where all 20 replied with text (20 unsatisfied).
+  Switching a ~1K-token conversation from `auto` to `required` reused 0
+  tokens before (1,013 prefilled) and 989 after (28 prefilled). DeepSeek not
+  run on a real model (no local weights). Linux CI not run.
+- Status: retained.
+
+### 2026-10-17 — Compact Flash-Next sparse attention selections once per row
+
+- Source: [gufo-org/gufo@baf5a1bbab5b99a8278c4869122fd173b205671b](https://github.com/gufo-org/gufo/commit/baf5a1bbab5b99a8278c4869122fd173b205671b)
+  (PR #622).
+- Local: commit introducing this entry; builds on `bebff14c` (PR #292).
+- Adaptation: imported the per-row selection compaction: for narrow split
+  batches (at most 8 rows) at ratio 4, each row's selected blocks are written
+  once to `attn_lists` (row × `indexer_top_k / compress_ratio` entries) with a
+  count in `attn_counts`, and every split reads that list instead of
+  re-scanning the mask. Null lists keep the mask walk, which wide batches still
+  use. The executor call conflicted with upstream's #518 `SigmoidMulQ8_1`
+  epilogue, which this fork does not have; the list arguments were added to
+  the existing `Attention` + `SigmoidMul` sequence. Upstream's benchmark
+  artifacts are omitted.
+- Areas: `src/models/qwen38_flash_next/kernels/rocm/{kernels.hip.cpp,kernels.hpp,executor.cpp,executor.hpp}`,
+  `tests/models/qwen38_flash_next/attention_ops_test.cpp`.
+- Validation: Windows `gpu-test` build; `qwen38_flash_next.attention_ops`
+  passes, and the list path is bitwise equal to the mask walk for 1, 3 and 8
+  rows at starts 1,500, 8,192, 32,768 and 163,840. `gufo bench --logit-eval`
+  on UD-IQ4_XS with the Q8_0 MTP sidecar, same 64 KB corpus and `2,4,8:p8`
+  schedules as the #292 entry: all 15,834 raw-logit rows match `bebff14c`
+  exactly in both schedules. AR `gufo bench -p 512 -n 128 -d 0,32768,131072
+  -r 2`, same session as the #292 timing: decode 28.31 tok/s at depth 0
+  (28.45 for #292), 27.50 at 32K (27.34, +0.6%) and 26.91 at 128K (26.60,
+  +1.2%); against `daf56a19` that is +4.4% at 32K and +9.5% at 128K. pp512
+  unchanged within noise. Linux CI not run.
+- Status: retained.
+
+### 2026-10-17 — Cut Flash-Next sparse attention tiles across selection windows
+
+- Source: [gufo-org/gufo@6a4c89784adb1c99830889b42fc3e243c3fcb7d8](https://github.com/gufo-org/gufo/commit/6a4c89784adb1c99830889b42fc3e243c3fcb7d8)
+  (PR #292).
+- Local: `bebff14c63b2c08ed2317a0a07dcf73c1a61a313`; snapshot compatibility
+  correction in the commit updating this entry.
+- Adaptation: imported the `AttentionKernel` change that cuts key tiles from
+  the running compacted block list, carrying a partial tile of at most
+  `kTile / 4` blocks into the next 1024-block window, and deals the tiles
+  round-robin across splits. Previously each window was tiled separately, so
+  deep contexts produced many mostly empty tiles and windows with less than a
+  tile landed on split 0. The selected keys are unchanged; only tile grouping
+  and softmax accumulation order differ. Also imported the FP64 structured
+  attention tests. Upstream's `gpu_probe` additions, model-identity record and
+  benchmark artifacts are omitted (Linux-specific harness data).
+  The local snapshot compatibility version is 20 because accumulation order
+  changes: version-19 and earlier checkpoints are rebuilt from the prompt.
+  Older builds cannot read version-20 checkpoints after a rollback.
+- Areas: `src/models/qwen38_flash_next/kernels/rocm/kernels.hip.cpp`,
+  `src/models/qwen38_flash_next/engine.hpp`,
+  `tests/models/qwen38_flash_next/attention_ops_test.cpp`,
+  `tests/models/qwen38_flash_next/snapshot_test.cpp`, `docs/SERVER.md`.
+- Validation: Windows `gpu-test` build; `qwen38_flash_next.attention_ops`
+  passes with FP64 worst absolute errors ≤ ~3e-7. Arithmetic changes
+  intentionally, so the declared limit is drift below the existing
+  path-to-path spread. `gufo bench --logit-eval` on UD-IQ4_XS with the Q8_0
+  MTP sidecar compared `daf56a19` against this commit. The corpus was the
+  first 64,000 bytes of wikitext-2 test (sha256 `b12cec83c3206e1b…`, 15,834
+  positions; the 16 KB corpus stays inside one window and cannot exercise the
+  change), schedules `2,4,8:p8`. `p8` rows match exactly (perplexity
+  2.000619). Narrow verify batches (`2,4,8`) first differ at position 4,105:
+  top-1 agreement 97.22%, mean KL over the top 64 tokens 1.50e-2, perplexity
+  1.973978 → 1.976805. Both builds are equally distant from the `p8` path
+  (top-1 94.66%, mean KL 4.49e-2 before and 4.54e-2 after), so the drift is a
+  third of the existing schedule spread. AR `gufo bench -p 512 -n 128
+  -d 0,32768,131072 -r 2` on UD-IQ4_XS, base run before and after: decode
+  28.33/28.43 → 28.45 tok/s at depth 0, 26.38/26.34 → 27.34 at 32K (+3.7%),
+  24.58/24.57 → 26.60 at 128K (+8.2%); pp512 unchanged within noise. Linux CI
+  not run.
+- Snapshot compatibility follow-up: native Windows/gfx1151, TheRock 10.0.0
+  (clang 23), `gpu-test`; `gufo` and the snapshot test build. Running
+  `qwen38_flash_next_snapshot_test --model "$MODEL" --mtp-model "$MTP"`
+  on UD-IQ4_XS with the shared Q8_0 MTP sidecar (8192 context, seed 7,
+  temperature 0.8, top-k 40, top-p 0.9) fails before the bump with
+  `incompatible snapshot version accepted`, then passes at version 20.
+  AR/MTP incremental captures, persistent round trips, exact restored logits,
+  sampled replay and deferred-residual RNG replay pass. The disk-cache test,
+  repository formatting and docs checks pass. This follow-up changes metadata
+  only; no new logit/perplexity measurements or Linux execution.
+- Status: retained.
+
+### 2026-10-17 — Flat-table Flash-Next n-gram gather
+
+- Source: [gufo-org/gufo@8497711eb154ecff55ef4119a01ace214149e276](https://github.com/gufo-org/gufo/commit/8497711eb154ecff55ef4119a01ace214149e276)
+  (PR #613), gather half only.
+- Local: commit introducing this entry.
+- Adaptation: imported `NgramTable::ReserveGather` and the flat power-of-two
+  deduplication table that replaces the per-gather `std::unordered_map`, plus
+  the `ReserveGather(T * ple_heads)` call in `Executor::Create`. Upstream's
+  prompt-lookup MTP proposals, length-controller changes, snapshot payload bump
+  and functional suite are omitted. They conflict with this fork's own
+  `prompt_lookup.hpp` and remain a separate decision. The fork's cached
+  overlapped reads are unchanged. Scratch is reserved once at load:
+  4,096 prefill tokens × 16 heads gives 65,536 rows, a 1 MiB table plus about
+  2 MiB of job/copy lists, independent of context length.
+- Areas: `src/models/qwen38_flash_next/ngram.{hpp,cpp}`,
+  `src/models/qwen38_flash_next/kernels/rocm/executor.cpp`,
+  `tests/models/qwen38_flash_next/ngram_test.cpp`.
+- Validation: Windows `gpu-test` build; `qwen38_flash_next.ngram` passes,
+  including upstream's reuse and active-gather cases. `gufo bench --logit-eval`
+  on Flash-Next UD-Q4_K_XL with Q8_0 MTP compared the previous commit against
+  this one, same toolchain and settings. The corpus was the first 16,000 bytes
+  of wikitext-2 test (sha256 `fdcdcd05f34de43e…`), with schedules
+  `1:2,4,8:p8`. All 3,686 raw-logit rows match exactly in every schedule
+  (perplexity 1.443348 / 1.443348 / 1.472327). Repeated on the fork's UD-IQ4_XS
+  qualification weights with the same Q8_0 MTP sidecar and corpus: all 3,686
+  rows match exactly (perplexity 1.544504 / 1.544504 / 1.576038). No throughput
+  measurement. Linux CI not run.
+- Status: retained.
+
+### 2026-10-17 — Prepare the Qwen vision sidecar before serving
+
+- Source: [gufo-org/gufo@0604e9ebc41388ab610ed0bed198e49ef96a6a82](https://github.com/gufo-org/gufo/commit/0604e9ebc41388ab610ed0bed198e49ef96a6a82)
+  (PR #616).
+- Local: commit introducing this entry.
+- Adaptation: imported as is (public `Encoder::Upload`, `PrepareVision` at both
+  Qwen `InferenceBackend::load` overloads, docs and test), with two Windows
+  changes. The `event=vision_prepared` free-memory field and the new test read
+  `gufo::platform::DeviceMemoryInfo` instead of `hipMemGetInfo`, because
+  `hipMemGetInfo` reports wrong numbers on Windows. On Windows the first encode
+  keeps a fixed ~73 MiB of one-time runtime state, beyond upstream's 64 MiB
+  allowance. The test now bounds the first encode by half the sidecar, which
+  still catches a re-upload, and requires a repeated encode to stay flat.
+- Areas: `src/models/qwen/vision/encoder.{hpp,hip}`,
+  `src/cli/serve/inference_backend.cpp`, `docs/SERVER.md`,
+  `tests/models/qwen/vision_prepare_test.cpp`, `tests/models/qwen27b/CMakeLists.txt`.
+- Validation: Windows `gpu-test` build. `qwen_vision_prepare_test` passes on
+  `mmproj-BF16.gguf` (resident 903,984,064 bytes, matching the sidecar
+  weights); upstream's unmodified check fails there as described.
+  `qwen_vision_discovery_test` passes; `qwen_vision_serving_test` skipped (no
+  model argument under CTest). Real serve smoke test on Flash-Next UD-Q4_K_XL
+  with auto-discovered BF16 projector, two runs per build against a
+  `6d7f8d3d` release baseline: `vision_prepared` logs identity ~1.11 s and
+  upload ~0.17 s. Readiness takes +1.0 s. The first image request drops from
+  2.72/2.54 s to 0.92/0.89 s (queue 1.1–1.2 s to under 10 ms) with identical
+  replies. Second-image latency is unchanged, and `/v1/models` and `/props`
+  still report image input. On UD-IQ4_XS with the same auto-discovered BF16
+  projector, readiness is 21.8 s, `vision_prepared` logs identity 1.62 s and
+  upload 0.18 s, and the first image request takes 1.11 s (queue 6 ms) with
+  image input advertised. That run is candidate-only, with no IQ4_XS baseline.
+  Linux CI not run.
+- Status: retained.
+
+### 2026-10-17 — Decimal spelling of integer JSON numbers
+
+- Source: [gufo-org/gufo@22e36769f9b25a57963a9215003eae0f5f9c15d6](https://github.com/gufo-org/gufo/commit/22e36769f9b25a57963a9215003eae0f5f9c15d6)
+  (PR #614).
+- Local: commit introducing this entry.
+- Adaptation: `json.hpp` imported unchanged, so integers up to 2^53 serialize
+  in decimal (`100000`, not `1e+05`). This affected streamed tool arguments
+  and Qwen typed tool-call replay (`json::parse(...).tojson()`). Upstream's
+  `json_constraint_test` and functional-suite edits are omitted because those
+  files do not exist here. Its Responses replay case targets a test absent
+  here and is replaced by an integer case in `TestTypedToolReplay`.
+- Areas: `src/core/json.hpp`, `tests/core/json_test.cpp`,
+  `tests/cli/openai_chat_test.cpp`,
+  `tests/models/qwen/tokenization/chat_template_test.cpp`.
+- Validation: Windows `gpu-test` builds of `json_test`, `openai_chat_test` and
+  `qwen_chat_template_test` pass. With the previous `json.hpp`, `json_test` and
+  `qwen_chat_template_test` both fail. Repository format check passes. There are
+  no numerics changes, so no logit checks were run. Linux CI not yet run.
+- Status: retained.
+
 ### 2026-10-15 — Bound Flash-Next selector score scratch
 
 - Source: [gufo-org/gufo@5a0a0ed75009ad56f9eee7cdd92f3b1752dfee64](https://github.com/gufo-org/gufo/commit/5a0a0ed75009ad56f9eee7cdd92f3b1752dfee64)

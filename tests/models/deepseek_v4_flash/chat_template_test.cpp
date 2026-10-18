@@ -216,6 +216,20 @@ void TestOfficialDsmlToolLoop() {
   Expect(Sha256(rendered) ==
              "cd89794650716ce13bac7ac2392db6a06231ce9927ceb1d712f7c399a0a2fde6",
          "DeepSeek tool loop matches the pinned official encoder golden");
+
+  options.require_tool_call = true;
+  const std::string required =
+      gufo::models::deepseek_v4_flash::RenderChat(messages, tools, options);
+  const std::string_view generation =
+      gufo::models::deepseek_v4_flash::GenerationPrompt(true);
+  const std::string requirement =
+      "\n\nYou MUST invoke at least one available tool before answering.";
+  const auto prefix = rendered.size() - generation.size();
+  Expect(required.size() == rendered.size() + requirement.size() &&
+             required.compare(0, prefix, rendered, 0, prefix) == 0 &&
+             required.compare(prefix, requirement.size(), requirement) == 0 &&
+             required.ends_with(generation),
+         "Required tool choice only appends to the last message");
 }
 
 void TestParallelToolOrder() {

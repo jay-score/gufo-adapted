@@ -554,7 +554,9 @@ void TestToolRendering() {
 
   gufo::tokenization::ChatTemplateOptions options;
   options.require_tool_call = true;
-  const auto rendered = tpl->Render(messages, tools, options);
+  std::size_t required_stable = 0;
+  const auto rendered =
+      tpl->Render(messages, tools, options, nullptr, nullptr, &required_stable);
   Expect(rendered.has_value(), "Tool-aware render succeeds");
   Expect(rendered->find("# Tools") != std::string::npos,
          "Tool prompt is rendered");
@@ -565,9 +567,29 @@ void TestToolRendering() {
   Expect(rendered->find("<parameter=city>\nRome\n</parameter>") !=
              std::string::npos,
          "Tool arguments use native Qwen syntax");
-  Expect(rendered->find("You must call at least one available function") !=
-             std::string::npos,
-         "Required tool choice is included in the model prompt");
+  constexpr std::string_view kRequiredTurn =
+      "<|im_start|>user\nYou must call at least one available function. Do "
+      "not answer the user directly.<|im_end|>\n<|im_start|>assistant\n";
+  Expect(rendered->substr(required_stable).starts_with(kRequiredTurn),
+         "Required tool choice follows the stable boundary as a user turn");
+
+  options.require_tool_call = false;
+  std::size_t auto_stable = 0;
+  const auto automatic =
+      tpl->Render(messages, tools, options, nullptr, nullptr, &auto_stable);
+  Expect(automatic.has_value() && auto_stable == required_stable &&
+             automatic->substr(0, auto_stable) ==
+                 rendered->substr(0, required_stable),
+         "Required and auto tool choice share the cacheable prefix");
+  Expect(automatic->find("You must call at least one") == std::string::npos,
+         "Auto tool choice omits the requirement");
+
+  options.require_tool_call = true;
+  options.add_generation_prompt = false;
+  const auto history = tpl->Render(messages, tools, options);
+  Expect(history.has_value() &&
+             history->find("You must call at least one") == std::string::npos,
+         "History renders without a generation prompt omit the requirement");
 }
 
 void TestToolResultWhitespace() {
@@ -782,6 +804,7 @@ void TestTypedToolReplay() {
             .value = "{\"z\":[1,true,null]}",
             .is_string = true},
            {.name = "spaced", .value = "[ 1,  2 ]", .is_string = false},
+           {.name = "limit", .value = "100000", .is_string = false},
        }});
   const std::vector<ChatMessage> messages{{ChatRole::kUser, "store"},
                                           assistant};
@@ -799,6 +822,9 @@ void TestTypedToolReplay() {
   Expect(rendered->find("<parameter=spaced>\n[1, 2]\n</parameter>") !=
              std::string::npos,
          "Typed replay normalizes existing whitespace once");
+  Expect(rendered->find("<parameter=limit>\n100000\n</parameter>") !=
+             std::string::npos,
+         "Typed replay keeps the decimal spelling of integers");
 }
 
 void TestLiteralPromptTokens() {

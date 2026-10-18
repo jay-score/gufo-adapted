@@ -182,8 +182,20 @@ boundary. Appending a screenshot can reuse earlier text and images, including
 an earlier snapshot; changing an image inside that prefix still rejects reuse.
 An image partially inside the prefix contributes its entire pixel fingerprint.
 Disk lookup remains keyed by the complete request's image identity. Flash-Next
-snapshot payload version 15 stores the image identity at the snapshot boundary;
-older disk checkpoints are not reused by this version.
+snapshot payload version 20 stores the image identity at the snapshot boundary
+and invalidates checkpoints from older sparse-attention arithmetic. Version-19
+and earlier checkpoints are rebuilt from the prompt; version-20 checkpoints
+are not readable by older builds.
+
+A loaded Qwen vision sidecar is prepared while the model loads, before the RAM
+cache is sized and before readiness: Gufo hashes the complete sidecar for image
+cache identities and uploads the encoder weights, so neither happens in the
+first image request and admission's free device memory already excludes them.
+The weights stay resident even if no image arrives, including a sidecar
+auto-discovered as `mmproj-BF16.gguf` in the model's directory or its parent.
+The startup line `event=vision_prepared` reports `resident_bytes`,
+`identity_ms` and `upload_ms`. Startup fails if the upload does not fit. Image
+encoding scratch is still allocated per image.
 
 `SIGINT` and `SIGTERM` cancel active requests and drain accepted disk writes
 before exiting. `--cache-disk DIR` defaults to 8 GiB retained on disk.
@@ -686,6 +698,9 @@ Tool calls are emitted only for declared functions when `tool_choice` allows
 calling tools. An unmet `required` choice returns `tool_choice_unsatisfied`
 (HTTP 502, or an SSE error after streaming starts). Requested stops, token limits
 and cancellation terminate normally without emitting incomplete calls.
+`required` adds a short instruction after the last message rather than to the
+system prompt, so switching between `auto` and `required` keeps the cached
+conversation. The next request resumes from the last-message checkpoint.
 
 A complete framed call that fails parsing or names an undeclared function
 returns `malformed_tool_call` (HTTP 502, without automatic retry guidance) when

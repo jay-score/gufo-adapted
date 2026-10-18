@@ -67,6 +67,10 @@ constexpr std::string_view kXHighReasoningInstruction =
     "task, validate key assumptions, consider plausible alternatives, and "
     "prioritize correctness, consistency, and clarity in the final answer.";
 
+constexpr std::string_view kRequiredToolTurn =
+    "<|im_start|>user\nYou must call at least one available function. Do not "
+    "answer the user directly.<|im_end|>\n";
+
 std::string TemplateSha256(std::string_view value) {
   const auto* begin = reinterpret_cast<const std::uint8_t*>(value.data());
   return crypto::Sha256Hex({begin, value.size()});
@@ -208,7 +212,6 @@ void AppendLiteral(std::string& output, std::string_view value,
 }
 
 void AppendToolsPrompt(std::string& output, std::span<const ChatTool> tools,
-                       bool require_tool_call,
                        std::vector<LiteralTextSpan>* spans) {
   if (tools.empty()) {
     return;
@@ -256,11 +259,6 @@ void AppendToolsPrompt(std::string& output, std::span<const ChatTool> tools,
       "there is no function call available, answer the question like normal "
       "with your current knowledge and do not tell the user about function "
       "calls\n</IMPORTANT>");
-  if (require_tool_call) {
-    output.append(
-        "\n\nYou must call at least one available function. Do not answer the "
-        "user directly.");
-  }
 }
 
 void AppendToolCalls(std::string& output,
@@ -410,6 +408,7 @@ std::optional<std::string> QwenChatTemplate::Render(
     estimated_len += 64;
   }
   estimated_len += kXHighReasoningInstruction.size() + 64;
+  estimated_len += kRequiredToolTurn.size();
 
   if (estimated_len > options.max_output_bytes ||
       estimated_len >
@@ -442,7 +441,7 @@ std::optional<std::string> QwenChatTemplate::Render(
   std::string system_prefix;
   std::vector<LiteralTextSpan> system_spans;
   AppendReasoningInstruction(system_prefix, options);
-  AppendToolsPrompt(system_prefix, tools, options.require_tool_call,
+  AppendToolsPrompt(system_prefix, tools,
                     literal_spans == nullptr ? nullptr : &system_spans);
   if (!system_prefix.empty() && !system_content.empty()) {
     system_prefix.append("\n\n");
@@ -584,6 +583,12 @@ std::optional<std::string> QwenChatTemplate::Render(
 
   if (stable_prefix_bytes != nullptr)
     *stable_prefix_bytes = mutable_reasoning.value_or(output.size());
+  // A required tool choice applies to this request only. Render it after the
+  // stable boundary, as a user turn because system turns must lead, so that
+  // switching between auto and required keeps the cached conversation.
+  if (options.require_tool_call && !tools.empty() &&
+      options.add_generation_prompt)
+    output.append(kRequiredToolTurn);
   if (options.add_generation_prompt)
     output.append(GenerationPrompt(options.enable_thinking));
 
