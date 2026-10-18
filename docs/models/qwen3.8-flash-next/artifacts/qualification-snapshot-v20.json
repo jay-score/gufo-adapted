@@ -1,0 +1,422 @@
+{
+  "schema": "gufo-inference-qualification-exercise/1",
+  "measuredOn": "2026-10-18",
+  "status": "PASS",
+  "control": false,
+  "model": {
+    "category": "llm",
+    "docs": "qwen3.8-flash-next",
+    "id": "Qwen3.8-Flash-Next",
+    "source": "qwen38_flash_next"
+  },
+  "intent": "Exercise the inference qualification runner on the real Flash-Next snapshot payload version 19 to 20 fix; inference arithmetic is unchanged.",
+  "config": {
+    "path": "docs/models/qwen3.8-flash-next/artifacts/qualify.json",
+    "sha256": "0282092dc364b70601e40d6f807c8a9d63172486b3d4e0da969751e314260007"
+  },
+  "coverage": {
+    "baselineCaptures": [
+      "logits",
+      "prefill-logits"
+    ],
+    "requiredCaptures": [
+      "logits",
+      "prefill-logits"
+    ],
+    "requiredChecks": [
+      "build",
+      "fast",
+      "kernels",
+      "state"
+    ]
+  },
+  "builds": {
+    "baseline": {
+      "source": "24c0a99f857678de6cf854c2adc4276464cebf92",
+      "dirty": false,
+      "binary": {
+        "name": "gufo.exe",
+        "bytes": 93370368,
+        "sha256": "38a802f0cd6ba0ad7089d0421b909102461c039df054166d7090d2dd188f369b",
+        "version": "gufo version 24c0a99f8576"
+      },
+      "sessionTest": {
+        "name": "qwen38_flash_next_session_test.exe",
+        "bytes": 84722688,
+        "sha256": "e32a54ec0dbc9b55b356c1dc967702ce5e5fef0de90039f74b65b8ce275243a4"
+      }
+    },
+    "candidate": {
+      "source": "fe8469b5663081406ae70d0928cd6ac04866a79c",
+      "dirty": false,
+      "binary": {
+        "name": "gufo.exe",
+        "bytes": 93370368,
+        "sha256": "ebff13579c8329ace22ceaae21a65986bd23bdaf095788c62301b2f5c30351db",
+        "version": "gufo version fe8469b56630"
+      },
+      "sessionTest": {
+        "name": "qwen38_flash_next_session_test.exe",
+        "bytes": 84722688,
+        "sha256": "e450f482b97dd0a314be29c4ab27957827ef61409213f60cbcece61c8c5bb7d0"
+      }
+    }
+  },
+  "inputs": {
+    "gguf": [
+      {
+        "name": "Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf",
+        "bytes": 10946624,
+        "sha256": "4448186216b3af4cc558bbce2c3213f01608f8f8b2e5267a9767971dd3ec8082"
+      },
+      {
+        "name": "Qwen3.8-Flash-Next-UD-Q4_K_XL-00002-of-00004.gguf",
+        "bytes": 49859583136,
+        "sha256": "3f342f1c1580473f1ee94ddd5b28206e8c07a70fa1a366f59d1d6c922919a6c9"
+      },
+      {
+        "name": "Qwen3.8-Flash-Next-UD-Q4_K_XL-00003-of-00004.gguf",
+        "bytes": 49376141504,
+        "sha256": "56758f40269cad5cd9b0d3d6fbae0f40f6d5be6de49e4ab392dbe83157d9cbd3"
+      },
+      {
+        "name": "Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf",
+        "bytes": 12087983520,
+        "sha256": "753bda48b98ba4f1636134a90a967de1b2d3908a236c026e464777342e53510a"
+      }
+    ],
+    "mtp": [
+      {
+        "name": "mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf",
+        "bytes": 2786568256,
+        "sha256": "5ff54097406a905cf3a724c709124ceb0e3e10235ee862298969e91c96fa96e6"
+      }
+    ]
+  },
+  "corpus": {
+    "logits": {
+      "name": "host-snapshot-corpus.txt",
+      "bytes": 1139,
+      "sha256": "e29a67f814ab3fe409f9c845669e420746d3c5ab55196e0085efbde4f1fae49e"
+    }
+  },
+  "toolchain": {
+    "therockVersion": "10.0.0",
+    "compiler": {
+      "name": "clang++.exe",
+      "bytes": 110282240,
+      "sha256": "812397316720f03d66425d660f4e861c620125ce3d9c5447035062a442c5ab29"
+    },
+    "compilerVersion": "AMD clang version 23.0.0git (https://github.com/ROCm/llvm-project.git 8f497e0992fb7513f7f78a6f6b6f1056c375e961)\nTarget: x86_64-pc-windows-msvc\nThread model: posix",
+    "cmakeVersion": "cmake version 4.4.0",
+    "ninjaVersion": "1.12.0"
+  },
+  "dependencies": {
+    "vcpkg.json": {
+      "name": "vcpkg.json",
+      "bytes": 273,
+      "sha256": "d711d2a008fd06e4d16438e033cbe463f44d5af82e82bf9f52b2c56fbe32bf3e"
+    }
+  },
+  "compatibilityHeaders": {
+    "path": "compat/win32/hip_include",
+    "gitTree": "10f0756b65da99c519f42c636be7f304872405fe"
+  },
+  "runtimeDlls": {
+    "amdhip64_7.dll": {
+      "name": "amdhip64_7.dll",
+      "bytes": 16555520,
+      "sha256": "546fb3d6e2d2194a9526fb94ec2fd3aa5b92a48a7595f04efece80162047ef69"
+    },
+    "hipblas.dll": {
+      "name": "hipblas.dll",
+      "bytes": 801280,
+      "sha256": "343bd57671dc96d035ff0e7591ecce926a102df1d52b50025f4a41a45cdf9581"
+    },
+    "libhipblaslt.dll": {
+      "name": "libhipblaslt.dll",
+      "bytes": 6301696,
+      "sha256": "746fa2f7e037b3d03a0b904659bfc21bfbf0fe1a86f127564ac2dee38b85442e"
+    },
+    "rocblas.dll": {
+      "name": "rocblas.dll",
+      "bytes": 21020160,
+      "sha256": "8ecbe340d8052e5292a47b96f3c93c20767ced0032db47851b792da7039d1e0b"
+    },
+    "libomp140.x86_64.dll": {
+      "name": "libomp140.x86_64.dll",
+      "bytes": 661856,
+      "sha256": "4a20c1e5c115c29771a12324513eb109badac72180f79481527ad79d996ffb33"
+    }
+  },
+  "testAssertionFlags": {
+    "baseline": [
+      "-DNDEBUG",
+      "-UNDEBUG"
+    ],
+    "candidate": [
+      "-DNDEBUG",
+      "-UNDEBUG"
+    ]
+  },
+  "checks": {
+    "required": [
+      {
+        "id": "build",
+        "status": "pass"
+      },
+      {
+        "id": "fast",
+        "status": "pass"
+      },
+      {
+        "id": "kernels",
+        "status": "pass"
+      },
+      {
+        "id": "state",
+        "status": "pass"
+      }
+    ],
+    "cpu": [
+      "qwen38_flash_next.config",
+      "qwen38_flash_next.ngram",
+      "qwen38_flash_next.mtp_sampling",
+      "qwen38_flash_next.prompt_lookup"
+    ],
+    "gpu": [
+      "qwen38_flash_next.mtp_ops",
+      "qwen38_flash_next.blaslt_ops",
+      "qwen38_flash_next.hc_mix_ops",
+      "qwen38_flash_next.gdn_ops",
+      "qwen38_flash_next.attention_ops",
+      "qwen38_flash_next.moe_epilogue_ops",
+      "qwen38_flash_next.moe_ids_ops",
+      "qwen38_flash_next.projection_ops",
+      "qwen38_flash_next.routed_wmma_ops",
+      "qwen38_flash_next.iq_experts_ops",
+      "qwen38_flash_next.select_ops"
+    ],
+    "modelState": [
+      "qwen38_flash_next_session_test",
+      "qwen38_flash_next_rollback_test",
+      "qwen38_flash_next_snapshot_test",
+      "qwen38_flash_next_eos_test"
+    ]
+  },
+  "modelTestBinaries": [
+    {
+      "name": "qwen38_flash_next_session_test.exe",
+      "bytes": 84722688,
+      "sha256": "e450f482b97dd0a314be29c4ab27957827ef61409213f60cbcece61c8c5bb7d0"
+    },
+    {
+      "name": "qwen38_flash_next_rollback_test.exe",
+      "bytes": 26632704,
+      "sha256": "922106c366481a4adbc4d648f11686af050a96ccc6cb965a7a9e9232d452ae09"
+    },
+    {
+      "name": "qwen38_flash_next_snapshot_test.exe",
+      "bytes": 26711040,
+      "sha256": "e3b4836b94e5f1c9842c51e9b4533ca9a06961bca457fb9956535afdbffde32a"
+    },
+    {
+      "name": "qwen38_flash_next_eos_test.exe",
+      "bytes": 84614656,
+      "sha256": "b2a5be0f04bf958ca42943bd484586094e36acfeaa72742f60686c94b14e9dda"
+    }
+  ],
+  "comparisons": [
+    {
+      "capture": "logits",
+      "output": "logits-s0.bin.sha256",
+      "comparator": "logit-sha256",
+      "result": "match",
+      "detail": "MATCH: all 225 complete raw-logit rows have identical SHA-256 hashes",
+      "baseline": {
+        "name": "logits-s0.bin.sha256",
+        "bytes": 16699,
+        "sha256": "62ddb07c4391d2dd4f04eaedd76442db204f073433404ae2ff09b7a4cf9e2314"
+      },
+      "candidate": {
+        "name": "logits-s0.bin.sha256",
+        "bytes": 16699,
+        "sha256": "62ddb07c4391d2dd4f04eaedd76442db204f073433404ae2ff09b7a4cf9e2314"
+      }
+    },
+    {
+      "capture": "logits",
+      "output": "logits-s1.bin.sha256",
+      "comparator": "logit-sha256",
+      "result": "match",
+      "detail": "MATCH: all 225 complete raw-logit rows have identical SHA-256 hashes",
+      "baseline": {
+        "name": "logits-s1.bin.sha256",
+        "bytes": 16699,
+        "sha256": "62ddb07c4391d2dd4f04eaedd76442db204f073433404ae2ff09b7a4cf9e2314"
+      },
+      "candidate": {
+        "name": "logits-s1.bin.sha256",
+        "bytes": 16699,
+        "sha256": "62ddb07c4391d2dd4f04eaedd76442db204f073433404ae2ff09b7a4cf9e2314"
+      }
+    },
+    {
+      "capture": "logits",
+      "output": "logits-s2.bin.sha256",
+      "comparator": "logit-sha256",
+      "result": "match",
+      "detail": "MATCH: all 225 complete raw-logit rows have identical SHA-256 hashes",
+      "baseline": {
+        "name": "logits-s2.bin.sha256",
+        "bytes": 16699,
+        "sha256": "f0df91c87fe58a474abf4c0b15e03bfe190c0641068ad55ac93ce02748eab53a"
+      },
+      "candidate": {
+        "name": "logits-s2.bin.sha256",
+        "bytes": 16699,
+        "sha256": "f0df91c87fe58a474abf4c0b15e03bfe190c0641068ad55ac93ce02748eab53a"
+      }
+    },
+    {
+      "capture": "prefill-logits",
+      "output": "prefill.bin",
+      "comparator": "file-sha256",
+      "result": "match",
+      "detail": null,
+      "baseline": {
+        "name": "prefill.bin",
+        "bytes": 321822720,
+        "sha256": "077c6363db6d3f72949db9b0d5346009588b8b38c5634079b7c13cf3eee26084"
+      },
+      "candidate": {
+        "name": "prefill.bin",
+        "bytes": 321822720,
+        "sha256": "077c6363db6d3f72949db9b0d5346009588b8b38c5634079b7c13cf3eee26084"
+      }
+    }
+  ],
+  "scores": {
+    "teacherForced": {
+      "baseline": [
+        {
+          "schedule": 0,
+          "rows": 225,
+          "printedPerplexity": "22.829414"
+        },
+        {
+          "schedule": 1,
+          "rows": 225,
+          "printedPerplexity": "22.829414"
+        },
+        {
+          "schedule": 2,
+          "rows": 225,
+          "printedPerplexity": "21.998551"
+        }
+      ],
+      "candidate": [
+        {
+          "schedule": 0,
+          "rows": 225,
+          "printedPerplexity": "22.829414"
+        },
+        {
+          "schedule": 1,
+          "rows": 225,
+          "printedPerplexity": "22.829414"
+        },
+        {
+          "schedule": 2,
+          "rows": 225,
+          "printedPerplexity": "21.998551"
+        }
+      ]
+    },
+    "normalPrefill": {
+      "baseline": {
+        "rows": 324.0,
+        "labels": 288.0,
+        "mean_nll": 0.14113513363171917,
+        "perplexity": 1.1515802546926903,
+        "vocab": 248320.0
+      },
+      "candidate": {
+        "rows": 324.0,
+        "labels": 288.0,
+        "mean_nll": 0.14113513363171917,
+        "perplexity": 1.1515802546926903,
+        "vocab": 248320.0
+      }
+    },
+    "teacherScorePrecision": "CLI prints six fractional digits; complete raw-logit rows are compared exactly as well."
+  },
+  "totalCompleteRowsMatched": 999,
+  "settings": {
+    "teacherForced": {
+      "speculative": "mtp",
+      "temperature": 0,
+      "seed": 459,
+      "schedules": "1:2,4,8:p8"
+    },
+    "normalPrefill": {
+      "fixtures": 3,
+      "modes": [
+        "AR",
+        "MTP"
+      ],
+      "prefixes": [
+        96,
+        1023,
+        1024,
+        2048,
+        4096,
+        32768
+      ],
+      "continuationTokens": 8
+    }
+  },
+  "diagnosticFingerprint": {
+    "baseline": "e0e6abb322b4484cb5577d0fb0f348268d54faa5a6c04255384d0dde7976b217",
+    "candidate": "e0e6abb322b4484cb5577d0fb0f348268d54faa5a6c04255384d0dde7976b217",
+    "match": true
+  },
+  "harness": {
+    "revision": "4d0c92ebb8bf7611ca9d054b730637cf2dc3807b",
+    "localChanges": [
+      "Commands and test lookup honor --repo; no fallback to driver builds.",
+      "Flash-Next build gate targets the CPU/operator and model test groups."
+    ],
+    "unitTests": {
+      "command": "python tests/tools/qualify_test.py",
+      "tests": 23,
+      "status": "pass"
+    },
+    "files": {
+      "tools/gufo/qualify/__init__.py": "c9c83d279ab1907b0c0f3d0f1c9b82adb14fab5abf0d20b4bfe972ccb502ad0b",
+      "tools/gufo/qualify/cli.py": "e3dd6e46274e260d366067be87a4b8f53e77f704dc1d5244d8e8abe7760c37b4",
+      "tools/gufo/qualify/compare.py": "6105cadc12ba47f86139237b0e1fd65c179ac883148ef07e01de3d98b38d7ac8",
+      "tools/gufo/qualify/config.py": "d34a6a9e67f8436222ec6692325956caeca623d9b207b358f34d0ef046a0266f",
+      "tools/gufo/qualify/plan.py": "408ab1ffee1d26616063d53d46967306d37a91c7be96cf914c6d3ef834deeffd",
+      "tools/gufo/qualify/record.py": "1e14535f0ffcda8c3e44441a7ec07c53d52d3649166585bad23813748bc8988b",
+      "tools/gufo/qualify/report.py": "b415f7f90360d561a8254e507ee2fbadebbf61784e80aa353e6bf113aba8bfd4",
+      "tools/gufo/qualify/util.py": "f92cfd99ffb4e097650586b222bf768da1f2f5ff087d33311ec88917373ccdc7",
+      "tools/models/qualify.py": "a1e91a7f32992725fde6e16d4c63726aa686cfeee25eb8f22d50f0d4654312e6",
+      "tools/ci/review-context.py": "7d86342e041ee382c2d1472d779bcdc88b52ebe056fb9870c9dc60c72a7fc21c",
+      "tools/bench/logit-eval.py": "23adf734a0671820b88230ba9e79c5351b502ca7eaa6dbe4954a78884110f7fe"
+    }
+  },
+  "evidenceDirectory": "artifacts/qualify/snapshot-v20-20261018/",
+  "limitations": [
+    "Native Windows/gfx1151, this UD-Q4_K_XL target and Q8_0 MTP sidecar only; Linux and other models/quantizations were not run.",
+    "HTTP/parser contracts, vision, independent original-checkpoint/conversion accuracy and performance are outside this exercise.",
+    "Built-in Windows fingerprint contains default GCC/amdgpu labels; actual compiler and build identities are recorded here."
+  ],
+  "reproduction": [
+    "Use the retained harness changes and model declaration; create clean detached checkouts at the recorded source revisions.",
+    "Build gufo with the release preset and qwen38_flash_next_model_tests with gpu-test in each checkout using tools/windows/build.ps1 -Jobs 4 and the recorded toolchain.",
+    "python tools/models/qualify.py plan --base 24c0a99f8576 --head fe8469b56630 --format json --output <run>/plan.json",
+    "python tools/models/qualify.py record --model qwen3.8-flash-next --side <baseline|candidate> --plan <run>/plan.json --repo <source-checkout> --gufo <source-checkout>/build/release/gufo.exe --file gguf=<first-shard> --file mtp=<sidecar> --tool session_test=<source-checkout>/build/gpu-test/qwen38_flash_next_session_test.exe --env VCPKG_ROOT=<vcpkg> --out <run>/<side>",
+    "python tools/models/qualify.py compare --model qwen3.8-flash-next --baseline <run>/baseline --candidate <run>/candidate --plan <run>/plan.json --out <run>"
+  ]
+}

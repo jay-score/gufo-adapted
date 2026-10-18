@@ -204,17 +204,10 @@ def _corpora_used(commands: Iterable[Command]) -> list[str]:
 
 
 def _find_test_executable(name: str, ctx: RecordContext) -> Path:
-    """Locate a gpu-test executable without hard-coding the platform build layout."""
+    """Locate a gpu-test executable in the checkout that built this side."""
     suffix = executable_suffix()
-    candidates: list[Path] = []
-    for root in (ctx.repo, ctx.root):
-        build = root / "build" / "gpu-test"
-        if not build.is_dir():
-            continue
-        direct = build / f"{name}{suffix}"
-        if direct.is_file():
-            candidates.append(direct)
-        candidates.extend(build.rglob(f"{name}{suffix}"))
+    build = ctx.repo / "build" / "gpu-test"
+    candidates = build.rglob(f"{name}{suffix}") if build.is_dir() else ()
     unique = sorted(
         {path.resolve() for path in candidates},
         key=lambda path: (len(path.parts), str(path)),
@@ -222,8 +215,7 @@ def _find_test_executable(name: str, ctx: RecordContext) -> Path:
     if not unique:
         raise RecordError(
             f"cannot find gpu-test executable {name!r} under "
-            f"{ctx.repo / 'build' / 'gpu-test'} or "
-            f"{ctx.root / 'build' / 'gpu-test'}"
+            f"{build}"
         )
     return unique[0]
 
@@ -324,7 +316,7 @@ def _run_command(
         }
         env = ctx.env.copy()
         env.update(declared_env)
-        cwd = (ctx.root / _resolve_text(command.cwd, ctx, item_out)).resolve()
+        cwd = (ctx.repo / _resolve_text(command.cwd, ctx, item_out)).resolve()
     except RecordError as error:
         return {"argv": list(command.argv), "status": "error", "reason": str(error)}
     if cwd.is_dir() is False:

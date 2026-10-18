@@ -92,7 +92,7 @@ claim. Follow [testing](TESTING.md) and [artifact retention](BENCHMARKS.md).
 | Workflow | Status | Skill | Tooling | Acceptance |
 | --- | --- | --- | --- | --- |
 | Review a change | Exercised: context tool | [`review-change`](../.agents/skills/review-change/SKILL.md) | [`tools/ci/review-context.py`](../tools/ci/review-context.py) | Classifies a diff, selects required checks, flags hazards, runs cheap checks, produces a severity-ranked report with an explicit unverified list |
-| Qualify an inference change | Exercised: GPU control only | [`qualify-inference-change`](../.agents/skills/qualify-inference-change/SKILL.md) | [`tools/models/qualify.py`](../tools/models/qualify.py), per-model `qualify.json` | Runs affected model checks and comparisons against a recorded baseline; a changed-build exercise remains |
+| Qualify an inference change | Validated: Windows/Flash-Next snapshot fix | [`qualify-inference-change`](../.agents/skills/qualify-inference-change/SKILL.md) | [`tools/models/qualify.py`](../tools/models/qualify.py), per-model `qualify.json` | Runs affected model checks and comparisons against a recorded baseline; real changed-build PASS retained for this scope |
 | Qualify a quantization variant | Proposed: next implementation | proposed | proposed GGUF inspection and variant runner | Establishes runtime routes and bounded quality against a declared reference before benchmarks |
 | Triage a bug | Proposed | proposed | existing tests, debugger and Git | Reproduces, minimizes, bisects when useful, fixes and adds a regression test; handles device fault/OOM/hang branches |
 | CI failure triage | Proposed | proposed | existing presets and CI logs | Separates infrastructure from code, reproduces the smallest failing check locally |
@@ -160,8 +160,9 @@ check recommendation from proof that the check passed.
 
 ## 2. Qualify an inference change
 
-Status: implemented and fixture-tested; Flash-Next GPU control exercised.
-End-to-end validation on a real changed build remains.
+Status: validated on native Windows/gfx1151 for the Flash-Next snapshot
+compatibility fix (2026-10-18). Other models/platforms remain unvalidated by
+this exercise.
 
 Goal: make the numerical gate a single, repeatable workflow.
 
@@ -173,7 +174,7 @@ prose:
 - `.agents/skills/qualify-inference-change/SKILL.md`
 - `tools/models/qualify.py` (implementation under `tools/gufo/qualify/`)
 - `docs/models/<model>/artifacts/qualify.json` for the three text models
-- `tests/tools/qualify_test.py` (21 focused tests as of 2026-10-18, no model
+- `tests/tools/qualify_test.py` (23 focused tests as of 2026-10-18, no model
   or GPU required)
 - CI hooks in both the Windows CPU and Ubuntu repository-check jobs
 
@@ -193,12 +194,36 @@ Delivered shape:
   `qualification.json` plus `qualification.md`
 - `report` re-renders retained evidence
 
-Exercise: a real Flash-Next UD-Q4_K_XL run on Windows/gfx1151 recorded both
-sides of the `1:2,4,8:p8` teacher-forced schedule (225 positions, 248,320-token
-vocabulary), hashed all four shards and the Q8_0 MTP sidecar, and compared all
-three raw-row files. The same-binary control reported `CONTROL` with three
-matches. This validates the harness; it is not evidence that a changed build is
-qualified.
+Initial control: a real Flash-Next UD-Q4_K_XL run on Windows/gfx1151 recorded
+both sides of the `1:2,4,8:p8` teacher-forced schedules (225 positions per
+schedule, 248,320-token vocabulary), hashed all four shards and the Q8_0 MTP
+sidecar, and compared all three raw-row files. The same-binary control reported
+`CONTROL` with three matches. This validates the harness; it is not evidence
+that a changed build is qualified.
+
+Real-change exercise: clean builds at `24c0a99f8576` and `fe8469b56630`
+qualified the snapshot payload version 19 -> 20 fix with unchanged arithmetic.
+The runner selected and passed all four CPU contracts, eleven GPU operator
+tests and the session/rollback/snapshot/EOS suite. Snapshot checks reject the
+old version; the session suite includes all 23 serving sampler strategies in
+AR and MTP modes.
+
+The same four-shard UD-Q4_K_XL target and Q8_0 MTP sidecar produced **999 exact
+full-vocabulary row matches**: 225 rows for each of three teacher-forced
+schedules plus 324 normal-prefill rows through 32K. The complete prefill file,
+288-label continuation NLL/perplexity and printed teacher-forced scores match.
+The verdict is **PASS**, with distinct binaries and no control/mismatch overrides.
+[Compact evidence and reproduction](models/qwen3.8-flash-next/artifacts/qualification-snapshot-v20.json)
+retains identities, settings, results and limitations; raw records/logs/captures
+remain in ignored `artifacts/qualify/snapshot-v20-20261018/`.
+
+The exercise exposed and fixed cross-checkout command execution and test lookup:
+commands now run in `--repo`, and missing tests cannot fall back to the driver's
+build tree. Two regression tests reproduce those failures; all 23 tool tests
+pass. The Flash-Next build gate now builds its CPU/operator and model-test groups
+instead of unrelated GPU targets, while retaining every required check. Windows
+fingerprints still contain default compiler/driver labels; actual TheRock/clang,
+dependency and runtime identities were retained and matched independently.
 
 `gufo bench --logit-eval` is implemented for Flash-Next. Qwen27B uses explicit
 `--capture-logits`/`--capture-prefill-logits` file comparisons. DeepSeek keeps
@@ -210,14 +235,12 @@ ASR, TTS, image and audiovisual models do not yet have `qualify.json` gates;
 their model-owned procedures still apply. Surface uncovered requirements rather
 than treating declaration presence or a passing profile as full coverage.
 
-Next validation: use the runner on an actual bounded inference change, with
-distinct baseline/candidate builds and matched artifacts/toolchains. Retain the
-plan, required model/state checks, comparisons and verdict. If arithmetic is
-unchanged, require exact full-logit equality; intentional changes need the
-model-owned limits and reference evidence required by [testing](TESTING.md).
-Use the next suitable real change rather than inventing an engine change to
-exercise the workflow. Existing manual qualification records are useful
-precedents but do not validate this runner end to end.
+Further validation should follow actual maintenance work: extend coverage to
+another model/platform or an intentional arithmetic change when needed, with
+the model-owned limits and reference evidence required by [testing](TESTING.md).
+The retained PASS establishes this Windows/Flash-Next regression workflow; it
+does not establish independent checkpoint/conversion accuracy, vision/API
+contracts or performance. These limits do not block beginning #3.
 
 ## 3. Qualify a quantization variant
 
@@ -410,10 +433,10 @@ agent benchmark or recurring automation to finish an individual workflow.
 
 ## Rollout
 
-1. **Close foundation evidence gaps.** Retain a complete real review through
-   `review-change` and a changed-build run through `qualify-inference-change`.
-   Add cheap workflow health checks and the first agent scenarios. These tasks
-   can proceed alongside the CPU implementation of #3.
+1. **Close foundation evidence gaps.** The Windows/Flash-Next changed-build
+   exercise is complete (see #2). Retain a complete real review through
+   `review-change`, add cheap workflow health checks and the first agent
+   scenarios. These tasks can proceed alongside the CPU implementation of #3.
 2. **Qualify one quantization variant.** Select pilot artifacts and declare
    limits; implement inspection, support resolution and variant comparison;
    run fixtures and one real qualification before extending to another model.
@@ -455,6 +478,14 @@ forward; it does not require completing the catalog first.
   verified 13 review-context tests, 21 qualification tests and documentation
   integrity; it did not run new GPU qualification. Earlier test counts above
   describe the original delivery dates.
+- 2026-10-18: Completed #2's real-change exercise on clean Windows/gfx1151
+  builds for the Flash-Next snapshot version fix: PASS, 999 exact complete
+  vocabulary rows, unchanged scores and all 19 CPU/GPU/model-state checks.
+  Fixed `--repo` command/test selection and bounded the Flash-Next build gate;
+  23 qualification tool tests pass. Retained compact model-owned evidence,
+  full local artifacts and actual toolchain identities alongside the legacy
+  diagnostic fingerprint. Scope excludes Linux, other models/quantizations,
+  independent checkpoint accuracy, vision/API contracts and performance.
 
 ## Open questions
 
@@ -469,6 +500,9 @@ forward; it does not require completing the catalog first.
   loader/dispatch rules without duplicating them in an unchecked support table?
 - **Coverage:** which missing model/platform qualification should be added next,
   based on actual maintenance work and available independent references?
+- **Windows provenance:** replace default compiler/driver labels in native
+  fingerprints. Until then, retain actual build/dependency/runtime identities
+  separately as in #2; cross-host/toolchain qualification is not established.
 - **Windows profiling:** what supported tools can attribute kernel and wall-time
   costs here? Keep microbenchmark and end-to-end measurements distinct; neither
   alone substitutes for a GPU timeline when attribution requires one.
