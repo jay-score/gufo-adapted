@@ -696,6 +696,9 @@ Tool calls are emitted only for declared functions when `tool_choice` allows
 calling tools. An unmet `required` choice returns `tool_choice_unsatisfied`
 (HTTP 502, or an SSE error after streaming starts). Requested stops, token limits
 and cancellation terminate normally without emitting incomplete calls.
+`required` adds a short instruction after the last message rather than to the
+system prompt, so switching between `auto` and `required` keeps the cached
+conversation. The next request resumes from the last-message checkpoint.
 
 A complete framed call that fails parsing or names an undeclared function
 returns `malformed_tool_call` (HTTP 502, without automatic retry guidance) when
