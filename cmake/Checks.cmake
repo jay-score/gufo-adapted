@@ -6,7 +6,8 @@ set(gufo_pr_targets
   image_test openai_chat_test http_server_test audio_websocket_test text_generation_scheduler_test
   text_model_runner_test continuation_disk_store_test
   bench_cli_test prompt_cli_test eval_http_client_test
-  qwen_tokenizer_test qwen_chat_template_test
+  qwen_tokenizer_test qwen_chat_template_test qwen_gemm_route_test
+  qwen27b_inspect
   qwen38_flash_next_config_test qwen38_flash_next_mtp_sampling_test
   ds4_sampling_test ds4_chat_template_test ds4_cli_test
   qwen3_asr_config_test qwen3_asr_audio_api_test
@@ -15,6 +16,7 @@ set(gufo_pr_targets
   video_api_test minimax_h3_sampling_test minimax_h3_runtime_test)
 set(gufo_pr_tests ${gufo_pr_targets})
 list(REMOVE_ITEM gufo_pr_tests
+  qwen27b_inspect
   qwen38_flash_next_config_test qwen38_flash_next_mtp_sampling_test
   ds4_sampling_test ds4_chat_template_test ds4_cli_test)
 list(APPEND gufo_pr_tests

@@ -336,18 +336,30 @@ __global__ void BatchedSSMPostNormGateFp16Kernel(const float* raw,
     values[j] = raw[base + lane + j * 32];
     squares[j] = __fmul_rn(values[j], values[j]);
   }
-  for (int shift = 16; shift > 0; shift >>= 1) {
+  // The FP32 epilogue contracts the first square/add. Make that contraction
+  // explicit for all four groups; unrolling otherwise leaves some groups with
+  // a separately rounded multiply and changes FP16 boundary values.
+#pragma unroll
+  for (unsigned j = 0; j < 4; ++j) {
+    squares[j] = fmaf(values[j], values[j], __shfl_xor(squares[j], 16));
+  }
+  for (int shift = 8; shift > 0; shift >>= 1) {
 #pragma unroll
     for (unsigned j = 0; j < 4; ++j) {
       squares[j] += __shfl_xor(squares[j], shift);
     }
   }
-  const float sum =
-      __shfl(__fadd_rn(__fadd_rn(__fadd_rn(squares[0], squares[1]), squares[2]),
-                       squares[3]),
-             0);
-  const float inv =
-      rsqrtf(__fadd_rn(__fmul_rn(sum, 1.0F / kRowSplitDim), 1e-6F));
+  // Materialize the FP32 producer's left-to-right sum and rounded mean.
+  // The HIP rounding intrinsics alone still permit regrouping/contraction.
+  float sum = squares[0] + squares[1];
+  asm volatile("" : "+v"(sum));
+  sum += squares[2];
+  asm volatile("" : "+v"(sum));
+  sum += squares[3];
+  sum = __shfl(sum, 0);
+  float mean = sum * (1.0F / kRowSplitDim);
+  asm volatile("" : "+v"(mean));
+  const float inv = rsqrtf(mean + 1e-6F);
 #pragma unroll
   for (unsigned j = 0; j < 4; ++j) {
     const unsigned column = lane + j * 32;

@@ -35,6 +35,20 @@ host/device copies, explicit device requirements, BF16 conversion, and
 always-on numeric checks. They intentionally do not replace CTest or introduce
 a test registry.
 
+For a standalone synthetic row-split SSM reproduction, build
+`qwen_ssm_ops_test` with the `gpu-test` preset, then run:
+
+```sh
+./build/gpu-test/qwen_ssm_ops_test --row-split-batch 31
+```
+
+On Windows, use `build\gpu-test\qwen_ssm_ops_test.exe` with the same argument.
+This selection needs no model files and checks both FP32 and BF16 recurrent
+state. FP16 epilogue diagnostics report mismatch counts, the first differing
+token/head/column and output bits, and whether recurrent-state bytes match.
+The check still requires exact output bits. The default invocation retains the
+complete test selection, including both row-split register tiles.
+
 The focused basic, attention, and quant kernel executables declare HIP
 hardware optional at their device gate. No visible HIP device therefore returns
 CTest skip code 77 rather than success. HIP runtime discovery errors and tests

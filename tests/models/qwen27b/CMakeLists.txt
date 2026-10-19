@@ -1,4 +1,7 @@
 # Model-specific checks live here; generic Qwen operator controls stay in qwen/.
+add_executable(qwen27b_inspect inspect.cpp)
+target_link_libraries(qwen27b_inspect PRIVATE gufo_core)
+
 add_test(NAME qwen27b.tools
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools_test.py)
 set_tests_properties(qwen27b.tools PROPERTIES LABELS "cpu;qwen27b;tools")
@@ -16,6 +19,13 @@ add_qwen27b_test(qwen27b_vision_test vision_test.cpp "cpu;vision;correctness")
 add_qwen27b_test(qwen_mtp_reference_test mtp_reference_test.cpp
   "cpu;mtp;external-model")
 if (ENGINE_ENABLE_HIP)
+  add_custom_target(qwen27b_variant_checks DEPENDS
+    qwen27b_inspect qwen27b_target_test logit_sampler_test prompt_cli_test
+    bench_cli_test openai_chat_test speculative_verification_test
+    qwen27b_vision_test qwen_gemm_route_test gguf_reader_test
+    qwen_gpu_ops_test qwen_ssm_ops_test
+    qwen_prefill_quant_gemm_ops_test qwen_q4kxl_quant_ops_test
+    qwen_quant_gemv_ops_test)
   add_qwen27b_test(qwen_sampling_hip_test sampling_test.hip
     "hip;gpu;sampling;correctness")
   target_link_libraries(qwen_sampling_hip_test PRIVATE hip::host)
