@@ -947,8 +947,11 @@ HttpResponse LlamaCompletion(const HttpRequest& req,
              "invalid_prompt");
 }
 
-HttpResponse LlamaProps(const HttpRequest& req,
-                        TextGenerationBackend& backend) {
+/// llama-server props: what this server runs, so a client can record which
+/// model, build and settings answered it. Fields the server cannot report are
+/// omitted rather than sent as zero.
+HttpResponse LlamaProps(const HttpRequest& req, TextGenerationBackend& backend,
+                        const HttpServerOptions& options) {
   const std::string model = req.query_param("model");
   if (!model.empty() && model != backend.model_id()) {
     return Err(404, "Not Found", "requested model is not loaded",
@@ -958,9 +961,42 @@ HttpResponse LlamaProps(const HttpRequest& req,
   resp["model"] = backend.model_id();
   resp["modalities"] = json::Value::object();
   resp["modalities"]["vision"] = backend.supports_image_input();
+  resp["modalities"]["audio"] = false;
   resp["template"] = "";
   json::Value model_info = json::Value::object();
   resp["model_info"] = std::move(model_info);
+  if (!options.model_path.empty()) {
+    resp["model_path"] = options.model_path;
+  }
+  if (!options.build_info.empty()) {
+    resp["build_info"] = options.build_info;
+  }
+  if (options.total_slots > 0) {
+    resp["total_slots"] = options.total_slots;
+  }
+
+  // What a request without sampling fields gets.
+  const auto defaults = backend.sampling_defaults();
+  const auto& sampling = defaults.sampling;
+  json::Value params = json::Value::object();
+  params["temperature"] = static_cast<double>(sampling.temperature);
+  params["top_k"] = static_cast<int>(sampling.top_k);
+  params["top_p"] = static_cast<double>(sampling.top_p);
+  params["min_p"] = static_cast<double>(sampling.min_p);
+  params["seed"] = static_cast<long long>(sampling.seed);
+  params["repeat_penalty"] = static_cast<double>(sampling.repeat_penalty);
+  params["repeat_last_n"] = sampling.repeat_last_n;
+  params["frequency_penalty"] = static_cast<double>(sampling.frequency_penalty);
+  params["presence_penalty"] = static_cast<double>(sampling.presence_penalty);
+  if (defaults.max_tokens > 0) {
+    params["n_predict"] = defaults.max_tokens;
+  }
+  json::Value generation = json::Value::object();
+  if (options.context_tokens > 0) {
+    generation["n_ctx"] = static_cast<std::size_t>(options.context_tokens);
+  }
+  generation["params"] = std::move(params);
+  resp["default_generation_settings"] = std::move(generation);
   return Ok(resp);
 }
 
@@ -1113,7 +1149,10 @@ void HttpServer::register_routes() {
   add("POST", "/rerank", NotImplemented);
   add("POST", "/infill", NotImplemented);
   add("POST", "/completion", LlamaCompletion);
-  add("GET", "/props", LlamaProps);
+  add("GET", "/props",
+      [this](const HttpRequest& req, TextGenerationBackend& backend) {
+        return LlamaProps(req, backend, options_);
+      });
   add("GET", "/slots", LlamaSlots);
   add("GET", "/v1/slots", LlamaSlots);
   add("GET", "/metrics", LlamaMetrics);

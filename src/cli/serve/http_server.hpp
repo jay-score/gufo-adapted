@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -89,6 +91,12 @@ struct HttpServerOptions {
   std::size_t max_connections{16};
   std::string api_key;
   bool debug_tool_calls{false};
+  /// What `/props` reports about the served text model, in llama-server's
+  /// shape. Empty or zero means unknown; `/props` then omits the field.
+  std::string model_path;
+  std::string build_info;
+  std::size_t total_slots{0};
+  std::uint32_t context_tokens{0};
 };
 
 /// Minimal bounded HTTP/1.1 server for trusted-LAN model serving.
