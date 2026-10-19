@@ -1,0 +1,229 @@
+{
+  "schema": "gufo-ssm-fix-validation/1",
+  "date": "2026-10-19",
+  "status": "PASS",
+  "scope": "Windows/gfx1151 correction of Qwen direct-FP16 post-normalization/gating arithmetic; bounded native execution validation, not a complete quantization campaign.",
+  "acceptance": {
+    "operator": "Exact FP16 bits against original FP32 epilogue then cast; exact recurrent state and existing Q8 epilogue checks.",
+    "short_model": "All complete short rows must remain exact against the pre-fix build.",
+    "changed_prefill_model": "All complete prefill rows must equal a separately built original FP32-plus-cast execution reference. No new numerical tolerance.",
+    "checks": "All 13 selected CPU/operator tests and the native Q4 target state/replay suite must pass without skips."
+  },
+  "cause": "The compiler did not preserve consistent first square/add contraction and the left-to-right four-group norm sum in the fused FP16 epilogue. ISA retained locally shows the mismatch.",
+  "fix": "Explicit fmaf for the first square/add; register materialization barriers preserve partial-sum order and the rounded mean before epsilon. Launch topology, persistent state, and quantized output paths are unchanged.",
+  "baseline_engine_revision": "867ec35d9531f5df111a44d8e594c31c4ba10bc6",
+  "candidate_engine_revision": "867ec35d9531f5df111a44d8e594c31c4ba10bc6",
+  "candidate_identity": "Uncommitted task patch identified by SHA-256; not presented as a distinct committed revision.",
+  "provenance": {
+    "revision": "867ec35d9531f5df111a44d8e594c31c4ba10bc6",
+    "fix_patch_sha256": "88609bcb8e592c9dda57eba4fcb4d1a60c66e2f2fa7ae6c517ec6074ff1dd7c0",
+    "build_source_patch_sha256": "1a9aadb7bfc2e9b0676b2f6a27cbd121450951621193728e9996a9d05edebfe4",
+    "fixed_production_source_sha256": "5e59afd0f19af254d3fbd4a0e6ad9990e5682b95d19642a674856ca8d905b31f",
+    "test_harness_sha256": "3d364b24ef8dfcf4a359fb4c4f1a917e5e63ad26789641a4c00f928cb7cc11fa",
+    "binaries": {
+      "baseline-qwen27b_target_test.exe": "f6c3b7fa558881bfbb964ac268c18d724ef135deaea3727db6d0ca3dd1134b24",
+      "baseline-qwen_ssm_ops_test.exe": "910b635a03fe4633945b8bcd40906c8ebafc02afd7c342f0c70d902115116525",
+      "fixed-qwen27b_target_test.exe": "fb288cfd70e10a2629c93cecbe5641806f1050d1ca4d82d04be921f8472e3191",
+      "fixed-qwen_ssm_ops_test.exe": "6cf459d41774cb94265c6a1db8276b19557d7a39b3a235c3608c558476f67bbc",
+      "oracle-qwen27b_target_test.exe": "69af15d7e15f4534bf83af0ae6fec6359562dd44dbc3bcec74ed9e729ca49a11"
+    },
+    "final_binaries": {
+      "qwen27b_target_test.exe": "d34cf39be0ec896fb49f6e47231bdbafacb2776dbf991242af2483afe3f37d20",
+      "qwen_ssm_ops_test.exe": "51659c746d7f853af6f92642b1e1b2a115a3f09b6caf633f6b669a494bb83f03"
+    },
+    "compiler": {
+      "version": "AMD clang version 23.0.0git (https://github.com/ROCm/llvm-project.git 8f497e0992fb7513f7f78a6f6b6f1056c375e961)\nTarget: x86_64-pc-windows-msvc\nThread model: posix\nInstalledDir: {therock}\\lib\\llvm\\bin",
+      "sha256": "812397316720f03d66425d660f4e861c620125ce3d9c5447035062a442c5ab29",
+      "therock_version": "10.0.0"
+    },
+    "pins": {
+      "vcpkg.json": "d711d2a008fd06e4d16438e033cbe463f44d5af82e82bf9f52b2c56fbe32bf3e",
+      "CMakePresets.json": "96dc827a51670b28e6a9359c28f7d14eb95e950b78869d045d2013dfe0043456"
+    },
+    "runtime_dll_sha256": {
+      "amd_comgr.dll": "213db0bedaa07027ce136ba1797299a2b0cfa2c6bb33584ce3861be8be067937",
+      "amdhip64_7.dll": "546fb3d6e2d2194a9526fb94ec2fd3aa5b92a48a7595f04efece80162047ef69",
+      "concrt140.dll": "54716f0738af891f283d213b5c8d11b25896bb8ee3097d301eae718560cf974e",
+      "hipblas.dll": "343bd57671dc96d035ff0e7591ecce926a102df1d52b50025f4a41a45cdf9581",
+      "hiprtc-builtins0715.dll": "97a4707260342e6563423a0d586e18744f7ce0de06b8634dc6dde29eceadd196",
+      "hiprtc0715.dll": "19b67aa86ba371c49b2def5e5c863346e81c1b6d67caab125cf10a8c405e0043",
+      "icudt78.dll": "3e10cd0e866a8ddad166db73d6efe79ad539b26c166f59e83788ce2f8f26d40d",
+      "icuin78.dll": "f85fbd1c2a783f52619def4ced0a7e85e1b385915bdb4f279a374eee89879318",
+      "icuio78.dll": "80f1accbfe7bbc05d6d7c104796329edd69e0979886dab2504f4826da1b1ec42",
+      "icutu78.dll": "5a111150064bfddf90da9ad8a2a5475a70b546636ff6f6f5ff045e8dd44c91bb",
+      "icuuc78.dll": "3749c13f6c03e017d6ccfda2eaf333aba215abf8c8ad652fd3cbafe5d1f781b5",
+      "jpeg62.dll": "92985cfc790941e8c00bae03e888120395fff5407dff6863209eeb9cfcc4ccde",
+      "legacy.dll": "1e5626b51ec6b6a59f9a70b7686c33c71218c0002b7afb738b1cc007ddb95ecc",
+      "libcrypto-3-x64.dll": "f241d0bbdac25aca2b9308ab09bd653f864cfccb4b3ef3f7b015913a9d178e74",
+      "libcurl.dll": "23f705d53b3d5082bdec4e46d012c4efe2514aecce7a692ade3c01d887bf57ca",
+      "libhipblaslt.dll": "746fa2f7e037b3d03a0b904659bfc21bfbf0fe1a86f127564ac2dee38b85442e",
+      "libomp140.x86_64.dll": "4a20c1e5c115c29771a12324513eb109badac72180f79481527ad79d996ffb33",
+      "libpng16.dll": "57e9e7c123f9dc4b40546fdf2a16496f98892627d24b27d8d6cdce7c0716edd5",
+      "libsharpyuv.dll": "25196be3cbb3b12c958cd8ca3e71d033ddaf85c2212a0cb4744129320c0cfed0",
+      "libssl-3-x64.dll": "a3ef876e80057b1106e3181a4fb067d043d9b38f46ce58e2c737c51fe6ff75b4",
+      "libwebp.dll": "fa502b18cc46f43772466284f44b3784a099aba509f37f4517385e2be512e5b9",
+      "libwebpdecoder.dll": "a7d5e01369aa0a553ab9a2f00b1984303692c7f15cdc0eaf4ea941e669df1a5b",
+      "libwebpdemux.dll": "322d69ab2665139929f8c00fa13d47b9d906b75043c56338837472769e4eeec2",
+      "msvcp140.dll": "7c26614e1d733892c2deac7e245ce115504b1d80592dd0a01b08e3e5a55f89ca",
+      "msvcp140_1.dll": "206c931bf90fdad8816de3b5e2ef80b2bcaa9406c89ecc05fe6fddffe251e982",
+      "msvcp140_2.dll": "d50d7883f20d1dc6191768d3746f52dd9cac89c346ffaed5be1f110c2f34a838",
+      "msvcp140_atomic_wait.dll": "3d0cbfaa1bf3eecf5a3f4491d2960ee803cb994f30292c6adc4a07c498f60e2b",
+      "msvcp140_codecvt_ids.dll": "8a65c7596ef2e6938731f5a1058e7e40145b6d97967cc649231a076b9a608d78",
+      "origami.dll": "f10a142efc441e90f4ba116f2f901a9433899d0f74860c20b58bf4f1381e2b56",
+      "rocblas.dll": "8ecbe340d8052e5292a47b96f3c93c20767ced0032db47851b792da7039d1e0b",
+      "rocm-openblas.dll": "88f7631d9f7c49cfbf710551a7fa69bef2fd54052007532a518d7ba3699534c0",
+      "rocm-openblas64.dll": "9020e44dc2afd30576dbe38fccc473011efadfbe86e3b6f954b8b4776c8d66fb",
+      "rocm_kpack.dll": "97b59ca4e7b5edfcda72d66c5b6643f557168b3c60091cf5c6fe9bb226597bf1",
+      "rocsolver.dll": "9eedf3904e548f6b9b049abb41728ce6dc25a3b26266a5e1e94af55be1e779bd",
+      "rocsparse.dll": "904a43601b71cf9b0a2bf9bb5007ed06031a17c9bb5cc5a28425f6e0d7a02931",
+      "spng.dll": "dd896975186ac5e4b04a81bf5b6b4963859d7cd82ebbd4ed12cc75dce05110e4",
+      "turbojpeg.dll": "a523f7739759f8f60b0aca28a43f3af51a9faf348f0fc69d93484b61902b069e",
+      "vccorlib140.dll": "09f93d5ff96ae09767f3e1af3cdd43a5a58f2598654fc63089429bb6f9f4737f",
+      "vcruntime140.dll": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7",
+      "vcruntime140_1.dll": "a7146c08f89fe5b04541ab507cdb59ff7b44534d4ba3c668a426c6450a03434e",
+      "vcruntime140_threads.dll": "40f39e8cee5f5a531b4010e18b807e8fe265b908dc58f959ecb7ebc6ea6cb11a",
+      "z.dll": "d675fba00c8b86eb4f5f663fc912021015650a08082a804d0668e3dcedeaa028"
+    }
+  },
+  "model": {
+    "file": "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+    "bytes": 17559178144,
+    "sha256": "3f227079003add2511437e5b1e94812e363385225bf6a9b47b0054a72bc8b01e"
+  },
+  "operator": {
+    "baseline": "FAIL: standalone 31-token BF16-state case differs at token 30/head 15/column 86, 0xa6f1 versus 0xa6f0.",
+    "candidate": "PASS",
+    "default_batches": [
+      1,
+      2,
+      3,
+      7,
+      31,
+      96,
+      2080
+    ],
+    "state_formats": [
+      "FP32",
+      "BF16"
+    ],
+    "fp16_bit_mismatches": 0,
+    "recurrent_state_exact": true,
+    "q8_epilogue_exact": true,
+    "source": "tests/models/qwen/hip/ssm_ops_test.cpp",
+    "standalone_command": "{repo}/build/gpu-test/qwen_ssm_ops_test.exe --row-split-batch 31",
+    "default_command": "ctest --test-dir {repo}/build/gpu-test -R ^qwen_ssm_ops_test$ --output-on-failure --no-tests=error"
+  },
+  "checks": {
+    "count": 13,
+    "passed": [
+      "openai_chat_test",
+      "logit_sampler_test",
+      "prompt_cli_test",
+      "bench_cli_test",
+      "gguf_reader_test",
+      "speculative_verification_test",
+      "qwen_gemm_route_test",
+      "qwen_gpu_ops_test",
+      "qwen_ssm_ops_test",
+      "qwen_quant_gemv_ops_test",
+      "qwen_prefill_quant_gemm_ops_test",
+      "qwen_q4kxl_quant_ops_test",
+      "qwen27b_vision_test"
+    ],
+    "failures": 0,
+    "skipped": 0,
+    "target_suite": "PASS: adaptive verification, rollback, snapshots, replay, concurrency, wide cache, prefill and continuation.",
+    "original_target_runtime_seconds": 96.71831893920898
+  },
+  "matched_tokens": {
+    "vocabulary": 248320,
+    "short_against_original": {
+      "rows": 27,
+      "labels": 24,
+      "top1_matches": 27,
+      "mean_kl_nats": 0.0,
+      "mean_tv": 0.0,
+      "maximum_row_tv": 0.0,
+      "reference_mean_nll": 1.3050642828213443,
+      "candidate_mean_nll": 1.3050642828213443,
+      "reference_perplexity": 3.687926156383648,
+      "candidate_perplexity": 3.687926156383648,
+      "perplexity_ratio": 1.0,
+      "mean_nll_delta": 0.0,
+      "full_file_exact": true,
+      "exact_rows": 27
+    },
+    "prefill_against_original": {
+      "rows": 189,
+      "labels": 168,
+      "top1_matches": 189,
+      "mean_kl_nats": 9.884079899296988e-08,
+      "mean_tv": 5.429741820589632e-06,
+      "maximum_row_tv": 0.0005749529124449451,
+      "reference_mean_nll": 0.614683737297814,
+      "candidate_mean_nll": 0.6146798155521099,
+      "reference_perplexity": 1.8490717146575493,
+      "candidate_perplexity": 1.8490644630827153,
+      "perplexity_ratio": 0.999996078261986,
+      "mean_nll_delta": -3.921745704056028e-06,
+      "full_file_exact": false,
+      "exact_rows": 162
+    },
+    "prefill_against_fp32_cast_reference": {
+      "rows": 189,
+      "labels": 168,
+      "vocabulary": 248320,
+      "exact_rows": 189,
+      "oracle_sha256": "84ae65774eda241bc08b93d9f79a72eaa43944c63c1a5b077b43b7180e974fde",
+      "candidate_sha256": "84ae65774eda241bc08b93d9f79a72eaa43944c63c1a5b077b43b7180e974fde",
+      "full_file_exact": true
+    },
+    "histories": "Three fixed prose/code fixtures. Prefill lengths 8/9/64/95/96/129/2048 with eight teacher-forced continuation labels per case. Histories, labels, vocabularies, row hashes, finiteness and complete file lengths checked.",
+    "prefill_interpretation": "162/189 rows remain exact against the faulty build. The 27 rows associated with 2048-token prefixes intentionally change, retain all top-1 choices and exactly equal the FP32-plus-cast reference. The original-build exact comparator therefore fails for those rows; this is not hidden by a tolerance.",
+    "reference_limits": "Execution-contract reference within Gufo, not independent original checkpoint/conversion truth.",
+    "final_relink": "PE executable IDs changed after the temporary reference build. Final restored binary short/prefill captures were rerun and exactly reproduce the validated candidate captures; all 189 prefill rows remain exact against the reference.",
+    "fixture_perplexity_only": true
+  },
+  "kernel_resources": {
+    "baseline": {
+      "vgprs": 20,
+      "sgprs": 10,
+      "private_bytes": 0,
+      "vgpr_spills": 0,
+      "sgpr_spills": 0
+    },
+    "candidate": {
+      "vgprs": 20,
+      "sgprs": 10,
+      "private_bytes": 0,
+      "vgpr_spills": 0,
+      "sgpr_spills": 0
+    },
+    "performance": "Unmeasured; equal resource counts are not a throughput result."
+  },
+  "raw_evidence": "artifacts/ssm-fix/20261019/",
+  "raw_capture_sha256": {
+    "baseline-q4-prefill.bin": "67b3dbb19e1b7d5b06cef6e9fb2443d4f111fe23079614f8358ba11d2aa73a93",
+    "baseline-q4-short.bin": "4a4972a1669fea578b24575b4b7f8a05bdc38b8ce9a0169ac5d82441ecd0da88",
+    "candidate-q4-prefill.bin": "84ae65774eda241bc08b93d9f79a72eaa43944c63c1a5b077b43b7180e974fde",
+    "candidate-q4-short.bin": "4a4972a1669fea578b24575b4b7f8a05bdc38b8ce9a0169ac5d82441ecd0da88",
+    "final-q4-prefill.bin": "84ae65774eda241bc08b93d9f79a72eaa43944c63c1a5b077b43b7180e974fde",
+    "final-q4-short.bin": "4a4972a1669fea578b24575b4b7f8a05bdc38b8ce9a0169ac5d82441ecd0da88",
+    "oracle-q4-prefill.bin": "84ae65774eda241bc08b93d9f79a72eaa43944c63c1a5b077b43b7180e974fde"
+  },
+  "reproduction": {
+    "build": "powershell -ExecutionPolicy Bypass -File {repo}/tools/windows/build.ps1 -Preset gpu-test -Target qwen27b_variant_checks -Jobs 4 -Rocm {therock} -Vcpkg {vcpkg} -Ninja {ninja}",
+    "short": "{tool:target_test} {model} --capture-logits {out}/short.bin",
+    "prefill": "{tool:target_test} {model} --capture-prefill-logits {out}/prefill.bin",
+    "state": "{tool:target_test} {model}",
+    "oracle": "In a temporary isolated build, replace only the direct-FP16 branch with the original BatchedSSMPostNormGateKernel followed by LaunchFloatToFp16. Exact source, executable and commands retained in raw evidence; the branch is not retained as a runtime switch.",
+    "comparison": "Require identical case/token histories and labels, then compare all raw FP32 bytes and row SHA-256 hashes; calculate stable full-vocabulary NLL/perplexity on the same next-token labels."
+  },
+  "limitations": [
+    "Linux execution not run.",
+    "No performance claim or benchmark/default update.",
+    "Other target quantizations, external checkpoint parity, MTP/DFlash end-to-end suites and HTTP/vision campaigns were not rerun.",
+    "The earlier Q5 campaign remains FAIL; its distinct worst-row quantization-quality budget remains unresolved.",
+    "This scoped record supplements rather than claims a full run of every check in qualify.json."
+  ]
+}

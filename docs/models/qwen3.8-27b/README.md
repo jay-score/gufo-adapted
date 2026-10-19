@@ -6,6 +6,10 @@ draft/projector need additional memory. BF16 targets are reference-only.
 
 [Benchmarks](BENCHMARKS.md) · [Quality](QUALITY.md) · [Experiments](EXPERIMENTS.md)
 
+The [UD-Q5_K_M workflow pilot](QUALITY.md#q5-variant-workflow-pilot) runs through
+the native loader and state suite, but has not passed all declared qualification
+gates. It does not change the production targets above.
+
 ## Load and run
 
 ```sh

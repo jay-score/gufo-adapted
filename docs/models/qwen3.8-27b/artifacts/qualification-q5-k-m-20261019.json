@@ -1,0 +1,943 @@
+{
+  "artifact_source": {
+    "purpose": "Same-conversion-family BF16 teacher; does not establish original checkpoint/conversion parity.",
+    "repository": "unsloth/Qwen3.8-27B-GGUF",
+    "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
+    "upstream_model": "Qwen/Qwen3.8-27B"
+  },
+  "attempts": [
+    "run-1: stopped at required operator failure",
+    "run-2: all native checks and BF16 captures; initial reference parsing refused a FP32 normalization residual",
+    "reference-2: reference-only rerun with correct full-vector FP64 normalization; all 27 rows within independent execution budgets",
+    "worst-reference: one additional 319-token-prefix diagnostic"
+  ],
+  "build_cache": {
+    "bytes": 42658,
+    "name": "CMakeCache.txt",
+    "sha256": "5b7b90fabbafb46325c7c50871379aeaae83cbec5a000c3c204d3990024cb103",
+    "type": "file"
+  },
+  "build_inputs": {
+    "CMakePresets.json": {
+      "bytes": 3910,
+      "name": "CMakePresets.json",
+      "sha256": "96dc827a51670b28e6a9359c28f7d14eb95e950b78869d045d2013dfe0043456",
+      "type": "file"
+    },
+    "src/models/qwen/gemm_route.hpp": {
+      "bytes": 8029,
+      "name": "gemm_route.hpp",
+      "sha256": "6e5d92c0cfdaf7e8be890ed3b71a794eeb1afeef345ca3bf6eca3fd46c3310b9",
+      "type": "file"
+    },
+    "src/models/qwen/weights.cpp": {
+      "bytes": 14720,
+      "name": "weights.cpp",
+      "sha256": "5f58b2a87f36dece5997986dd10d0136b62afa8891f884f42820ea0546b67078",
+      "type": "file"
+    },
+    "tests/models/qwen27b/inspect.cpp": {
+      "bytes": 4619,
+      "name": "inspect.cpp",
+      "sha256": "8120a41be13b0cb7c4072a6c6d18e3e8180ce500305174097ffe9dcf2732892c",
+      "type": "file"
+    },
+    "tests/models/qwen27b/target_test.cpp": {
+      "bytes": 43219,
+      "name": "target_test.cpp",
+      "sha256": "3d364b24ef8dfcf4a359fb4c4f1a917e5e63ad26789641a4c00f928cb7cc11fa",
+      "type": "file"
+    },
+    "vcpkg.json": {
+      "bytes": 273,
+      "name": "vcpkg.json",
+      "sha256": "d711d2a008fd06e4d16438e033cbe463f44d5af82e82bf9f52b2c56fbe32bf3e",
+      "type": "file"
+    }
+  },
+  "candidate": [
+    {
+      "bytes": 19771509664,
+      "name": "Qwen3.8-27B-UD-Q5_K_M.gguf",
+      "sha256": "2de73110cb254cbf09b54b717578dadff12ef1194e7271527e68202f39ba4bfd",
+      "type": "file"
+    }
+  ],
+  "capability": {
+    "candidate": "pass",
+    "cases_each": 3,
+    "teacher": "pass"
+  },
+  "checks": [
+    {
+      "name": "openai_chat_test",
+      "status": "PASS"
+    },
+    {
+      "name": "logit_sampler_test",
+      "status": "PASS"
+    },
+    {
+      "name": "prompt_cli_test",
+      "status": "PASS"
+    },
+    {
+      "name": "bench_cli_test",
+      "status": "PASS"
+    },
+    {
+      "name": "gguf_reader_test",
+      "status": "PASS"
+    },
+    {
+      "name": "speculative_verification_test",
+      "status": "PASS"
+    },
+    {
+      "name": "qwen_gemm_route_test",
+      "status": "PASS"
+    },
+    {
+      "name": "qwen27b_vision_test",
+      "status": "PASS"
+    },
+    {
+      "name": "qwen_gpu_ops_test",
+      "status": "PASS"
+    },
+    {
+      "name": "qwen_ssm_ops_test",
+      "status": "FAIL"
+    },
+    {
+      "name": "qwen_quant_gemv_ops_test",
+      "status": "PASS"
+    },
+    {
+      "name": "qwen_prefill_quant_gemm_ops_test",
+      "status": "PASS"
+    },
+    {
+      "name": "qwen_q4kxl_quant_ops_test",
+      "status": "PASS"
+    }
+  ],
+  "comparisons": {
+    "corpus": {
+      "candidate_mean_nll": 1.748315759533121,
+      "candidate_perplexity": 5.744918698670429,
+      "labels": 512,
+      "maximum_row_tv": 0.2790272554826561,
+      "mean_kl_nats": 0.0020407104928844206,
+      "mean_nll_delta": 0.0032326160060176523,
+      "mean_tv": 0.01483995029601816,
+      "perplexity_ratio": 1.0032378465437268,
+      "reference_mean_nll": 1.7450831435271033,
+      "reference_perplexity": 5.726377566857504,
+      "rows": 512,
+      "top1_matches": 499
+    },
+    "llama_same_artifact": {
+      "candidate_mean_nll": 1.2998887684684688,
+      "candidate_perplexity": 3.668888548829522,
+      "labels": 24,
+      "maximum_row_tv": 0.014120317887855921,
+      "mean_kl_nats": 0.0001716724747254742,
+      "mean_nll_delta": -0.0001351732239080287,
+      "mean_tv": 0.005079000985583753,
+      "perplexity_ratio": 0.9998648359115806,
+      "reference_mean_nll": 1.3000239416923767,
+      "reference_perplexity": 3.6693845178429365,
+      "rows": 27,
+      "top1_matches": 27
+    },
+    "prefill": {
+      "candidate_mean_nll": 0.6175026996707365,
+      "candidate_perplexity": 1.8542915320237512,
+      "labels": 168,
+      "maximum_row_tv": 0.11781074487372342,
+      "mean_kl_nats": 0.0019436895011633068,
+      "mean_nll_delta": -0.0009920577860153994,
+      "mean_tv": 0.006231887828316191,
+      "perplexity_ratio": 0.9990084341406233,
+      "reference_mean_nll": 0.6184947574567519,
+      "reference_perplexity": 1.856132009154525,
+      "rows": 189,
+      "top1_matches": 189
+    },
+    "short": {
+      "candidate_mean_nll": 1.2998887684684688,
+      "candidate_perplexity": 3.668888548829522,
+      "labels": 24,
+      "maximum_row_tv": 0.04966538950036052,
+      "mean_kl_nats": 0.0013366102147474668,
+      "mean_nll_delta": -0.016591424564798302,
+      "mean_tv": 0.013807284234386841,
+      "perplexity_ratio": 0.9835454550649002,
+      "reference_mean_nll": 1.316480193033267,
+      "reference_perplexity": 3.73026841813572,
+      "rows": 27,
+      "top1_matches": 27
+    }
+  },
+  "compiler": {
+    "bytes": 110282240,
+    "name": "clang++.exe",
+    "sha256": "812397316720f03d66425d660f4e861c620125ce3d9c5447035062a442c5ab29",
+    "type": "file",
+    "version": "AMD clang version 23.0.0git (https://github.com/ROCm/llvm-project.git 8f497e0992fb7513f7f78a6f6b6f1056c375e961)\nTarget: x86_64-pc-windows-msvc\nThread model: posix"
+  },
+  "corpus": {
+    "bytes": 1290590,
+    "name": "wiki.test.raw",
+    "sha256": "173c87a53759e0201f33e0ccf978e510c2042d7f2cb78229d9a50d79b9e7dd08",
+    "type": "file"
+  },
+  "corpus_scope": "First 513 tokens of WikiText-2 raw-v1 test split, 512 scored next-token labels, one token of initial context; no full-dataset perplexity claim.",
+  "declaration": {
+    "bytes": 3028,
+    "name": "variant-qualify.json",
+    "sha256": "994896001723196146a9ef424cd95aae14a6ec8e90e8f8b255384728b7080908",
+    "type": "file"
+  },
+  "failures": [
+    {
+      "gate": "required_gpu_operator",
+      "reason": "Existing fused FP16 SSM epilogue bit mismatch; reproduces with unchanged inference sources and synthetic inputs, without candidate weights.",
+      "test": "qwen_ssm_ops_test"
+    },
+    {
+      "gate": "BF16_corpus_quality",
+      "maximum": 0.15,
+      "metric": "maximum_row_tv",
+      "value": 0.2790272554826561
+    }
+  ],
+  "final_harness": {
+    "tools\\gufo\\variant.py": {
+      "bytes": 15647,
+      "name": "variant.py",
+      "sha256": "891173dbc32327a0e1faf40ac2d408ceb320d8aa5f411eeb21346a46af26533c",
+      "type": "file"
+    },
+    "tools\\gufo\\variant_gguf.py": {
+      "bytes": 6825,
+      "name": "variant_gguf.py",
+      "sha256": "8412607c53ede10884b674cde66c28c53985d824d48225590b7f6e3676ab9e51",
+      "type": "file"
+    },
+    "tools\\gufo\\variant_metrics.py": {
+      "bytes": 4999,
+      "name": "variant_metrics.py",
+      "sha256": "9e80afd974ccbe935565b2db5c8292970cb219881aa5d47fa5a7d621d2fe0302",
+      "type": "file"
+    },
+    "tools\\gufo\\variant_reference.py": {
+      "bytes": 4716,
+      "name": "variant_reference.py",
+      "sha256": "69d17a8d96024c12bcfa55eff019f1b348935e2958de9c26b6b18a1c31b79960",
+      "type": "file"
+    }
+  },
+  "gufo_runtime": [
+    {
+      "bytes": 121750016,
+      "name": "amd_comgr.dll",
+      "sha256": "213db0bedaa07027ce136ba1797299a2b0cfa2c6bb33584ce3861be8be067937",
+      "type": "file"
+    },
+    {
+      "bytes": 16555520,
+      "name": "amdhip64_7.dll",
+      "sha256": "546fb3d6e2d2194a9526fb94ec2fd3aa5b92a48a7595f04efece80162047ef69",
+      "type": "file"
+    },
+    {
+      "bytes": 374200,
+      "name": "concrt140.dll",
+      "sha256": "54716f0738af891f283d213b5c8d11b25896bb8ee3097d301eae718560cf974e",
+      "type": "file"
+    },
+    {
+      "bytes": 801280,
+      "name": "hipblas.dll",
+      "sha256": "343bd57671dc96d035ff0e7591ecce926a102df1d52b50025f4a41a45cdf9581",
+      "type": "file"
+    },
+    {
+      "bytes": 944128,
+      "name": "hiprtc-builtins0715.dll",
+      "sha256": "97a4707260342e6563423a0d586e18744f7ce0de06b8634dc6dde29eceadd196",
+      "type": "file"
+    },
+    {
+      "bytes": 1296384,
+      "name": "hiprtc0715.dll",
+      "sha256": "19b67aa86ba371c49b2def5e5c863346e81c1b6d67caab125cf10a8c405e0043",
+      "type": "file"
+    },
+    {
+      "bytes": 33110528,
+      "name": "icudt78.dll",
+      "sha256": "3e10cd0e866a8ddad166db73d6efe79ad539b26c166f59e83788ce2f8f26d40d",
+      "type": "file"
+    },
+    {
+      "bytes": 2807296,
+      "name": "icuin78.dll",
+      "sha256": "f85fbd1c2a783f52619def4ced0a7e85e1b385915bdb4f279a374eee89879318",
+      "type": "file"
+    },
+    {
+      "bytes": 53760,
+      "name": "icuio78.dll",
+      "sha256": "80f1accbfe7bbc05d6d7c104796329edd69e0979886dab2504f4826da1b1ec42",
+      "type": "file"
+    },
+    {
+      "bytes": 222720,
+      "name": "icutu78.dll",
+      "sha256": "5a111150064bfddf90da9ad8a2a5475a70b546636ff6f6f5ff045e8dd44c91bb",
+      "type": "file"
+    },
+    {
+      "bytes": 1845248,
+      "name": "icuuc78.dll",
+      "sha256": "3749c13f6c03e017d6ccfda2eaf333aba215abf8c8ad652fd3cbafe5d1f781b5",
+      "type": "file"
+    },
+    {
+      "bytes": 723456,
+      "name": "jpeg62.dll",
+      "sha256": "92985cfc790941e8c00bae03e888120395fff5407dff6863209eeb9cfcc4ccde",
+      "type": "file"
+    },
+    {
+      "bytes": 110592,
+      "name": "legacy.dll",
+      "sha256": "1e5626b51ec6b6a59f9a70b7686c33c71218c0002b7afb738b1cc007ddb95ecc",
+      "type": "file"
+    },
+    {
+      "bytes": 5365760,
+      "name": "libcrypto-3-x64.dll",
+      "sha256": "f241d0bbdac25aca2b9308ab09bd653f864cfccb4b3ef3f7b015913a9d178e74",
+      "type": "file"
+    },
+    {
+      "bytes": 729088,
+      "name": "libcurl.dll",
+      "sha256": "23f705d53b3d5082bdec4e46d012c4efe2514aecce7a692ade3c01d887bf57ca",
+      "type": "file"
+    },
+    {
+      "bytes": 6301696,
+      "name": "libhipblaslt.dll",
+      "sha256": "746fa2f7e037b3d03a0b904659bfc21bfbf0fe1a86f127564ac2dee38b85442e",
+      "type": "file"
+    },
+    {
+      "bytes": 661856,
+      "name": "libomp140.x86_64.dll",
+      "sha256": "4a20c1e5c115c29771a12324513eb109badac72180f79481527ad79d996ffb33",
+      "type": "file"
+    },
+    {
+      "bytes": 197632,
+      "name": "libpng16.dll",
+      "sha256": "57e9e7c123f9dc4b40546fdf2a16496f98892627d24b27d8d6cdce7c0716edd5",
+      "type": "file"
+    },
+    {
+      "bytes": 24576,
+      "name": "libsharpyuv.dll",
+      "sha256": "25196be3cbb3b12c958cd8ca3e71d033ddaf85c2212a0cb4744129320c0cfed0",
+      "type": "file"
+    },
+    {
+      "bytes": 878592,
+      "name": "libssl-3-x64.dll",
+      "sha256": "a3ef876e80057b1106e3181a4fb067d043d9b38f46ce58e2c737c51fe6ff75b4",
+      "type": "file"
+    },
+    {
+      "bytes": 380416,
+      "name": "libwebp.dll",
+      "sha256": "fa502b18cc46f43772466284f44b3784a099aba509f37f4517385e2be512e5b9",
+      "type": "file"
+    },
+    {
+      "bytes": 162304,
+      "name": "libwebpdecoder.dll",
+      "sha256": "a7d5e01369aa0a553ab9a2f00b1984303692c7f15cdc0eaf4ea941e669df1a5b",
+      "type": "file"
+    },
+    {
+      "bytes": 19968,
+      "name": "libwebpdemux.dll",
+      "sha256": "322d69ab2665139929f8c00fa13d47b9d906b75043c56338837472769e4eeec2",
+      "type": "file"
+    },
+    {
+      "bytes": 643512,
+      "name": "msvcp140.dll",
+      "sha256": "7c26614e1d733892c2deac7e245ce115504b1d80592dd0a01b08e3e5a55f89ca",
+      "type": "file"
+    },
+    {
+      "bytes": 35768,
+      "name": "msvcp140_1.dll",
+      "sha256": "206c931bf90fdad8816de3b5e2ef80b2bcaa9406c89ecc05fe6fddffe251e982",
+      "type": "file"
+    },
+    {
+      "bytes": 274872,
+      "name": "msvcp140_2.dll",
+      "sha256": "d50d7883f20d1dc6191768d3746f52dd9cac89c346ffaed5be1f110c2f34a838",
+      "type": "file"
+    },
+    {
+      "bytes": 57792,
+      "name": "msvcp140_atomic_wait.dll",
+      "sha256": "3d0cbfaa1bf3eecf5a3f4491d2960ee803cb994f30292c6adc4a07c498f60e2b",
+      "type": "file"
+    },
+    {
+      "bytes": 31160,
+      "name": "msvcp140_codecvt_ids.dll",
+      "sha256": "8a65c7596ef2e6938731f5a1058e7e40145b6d97967cc649231a076b9a608d78",
+      "type": "file"
+    },
+    {
+      "bytes": 368128,
+      "name": "origami.dll",
+      "sha256": "f10a142efc441e90f4ba116f2f901a9433899d0f74860c20b58bf4f1381e2b56",
+      "type": "file"
+    },
+    {
+      "bytes": 21020160,
+      "name": "rocblas.dll",
+      "sha256": "8ecbe340d8052e5292a47b96f3c93c20767ced0032db47851b792da7039d1e0b",
+      "type": "file"
+    },
+    {
+      "bytes": 11719680,
+      "name": "rocm-openblas.dll",
+      "sha256": "88f7631d9f7c49cfbf710551a7fa69bef2fd54052007532a518d7ba3699534c0",
+      "type": "file"
+    },
+    {
+      "bytes": 11926528,
+      "name": "rocm-openblas64.dll",
+      "sha256": "9020e44dc2afd30576dbe38fccc473011efadfbe86e3b6f954b8b4776c8d66fb",
+      "type": "file"
+    },
+    {
+      "bytes": 181248,
+      "name": "rocm_kpack.dll",
+      "sha256": "97b59ca4e7b5edfcda72d66c5b6643f557168b3c60091cf5c6fe9bb226597bf1",
+      "type": "file"
+    },
+    {
+      "bytes": 24983040,
+      "name": "rocsolver.dll",
+      "sha256": "9eedf3904e548f6b9b049abb41728ce6dc25a3b26266a5e1e94af55be1e779bd",
+      "type": "file"
+    },
+    {
+      "bytes": 69463040,
+      "name": "rocsparse.dll",
+      "sha256": "904a43601b71cf9b0a2bf9bb5007ed06031a17c9bb5cc5a28425f6e0d7a02931",
+      "type": "file"
+    },
+    {
+      "bytes": 71168,
+      "name": "spng.dll",
+      "sha256": "dd896975186ac5e4b04a81bf5b6b4963859d7cd82ebbd4ed12cc75dce05110e4",
+      "type": "file"
+    },
+    {
+      "bytes": 928768,
+      "name": "turbojpeg.dll",
+      "sha256": "a523f7739759f8f60b0aca28a43f3af51a9faf348f0fc69d93484b61902b069e",
+      "type": "file"
+    },
+    {
+      "bytes": 350648,
+      "name": "vccorlib140.dll",
+      "sha256": "09f93d5ff96ae09767f3e1af3cdd43a5a58f2598654fc63089429bb6f9f4737f",
+      "type": "file"
+    },
+    {
+      "bytes": 178616,
+      "name": "vcruntime140.dll",
+      "sha256": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7",
+      "type": "file"
+    },
+    {
+      "bytes": 50112,
+      "name": "vcruntime140_1.dll",
+      "sha256": "a7146c08f89fe5b04541ab507cdb59ff7b44534d4ba3c668a426c6450a03434e",
+      "type": "file"
+    },
+    {
+      "bytes": 38840,
+      "name": "vcruntime140_threads.dll",
+      "sha256": "40f39e8cee5f5a531b4010e18b807e8fe265b908dc58f959ecb7ebc6ea6cb11a",
+      "type": "file"
+    },
+    {
+      "bytes": 91648,
+      "name": "z.dll",
+      "sha256": "d675fba00c8b86eb4f5f663fc912021015650a08082a804d0668e3dcedeaa028",
+      "type": "file"
+    }
+  ],
+  "harness_during_capture": {
+    "tools\\gufo\\variant.py": {
+      "bytes": 14671,
+      "name": "variant.py",
+      "sha256": "807d985732b485c1ed5c4ae043dc50739fadd87ebca4579e43de6b10ebdf9612",
+      "type": "file"
+    },
+    "tools\\gufo\\variant_gguf.py": {
+      "bytes": 6747,
+      "name": "variant_gguf.py",
+      "sha256": "03ae8a9ce4b2667772872b9445900ed48fcb127b420c72287837cc087025045e",
+      "type": "file"
+    },
+    "tools\\gufo\\variant_metrics.py": {
+      "bytes": 4999,
+      "name": "variant_metrics.py",
+      "sha256": "9e80afd974ccbe935565b2db5c8292970cb219881aa5d47fa5a7d621d2fe0302",
+      "type": "file"
+    },
+    "tools\\gufo\\variant_reference.py": {
+      "bytes": 4403,
+      "name": "variant_reference.py",
+      "sha256": "b650dccc795be588e3b8a7baf7aea09344d74d29baa61754a1dfde040ba02821",
+      "type": "file"
+    }
+  },
+  "inference_source_tree": "e3669c6e9b9121806db5b12b7c5bcb701ff7ab21",
+  "inference_sources_unchanged": true,
+  "limit_rationale": "Pilot acceptance policy, selected before Q5 measurement: allow at most 5% relative teacher-forced perplexity increase; 5 percentage points mean and 15 points worst-row probability-mass movement; 0.01 nats mean KL bounds distribution-wide loss. Apply independently to all three captures, never just their aggregate. These are explicit bounded-task budgets, not established universal model thresholds or historical measurement cutoffs.",
+  "limitations": [
+    "Budget policy is a bounded pilot contract; failures do not establish universal unusability of Q5.",
+    "Gufo BF16 is a same-conversion-family teacher, not independent original-checkpoint truth.",
+    "Same-Q5 independent reference covers 27 short prefixes; the extra worst-row diagnostic has TV 0.02776 between Gufo and llama.cpp. It is not a broad long-context parity pass.",
+    "Worst corpus position still differs by TV 0.2540 between llama.cpp Q5 and Gufo BF16; the BF16 comparison failure is not solely a Gufo Q5 discrepancy.",
+    "No MTP/DFlash draft, vision, real Gufo HTTP, Linux execution or performance qualification."
+  ],
+  "limits": {
+    "maximum_row_tv": 0.15,
+    "mean_kl_nats": 0.01,
+    "mean_tv": 0.05,
+    "perplexity_ratio": 1.05
+  },
+  "measured_on": "2026-10-19",
+  "native_state_suite": "pass",
+  "raw_captures": {
+    "candidate-corpus": {
+      "bytes": 508559360,
+      "name": "candidate-corpus.bin",
+      "sha256": "1e6451ec05b18f9af4b8f806b9a57ff5eb5f3c089d95cb9878e1679ead4d0da5",
+      "type": "file"
+    },
+    "candidate-prefill": {
+      "bytes": 187729920,
+      "name": "candidate-prefill.bin",
+      "sha256": "98283b45b3906603c6ff4ca0295f6f2f8a2af2a2e2b253c1a724974fee5a5e00",
+      "type": "file"
+    },
+    "candidate-short": {
+      "bytes": 26818560,
+      "name": "candidate-short.bin",
+      "sha256": "324337dc281e8469464b1b71ddd82b6b63677b6197e1f5c6e59912a2686b2c2b",
+      "type": "file"
+    },
+    "teacher-corpus": {
+      "bytes": 508559360,
+      "name": "teacher-corpus.bin",
+      "sha256": "8ffb27a24a3a3fc185b20a964f5621a41a650f370c78d521a417d2e4752c6323",
+      "type": "file"
+    },
+    "teacher-prefill": {
+      "bytes": 187729920,
+      "name": "teacher-prefill.bin",
+      "sha256": "0c352fddd272d573e77621a18751efa106294e8eb2be07df767764660c6bd21c",
+      "type": "file"
+    },
+    "teacher-short": {
+      "bytes": 26818560,
+      "name": "teacher-short.bin",
+      "sha256": "2631703624a2401d00fc6f636438e9c7c6a1bdf3b0915a8b57f30af003741faa",
+      "type": "file"
+    }
+  },
+  "raw_evidence": "artifacts/variant/qwen27b-q5-20261019/",
+  "reference_runtime": {
+    "runtime": [
+      {
+        "bytes": 121750016,
+        "name": "amd_comgr.dll",
+        "sha256": "213db0bedaa07027ce136ba1797299a2b0cfa2c6bb33584ce3861be8be067937"
+      },
+      {
+        "bytes": 16555520,
+        "name": "amdhip64_7.dll",
+        "sha256": "546fb3d6e2d2194a9526fb94ec2fd3aa5b92a48a7595f04efece80162047ef69"
+      },
+      {
+        "bytes": 803840,
+        "name": "ggml-base.dll",
+        "sha256": "45c89daa31796f6b45e68c7f463b978a6406ee2e09bccb5fba04434af9823e4b"
+      },
+      {
+        "bytes": 1415680,
+        "name": "ggml-cpu-alderlake.dll",
+        "sha256": "40490bdb6d6c2466b3778c9c1eab530ce44161dd7c49a9711217ee86d46a3a31"
+      },
+      {
+        "bytes": 1611264,
+        "name": "ggml-cpu-cannonlake.dll",
+        "sha256": "3265b1e665a7019822b11268659deda469d285b2bbe9a850d689cc54185ca05f"
+      },
+      {
+        "bytes": 1584128,
+        "name": "ggml-cpu-cascadelake.dll",
+        "sha256": "69f0032a63c2ec4a6d22d73cf4305c3c33f320b5e61a3fcc56522272e9150ecb"
+      },
+      {
+        "bytes": 1593856,
+        "name": "ggml-cpu-cooperlake.dll",
+        "sha256": "d3eb76a7dc342aea4d53308f3f847fa427088fbae6fe745080a83f4e8a84864d"
+      },
+      {
+        "bytes": 1420800,
+        "name": "ggml-cpu-haswell.dll",
+        "sha256": "3ad7269a2d89645621a19e99cab8b0bb1e869ffac4c983bd720120f32ba407fa"
+      },
+      {
+        "bytes": 1590784,
+        "name": "ggml-cpu-icelake.dll",
+        "sha256": "680183ec1521008769b3f1907059eefbea6c8cf356a954d4a3441b2222bba896"
+      },
+      {
+        "bytes": 1302016,
+        "name": "ggml-cpu-ivybridge.dll",
+        "sha256": "91615f9e38ad5ab19aadbfa04b48f174d6063071667841f7a610b355f154c04b"
+      },
+      {
+        "bytes": 1294848,
+        "name": "ggml-cpu-piledriver.dll",
+        "sha256": "f0de2fdf7a5d10490e1525252703ea2693c72768bfc58c71a5bb478442e20b81"
+      },
+      {
+        "bytes": 1291776,
+        "name": "ggml-cpu-sandybridge.dll",
+        "sha256": "6b0e459388675cec0d5474c55d67b2f553da97e9b0462ecae43cfd9b6877112f"
+      },
+      {
+        "bytes": 1870336,
+        "name": "ggml-cpu-sapphirerapids.dll",
+        "sha256": "cfd82d8d3ddb2dc660644c30e1596e9d95d2d464dc5509efdb14662723fe530b"
+      },
+      {
+        "bytes": 1604096,
+        "name": "ggml-cpu-skylakex.dll",
+        "sha256": "581bd65dbf1e51b3b1cfb49d20416a176bf30df1a744cbd716e7c56b0739088c"
+      },
+      {
+        "bytes": 917504,
+        "name": "ggml-cpu-sse42.dll",
+        "sha256": "f717baf0005d4b601dd8a5c5f493f5e2a10e069ecf458480ff110618c04db6b1"
+      },
+      {
+        "bytes": 910336,
+        "name": "ggml-cpu-x64.dll",
+        "sha256": "d0cfc176026c4616ea220ab33fec3df847d873685d6aa69b1a791ee492a7e16e"
+      },
+      {
+        "bytes": 1600512,
+        "name": "ggml-cpu-zen4.dll",
+        "sha256": "973420e3c4dad7199389c49240ba70531df4cbc5bb15e2c7655c11845b9cea11"
+      },
+      {
+        "bytes": 1015849472,
+        "name": "ggml-hip.dll",
+        "sha256": "b6de497b363c9e27bdbd2e3083a71dbda253e9f869ad6e47da028c3b54d8c72b"
+      },
+      {
+        "bytes": 231424,
+        "name": "ggml-rpc.dll",
+        "sha256": "50795082533bbefaf3f95877eb79b5264a7d44e2a831d0a01eb373d075546d0f"
+      },
+      {
+        "bytes": 78848,
+        "name": "ggml.dll",
+        "sha256": "47f173d843605038e0d19b0d94bdd88d1d0086996bf024dd7279457cbc74457c"
+      },
+      {
+        "bytes": 768000,
+        "name": "libomp.dll",
+        "sha256": "a12116ba72d1d6820407cf30be23da04ce79d6bb8a71a5ee71759c5a1faa6f1c"
+      },
+      {
+        "bytes": 61952,
+        "name": "llama-batched-bench-impl.dll",
+        "sha256": "7e24c09073ff932671a02d7e99e54bbf31bfd253e24e640614d43f43749a2d6f"
+      },
+      {
+        "bytes": 404480,
+        "name": "llama-bench-impl.dll",
+        "sha256": "bc1021a26079eed3e4605ee983132324f465d02f7f13364e6bb7ac50f75cc333"
+      },
+      {
+        "bytes": 3337216,
+        "name": "llama-cli-impl.dll",
+        "sha256": "4d1655e8cf44b2ee91464d2a55136dc9167fabe8bbee0ab51701c7fbe0e3963f"
+      },
+      {
+        "bytes": 8161792,
+        "name": "llama-common.dll",
+        "sha256": "666ff95029098e3c4cda1ce2e925dd84b0c3e68989134d0f17aae7283966fb95"
+      },
+      {
+        "bytes": 140800,
+        "name": "llama-completion-impl.dll",
+        "sha256": "4434a6263d3b615ec046555bc443223a07ef2290e9ce6850fe6935c732c0596f"
+      },
+      {
+        "bytes": 43008,
+        "name": "llama-fit-params-impl.dll",
+        "sha256": "9e61a6e40d1fe5d49b1baf955639182b61be4ee088e166d972b6d08e11d25e24"
+      },
+      {
+        "bytes": 197632,
+        "name": "llama-perplexity-impl.dll",
+        "sha256": "fc7b6354522b31ca7bebfecb5228a4e1121b00db7673bf6a891ad4a870fb8988"
+      },
+      {
+        "bytes": 137216,
+        "name": "llama-quantize-impl.dll",
+        "sha256": "9313e57ca1dd1383d077dc5cf5cb0c20e0aaab23835fbac5a59cbbe12d8614b6"
+      },
+      {
+        "bytes": 9357824,
+        "name": "llama-server-impl.dll",
+        "sha256": "76f29ad6df32bf32611539efe76feee77001c5c302b184a51debd9011ee50e5c"
+      },
+      {
+        "bytes": 3581952,
+        "name": "llama.dll",
+        "sha256": "8dea430f9daabea30753a41c46fbfaf41a7a71e444af8ac15d3ec842802b5515"
+      },
+      {
+        "bytes": 1905664,
+        "name": "mtmd.dll",
+        "sha256": "0b22d612426e41fe2cb1ab988198172e4ec71178aa9dceb978721d5c6235831f"
+      },
+      {
+        "bytes": 181248,
+        "name": "rocm_kpack.dll",
+        "sha256": "97b59ca4e7b5edfcda72d66c5b6643f557168b3c60091cf5c6fe9bb226597bf1"
+      }
+    ],
+    "version": "version: 0.7.0-dev (build 11731, commit 42b70032b)\nbuilt with Clang 20.1.8 for Windows x86_64\n"
+  },
+  "reproduce": {
+    "build": "Use documented toolchain and gpu-test qwen27b_variant_checks target in an isolated checkout.",
+    "qualification": "python tools/models/qualify-variant.py run --candidate Q5_GGUF --teacher BF16_FIRST_SHARD --corpus WIKI_TEST_RAW --repo BUILD_CHECKOUT --inspect-tool BUILD_CHECKOUT/build/gpu-test/qwen27b_inspect.exe --target-test BUILD_CHECKOUT/build/gpu-test/qwen27b_target_test.exe --llama-server LLAMA_BIN/llama-server.exe --out artifacts/variant/NEW_RUN"
+  },
+  "same_artifact_limits": {
+    "maximum_row_tv": 0.02,
+    "mean_kl_nats": 0.001,
+    "mean_tv": 0.01,
+    "perplexity_ratio": 1.02
+  },
+  "same_artifact_reference_capture": {
+    "bytes": 26818560,
+    "name": "llama-logprobs.bin",
+    "sha256": "c76fcec6e95ad69dcdf3ec7de3ffe0eea274f02b4d07439de6434fe79b35c627",
+    "type": "file"
+  },
+  "schema": "gufo-quant-variant-evidence/1",
+  "scope": "Windows 11 / gfx1151; Qwen3.8-27B UD-Q5_K_M text AR, native target state and verification primitives; no model default change.",
+  "source": {
+    "dirty": true,
+    "revision": "867ec35d9531f5df111a44d8e594c31c4ba10bc6",
+    "worktree": "gufo-variant-20261019"
+  },
+  "status": "FAIL",
+  "support": {
+    "bound_tensors": 851,
+    "conversion": "none; production loader and route resolver called directly",
+    "cpu_only_inspector_matches_gpu_build": true,
+    "encoded_bytes": 19409504256,
+    "excluded_embedded_mtp_tensors": [
+      "blk.64.attn_k.weight",
+      "blk.64.attn_k_norm.weight",
+      "blk.64.attn_norm.weight",
+      "blk.64.attn_output.weight",
+      "blk.64.attn_q.weight",
+      "blk.64.attn_q_norm.weight",
+      "blk.64.attn_v.weight",
+      "blk.64.ffn_down.weight",
+      "blk.64.ffn_gate.weight",
+      "blk.64.ffn_up.weight",
+      "blk.64.nextn.eh_proj.weight",
+      "blk.64.nextn.enorm.weight",
+      "blk.64.nextn.hnorm.weight",
+      "blk.64.nextn.shared_head_norm.weight",
+      "blk.64.post_attention_norm.weight"
+    ]
+  },
+  "teacher": [
+    {
+      "bytes": 49986159616,
+      "name": "Qwen3.8-27B-BF16-00001-of-00002.gguf",
+      "sha256": "b9966e82b7a4d87028b5eae061d578ee826305ebf8baea5bfc6e09bad0ba191f",
+      "type": "file"
+    },
+    {
+      "bytes": 4671576000,
+      "name": "Qwen3.8-27B-BF16-00002-of-00002.gguf",
+      "sha256": "92e3943c4f9bd6292a7bef82369f65fed9bfed088b9df0fb2fa2ce17c9edfa02",
+      "type": "file"
+    }
+  ],
+  "test_changes": "CPU loader/route inspector plus corpus capture and three greedy capability fixtures; production inference unchanged.",
+  "tools": {
+    "inspector": {
+      "bytes": 698880,
+      "name": "qwen27b_inspect.exe",
+      "sha256": "299b33aab5635720b283faba9aa54a902f51791e91a7f02a6f1d0d012a30c496",
+      "type": "file"
+    },
+    "llama_server": {
+      "bytes": 9216,
+      "name": "llama-server.exe",
+      "sha256": "b3eff84aebe0b1718002d338f3ae04cee3b9e19571fb4d1c6d6b491f8dfacdb8",
+      "type": "file"
+    },
+    "target": {
+      "bytes": 35969536,
+      "name": "qwen27b_target_test.exe",
+      "sha256": "f6c3b7fa558881bfbb964ac268c18d724ef135deaea3727db6d0ca3dd1134b24",
+      "type": "file"
+    }
+  },
+  "validation": {
+    "cpp_format_files": 491,
+    "cpu_and_gpu_inspector_builds": "PASS",
+    "docs_and_whitespace": "PASS",
+    "existing_qualification_tests": 23,
+    "final_refusal_guard_rechecked": true,
+    "variant_fixture_tests": 17
+  },
+  "worst_row": {
+    "candidate_label_probability": 0.02480079530853462,
+    "candidate_top": [
+      {
+        "id": 38095,
+        "probability": 0.3481019525136519
+      },
+      {
+        "id": 641,
+        "probability": 0.17263038761178465
+      },
+      {
+        "id": 1116,
+        "probability": 0.1454760104968954
+      },
+      {
+        "id": 539,
+        "probability": 0.06664100307274806
+      },
+      {
+        "id": 321,
+        "probability": 0.05218201387066582
+      }
+    ],
+    "independent_numpy_check_matches_canonical": true,
+    "label_id": 15083,
+    "prefix_tail": [
+      4734,
+      29219,
+      539,
+      54348,
+      11751,
+      1900,
+      160255,
+      1116,
+      321,
+      4179,
+      767,
+      51388
+    ],
+    "prefix_tokens": 319,
+    "reference_label_probability": 0.012320217971737494,
+    "reference_top": [
+      {
+        "id": 641,
+        "probability": 0.2151865819742471
+      },
+      {
+        "id": 1116,
+        "probability": 0.1871876647542037
+      },
+      {
+        "id": 321,
+        "probability": 0.18164733959794505
+      },
+      {
+        "id": 38095,
+        "probability": 0.154158419380543
+      },
+      {
+        "id": 539,
+        "probability": 0.03637238449904605
+      }
+    ],
+    "row": 318,
+    "total_variation": 0.27902725548265633
+  },
+  "worst_row_independent_diagnostic": {
+    "candidate_vs_llama": {
+      "candidate_mean_nll": 3.6968795574328723,
+      "candidate_perplexity": 40.321287586123255,
+      "labels": 1,
+      "maximum_row_tv": 0.027761008278883968,
+      "mean_kl_nats": 0.00247857639030524,
+      "mean_nll_delta": -0.10662708946332611,
+      "mean_tv": 0.027761008278883968,
+      "perplexity_ratio": 0.8988608051645114,
+      "reference_mean_nll": 3.8035066468961984,
+      "reference_perplexity": 44.85821092037,
+      "rows": 1,
+      "top1_matches": 1
+    },
+    "capture": {
+      "bytes": 993280,
+      "name": "llama-logprobs.bin",
+      "sha256": "21e6a18ff503e5848206425e919578910b0517456839e303a9eab361dcaae8be",
+      "type": "file"
+    },
+    "llama_candidate_vs_gufo_teacher": {
+      "candidate_mean_nll": 3.8035066468961984,
+      "candidate_perplexity": 44.85821092037,
+      "labels": 1,
+      "maximum_row_tv": 0.25400187175243744,
+      "mean_kl_nats": 0.2012102401754979,
+      "mean_nll_delta": -0.5930069816259165,
+      "mean_tv": 0.25400187175243744,
+      "perplexity_ratio": 0.552662936361133,
+      "reference_mean_nll": 4.396513628522115,
+      "reference_perplexity": 81.16739511378736,
+      "rows": 1,
+      "top1_matches": 0
+    },
+    "scope": "diagnostic only: worst corpus row, not an additional acceptance budget"
+  }
+}

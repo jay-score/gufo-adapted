@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -803,6 +804,80 @@ void CompareReference(const std::vector<Case>& candidate,
             << " mean_kl=" << total_kl / rows << " mean_tv=" << total_tv / rows
             << " mean_nll_delta=" << total_nll_delta / labels << '\n';
 }
+
+void CaptureCorpus(const char* model, const char* corpus, const char* output) {
+  std::ifstream input(corpus, std::ios::binary);
+  Expect(input.good(), "cannot open qualification corpus");
+  const std::string text{std::istreambuf_iterator<char>(input), {}};
+  std::string error;
+  auto owner = gufo::core::GgufReader::OpenFile(model, &error);
+  Expect(owner != nullptr, error);
+  auto executor = Executor::CreateFromGguf(
+      std::shared_ptr<const gufo::core::GgufReader>(std::move(owner)), &error,
+      1024);
+  Expect(executor != nullptr, error);
+  Case sample{.tokens = executor->GetTokenizer().Encode(text),
+              .logits = {},
+              .prompt_size = 1};
+  constexpr std::size_t kLabels = 512;
+  Expect(sample.tokens.size() > kLabels, "corpus needs at least 513 tokens");
+  sample.tokens.resize(kLabels + 1);
+  for (std::size_t position = 0; position < kLabels; ++position) {
+    (void)executor->ForwardToken(sample.tokens[position], position);
+    sample.logits.push_back(Logits(*executor));
+  }
+  WriteCapture({sample}, output);
+}
+
+void CheckCapabilities(const char* model) {
+  std::string error;
+  auto owner = gufo::core::GgufReader::OpenFile(model, &error);
+  Expect(owner != nullptr, error);
+  auto executor = Executor::CreateFromGguf(
+      std::shared_ptr<const gufo::core::GgufReader>(std::move(owner)), &error,
+      1024);
+  Expect(executor != nullptr, error);
+  const std::array<std::pair<const char*, const char*>, 3> cases{{
+      {"What is 2 + 2? Reply with only the single digit.", "4"},
+      {"Return exactly this JSON object and nothing else: {\"ok\":true}",
+       "{\"ok\":true}"},
+      {"In Python, what does len([10, 20, 30]) return? Reply with only the "
+       "single digit.",
+       "3"},
+  }};
+  for (std::size_t i = 0; i < cases.size(); ++i) {
+    executor->Reset();
+    const std::string prompt = "<|im_start|>user\n" +
+                               std::string(cases[i].first) +
+                               "<|im_end|>\n<|im_start|>assistant\n"
+                               "<think>\n\n</think>\n\n";
+    const auto tokens = executor->GetTokenizer().Encode(prompt);
+    (void)executor->ForwardPromptBatch(tokens);
+    std::vector<Token> generated;
+    bool stopped = false;
+    for (std::size_t step = 0; step < 32; ++step) {
+      const auto logits = Logits(*executor);
+      const auto token =
+          static_cast<Token>(std::ranges::max_element(logits) - logits.begin());
+      if (executor->GetTokenizer().IsStopToken(token)) {
+        stopped = true;
+        break;
+      }
+      generated.push_back(token);
+      (void)executor->ForwardToken(token, tokens.size() + step);
+    }
+    auto response = executor->GetTokenizer().Decode(generated);
+    const auto first = response.find_first_not_of(" \r\n\t");
+    const auto last = response.find_last_not_of(" \r\n\t");
+    response = first == std::string::npos
+                   ? ""
+                   : response.substr(first, last - first + 1);
+    std::cout << "capability case=" << i << " response=" << response << '\n';
+    Expect(stopped && response == cases[i].second,
+           "capability fixture failed: " + std::to_string(i));
+  }
+  std::cout << "capability cases=3 passed=3\n";
+}
 }  // namespace
 
 int main(int argc, const char* const* argv) {
@@ -811,6 +886,14 @@ int main(int argc, const char* const* argv) {
     if (model == nullptr) {
       std::cout << "Set GUFO_QWEN27B_MODEL for the Qwen27B target check.\n";
       return 77;
+    }
+    if (argc == 5 && std::string_view(argv[2]) == "--capture-corpus-logits") {
+      CaptureCorpus(model, argv[3], argv[4]);
+      return 0;
+    }
+    if (argc == 3 && std::string_view(argv[2]) == "--capability-check") {
+      CheckCapabilities(model);
+      return 0;
     }
     if (argc == 4 && std::string_view(argv[2]) == "--capture-logits") {
       WriteCapture(Capture(model, false), argv[3]);

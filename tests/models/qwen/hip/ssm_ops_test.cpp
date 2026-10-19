@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -10,6 +11,7 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -836,6 +838,7 @@ void TestBatchedSSMRowSplitRecurrenceEquivalence(std::size_t batch) {
   // Direct FP16 output must match the original FP32 epilogue followed by a
   // cast, for both recurrent-state formats and both register-tile sizes.
   // Reuse the existing scratch and restart from the same nonzero state.
+  bool fp16_mismatch = false;
   for (const bool bf16_state : {false, true}) {
     gufo::test::DeviceBuffer<std::uint16_t> expected(batch * inner_size);
     gufo::test::DeviceBuffer<std::uint16_t> actual(batch * inner_size);
@@ -861,9 +864,34 @@ void TestBatchedSSMRowSplitRecurrenceEquivalence(std::size_t batch) {
         d_ssm_dt, d_ssm_norm, d_gate, output, nullptr, d_kq, d_ab, 0, batch,
         qkv_dim, num_key_heads, num_heads, key_dim, val_dim, nullptr, storage,
         actual.data());
-    if (actual.CopyToHost() != expected.CopyToHost()) {
-      throw std::runtime_error("fused SSM FP16 epilogue changed output bits");
+    const auto expected_bits = expected.CopyToHost();
+    const auto actual_bits = actual.CopyToHost();
+    std::size_t mismatches = 0;
+    double max_abs = 0.0;
+    unsigned max_bit_distance = 0;
+    for (std::size_t i = 0; i < expected_bits.size(); ++i) {
+      if (expected_bits[i] == actual_bits[i]) {
+        continue;
+      }
+      const float want = gufo::quant::Fp16ToFloat(expected_bits[i]);
+      const float got = gufo::quant::Fp16ToFloat(actual_bits[i]);
+      max_abs = std::fmax(max_abs, std::fabs(double(got) - double(want)));
+      const unsigned distance = static_cast<unsigned>(
+          std::abs(int(actual_bits[i]) - int(expected_bits[i])));
+      max_bit_distance = std::max(max_bit_distance, distance);
+      if (mismatches < 8) {
+        std::cerr << "  FP16 mismatch: batch=" << batch
+                  << " state=" << (bf16_state ? "BF16" : "FP32")
+                  << " index=" << i << " token=" << i / inner_size
+                  << " head=" << (i % inner_size) / val_dim
+                  << " column=" << i % val_dim << " expected_bits=0x"
+                  << std::hex << expected_bits[i] << " actual_bits=0x"
+                  << actual_bits[i] << std::dec << " expected=" << want
+                  << " actual=" << got << " bit_distance=" << distance << "\n";
+      }
+      ++mismatches;
     }
+    fp16_mismatch |= mismatches != 0;
     std::vector<std::uint8_t> state_bits(
         delta_size * gufo::hip::QwenRecurrentStateElementBytes(storage));
     HIP_CHECK(hipMemcpy(state_bits.data(), state, state_bits.size(),
@@ -871,10 +899,20 @@ void TestBatchedSSMRowSplitRecurrenceEquivalence(std::size_t batch) {
     const void* expected_state =
         bf16_state ? static_cast<void*>(delta_bf16_bits.data())
                    : static_cast<void*>(delta_new.data());
-    if (std::memcmp(state_bits.data(), expected_state, state_bits.size()) !=
-        0) {
+    const bool state_matches =
+        std::memcmp(state_bits.data(), expected_state, state_bits.size()) == 0;
+    std::cerr << "  FP16 epilogue: batch=" << batch
+              << " state=" << (bf16_state ? "BF16" : "FP32")
+              << " mismatches=" << mismatches << "/" << expected_bits.size()
+              << " max_abs=" << max_abs
+              << " max_bit_distance=" << max_bit_distance
+              << " recurrent_state_exact=" << state_matches << "\n";
+    if (!state_matches) {
       throw std::runtime_error("FP16 epilogue changed recurrent state");
     }
+  }
+  if (fp16_mismatch) {
+    throw std::runtime_error("fused SSM FP16 epilogue changed output bits");
   }
   // Restore the FP32 reference consumed by the Q8_1 epilogue check below.
   upload(d_out_new, out_new);
@@ -957,12 +995,36 @@ void TestBatchedSSMRowSplitRecurrenceEquivalence(std::size_t batch) {
 
 #endif  // defined(ENGINE_ENABLE_HIP)
 
-int main() {
+int main(int argc, char** argv) {
+  std::size_t row_split_batch = 0;
+  if (argc != 1) {
+    if (argc != 3 || std::string_view(argv[1]) != "--row-split-batch") {
+      std::cerr << "usage: qwen_ssm_ops_test [--row-split-batch <positive "
+                   "integer>]\n";
+      return 2;
+    }
+    const std::string_view value(argv[2]);
+    const auto parsed = std::from_chars(
+        value.data(), value.data() + value.size(), row_split_batch);
+    if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+        row_split_batch == 0 ||
+        row_split_batch > std::numeric_limits<int>::max()) {
+      std::cerr
+          << "--row-split-batch requires a positive integer fitting int\n";
+      return 2;
+    }
+  }
 #if defined(ENGINE_ENABLE_HIP)
   const int device_status = gufo::test::GateHipDevice(
       gufo::test::HipDeviceRequirement::kOptional, "Qwen SSM ops test");
   if (device_status != gufo::test::kHipTestSuccess) {
     return device_status;
+  }
+  std::cout << std::unitbuf;
+  if (row_split_batch != 0) {
+    TestBatchedSSMRowSplitRecurrenceEquivalence(row_split_batch);
+    std::cout << "Qwen SSM row-split case passed.\n";
+    return 0;
   }
 
   TestBatchedSSMConvEquivalence();
@@ -970,7 +1032,7 @@ int main() {
   TestRecurrentRollbackRows(false);
   TestRecurrentRollbackRows(true);
   TestBf16RecurrentMemoryAndSnapshot();
-  for (const std::size_t batch : {1U, 2U, 3U, 7U, 96U}) {
+  for (const std::size_t batch : {1U, 2U, 3U, 7U, 31U, 96U}) {
     TestBatchedSSMRowSplitRecurrenceEquivalence(batch);
   }
   // Above the launcher's 2048-token crossover, so the two-row prefetching tile

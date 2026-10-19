@@ -1,0 +1,49 @@
+{
+  "schema": "gufo-quant-variant/1",
+  "model": "qwen3.8-27b",
+  "scope": "Windows/Linux HIP text AR; native target verification and state primitives. No draft, vision or HTTP API support claim.",
+  "excluded_tensor_prefixes": ["blk.64.", "v."],
+  "artifact_source": {
+    "repository": "unsloth/Qwen3.8-27B-GGUF",
+    "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
+    "upstream_model": "Qwen/Qwen3.8-27B",
+    "purpose": "Same-conversion-family BF16 teacher; does not establish original checkpoint/conversion parity."
+  },
+  "candidate": {
+    "Qwen3.8-27B-UD-Q5_K_M.gguf": "2de73110cb254cbf09b54b717578dadff12ef1194e7271527e68202f39ba4bfd"
+  },
+  "teacher": {
+    "Qwen3.8-27B-BF16-00001-of-00002.gguf": "b9966e82b7a4d87028b5eae061d578ee826305ebf8baea5bfc6e09bad0ba191f",
+    "Qwen3.8-27B-BF16-00002-of-00002.gguf": "92e3943c4f9bd6292a7bef82369f65fed9bfed088b9df0fb2fa2ce17c9edfa02"
+  },
+  "corpus": {
+    "description": "First 513 tokens of WikiText-2 raw-v1 test split, 512 scored next-token labels, one token of initial context; no full-dataset perplexity claim.",
+    "source": "https://huggingface.co/datasets/Salesforce/wikitext",
+    "filename": "wiki.test.raw",
+    "sha256": "173c87a53759e0201f33e0ccf978e510c2042d7f2cb78229d9a50d79b9e7dd08"
+  },
+  "captures": {
+    "short": {"flag": "--capture-logits", "rows": 27, "labels": 24},
+    "prefill": {"flag": "--capture-prefill-logits", "rows": 189, "labels": 168},
+    "corpus": {"flag": "--capture-corpus-logits", "rows": 512, "labels": 512}
+  },
+  "limits": {
+    "mean_kl_nats": 0.01,
+    "mean_tv": 0.05,
+    "maximum_row_tv": 0.15,
+    "perplexity_ratio": 1.05
+  },
+  "limit_rationale": "Pilot acceptance policy, selected before Q5 measurement: allow at most 5% relative teacher-forced perplexity increase; 5 percentage points mean and 15 points worst-row probability-mass movement; 0.01 nats mean KL bounds distribution-wide loss. Apply independently to all three captures, never just their aggregate. These are explicit bounded-task budgets, not established universal model thresholds or historical measurement cutoffs.",
+  "capability": "Three exact, greedy, thinking-off replies: 2+2, literal JSON reproduction, Python list length. Both candidate and BF16 must pass the model-owned --capability-check fixture.",
+  "llama_limits": {
+    "mean_kl_nats": 0.001,
+    "mean_tv": 0.01,
+    "maximum_row_tv": 0.02,
+    "perplexity_ratio": 1.02
+  },
+  "llama_rationale": "Same Q5 artifact in an independent engine on all 27 short-fixture prefixes; stricter execution budget than the BF16 quantization budget. Full vocabulary, unfiltered distributions; no cross-engine bit equality expected.",
+  "checks": {
+    "fast": ["logit_sampler_test", "prompt_cli_test", "bench_cli_test", "openai_chat_test", "speculative_verification_test", "qwen27b_vision_test", "qwen_gemm_route_test", "gguf_reader_test"],
+    "kernels": ["qwen_gpu_ops_test", "qwen_ssm_ops_test", "qwen_prefill_quant_gemm_ops_test", "qwen_q4kxl_quant_ops_test", "qwen_quant_gemv_ops_test"]
+  }
+}

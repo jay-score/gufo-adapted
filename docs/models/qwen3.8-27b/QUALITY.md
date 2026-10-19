@@ -15,7 +15,93 @@ parity remain unqualified.
 | Target verification, widths 2–8 and ragged cohorts | Full logits/features match scalar | Full logits/features match scalar |
 | Serving and state | Cancellation, continuation, RAM/disk restore and seeded replay pass | Same; also eight 32K continuation forks |
 
+## SSM FP16 epilogue correction
+
+October 19, 2026: the synthetic SSM failure exposed compiler-dependent
+square/add contraction and regrouping of the four norm partial sums. The direct
+FP16 epilogue now explicitly preserves the original FP32 producer's first FMA,
+sum order and rounded mean. The exact output/state checks and their tolerances
+remain intact; the 31-token reproducer is included in the default test.
+
+On Windows/TheRock 10.0.0/gfx1151, both recurrent-state formats have zero FP16
+bit mismatches through the 2,080-token case. All 13 bounded CPU/operator checks
+and the Q4_K_XL target's verification, rollback, snapshot, concurrency and
+prefill suite pass. Matched short logits remain exact on all 27 rows. Large
+prefill intentionally changes 27 of 189 rows relative to the faulty build;
+all 189 rows match a temporary reference build using the original FP32
+epilogue followed by a standalone FP16 cast, byte for byte. The reference is
+an execution-contract oracle, not an independent checkpoint-quality teacher.
+
+[Compact validation and identities](artifacts/qualification-ssm-fp16-20261019.json)
+retain the original-build differences, commands and exact reference comparison.
+Linux execution and performance are unverified. The Q5 quantization campaign
+below retains its original failed verdict; its separate corpus-quality limit
+has not been resolved or rerun by this correction.
+
 ## Quantization comparison
+
+### Q5 variant workflow pilot
+
+October 19, 2026: native Windows/gfx1151 pilot for Unsloth UD-Q5_K_M against
+the same conversion family's BF16 GGUF. The
+[declaration](artifacts/variant-qualify.json) pins source revision and artifact
+hashes and sets budgets before candidate measurement. These budgets apply to
+each capture separately: mean KL <= 0.01 nats, mean total variation <= 0.05,
+worst-row total variation <= 0.15 and candidate/reference perplexity <= 1.05.
+They are bounded pilot acceptance policy, not universal model limits or
+thresholds inferred from the September measurements below.
+
+The three captures contain 27 short-fixture rows/24 labels, 189 normal-prefill
+rows/168 labels and 512 corpus rows/512 labels. The corpus is the first 513
+tokens of the local WikiText-2 raw-v1 test file; its full-file hash is pinned.
+This is sample perplexity, not a full WikiText-2 evaluation. The dataset is
+[WikiText](https://huggingface.co/datasets/Salesforce/wikitext), released under
+CC BY-SA 3.0/GFDL; its text is not vendored here.
+
+The native probe binds 851 AR tensors with no re-encoding. Fifteen embedded MTP
+tensors are explicitly excluded. Three exact thinking-off greedy capability
+fixtures check arithmetic, JSON reproduction and a Python expression. Same-Q5
+llama.cpp execution uses the complete vocabulary on the 27 short-fixture
+prefixes with separately declared tighter limits. Neither reference establishes
+original checkpoint or conversion parity. Draft, vision, HTTP API and performance
+qualification are outside this pilot.
+
+**Outcome: FAIL.** All eight fast checks, four of five GPU operator checks, the
+full native target state/verification suite and all three capability cases on
+both models pass. `qwen_ssm_ops_test` fails the existing direct-FP16 epilogue bit
+comparison, reproducibly with unchanged inference sources and synthetic inputs;
+it does not load the candidate weights. Separately, corpus worst-row TV **0.2790**
+exceeds the **0.15** budget. Neither failure is waived.
+
+| Capture versus Gufo BF16 | Complete rows / labels | Mean KL (nats) | Mean TV | Maximum row TV | Perplexity ratio |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Short prose/code | 27 / 24 | 0.001337 | 0.01381 | 0.04967 | 0.98355 |
+| Normal prefill | 189 / 168 | 0.001944 | 0.006232 | 0.11781 | 0.99901 |
+| WikiText-2 sample | 512 / 512 | 0.002041 | 0.01484 | **0.27903** | 1.00324 |
+
+The 512-label sample perplexities are **5.74492** for Q5 and **5.72638** for BF16.
+The **0.324%** aggregate increase is within budget, but does not cancel the
+worst-row failure at the 319-token prefix (zero-based row 318).
+
+Same-Q5 llama.cpp b11731 (`42b70032b`) passes the 27 short-prefix execution
+budgets: mean KL **0.0001717**, mean TV **0.005079**, maximum TV **0.01412**,
+27/27 top-1 matches. At the additional worst-corpus-prefix diagnostic, Gufo Q5
+versus llama.cpp Q5 has TV **0.02776**, and llama.cpp Q5 versus Gufo BF16 has TV
+**0.25400**. Thus the large BF16 comparison drift is not solely a Gufo Q5
+discrepancy; this does not establish independent BF16 accuracy or broad
+cross-engine parity. The diagnostic is separate from the declared short-prefix
+reference gate.
+
+[Compact identities, checks, measurements and reproduction](artifacts/qualification-q5-k-m-20261019.json)
+retain the failed verdict. Raw evidence remains under ignored
+`artifacts/variant/qwen27b-q5-20261019/`. The initial reference adapter's redundant
+FP32 probability-sum check was corrected to stable full-vector FP64 normalization;
+only that reference phase was rerun, with both attempts retained. No quality
+budgets, model defaults or inference arithmetic were changed to admit Q5, and
+no performance measurements were published. A failed pilot is not a general
+claim that this quantization is unusable.
+
+### Earlier Q4/Q8 measurements
 
 September 24, 2026: short teacher-forced comparison against **Gufo's BF16 target**, with identical
 prefixes: three prose/code fixtures, nine logit rows each, full 248,320-token
