@@ -58,11 +58,13 @@ def distribution(values):
     return [math.exp(v - log_z) for v in values], log_z
 
 
-def compare(reference: Path, candidate: Path, ref_rows: list, cand_rows: list) -> dict:
+def compare(reference: Path, candidate: Path, ref_rows: list, cand_rows: list,
+            *, tv_thresholds=()) -> dict:
     if len(ref_rows) != len(cand_rows):
         raise ValueError('capture row counts differ')
     kl_sum = tv_sum = nll_ref = nll_cand = 0.0
     max_tv = 0.0
+    row_tvs = []
     labels = top1 = 0
     with reference.open('rb') as p_stream, candidate.open('rb') as q_stream:
         for r, c in zip(ref_rows, cand_rows):
@@ -77,6 +79,7 @@ def compare(reference: Path, candidate: Path, ref_rows: list, cand_rows: list) -
             kl_sum += max(0.0, kl)
             tv_sum += tv
             max_tv = max(tv, max_tv)
+            row_tvs.append(tv)
             top1 += p.index(max(p)) == q.index(max(q))
             if r['label'] is not None:
                 label = r['label']
@@ -88,17 +91,24 @@ def compare(reference: Path, candidate: Path, ref_rows: list, cand_rows: list) -
         if p_stream.read(1) or q_stream.read(1) or labels == 0:
             raise ValueError('extra capture bytes or no scored labels')
     delta = (nll_cand - nll_ref) / labels
+    row_tvs.sort()
     return {'rows':len(ref_rows), 'labels':labels, 'top1_matches':top1,
             'mean_kl_nats':kl_sum/len(ref_rows), 'mean_tv':tv_sum/len(ref_rows),
             'maximum_row_tv':max_tv, 'reference_mean_nll':nll_ref/labels,
             'candidate_mean_nll':nll_cand/labels,
             'reference_perplexity':math.exp(nll_ref/labels),
             'candidate_perplexity':math.exp(nll_cand/labels),
-            'perplexity_ratio':math.exp(delta), 'mean_nll_delta':delta}
+            'perplexity_ratio':math.exp(delta), 'mean_nll_delta':delta,
+            'row_tv_percentiles':{str(p):row_tvs[(p*len(row_tvs)+99)//100-1]
+                                  for p in (50, 90, 95, 99)},
+            'row_tv_exceedances':[{'threshold':t,
+                                   'rows':sum(value > t for value in row_tvs)}
+                                  for t in tv_thresholds]}
 
 
-def enforce(metrics: dict, limits: dict) -> list[str]:
-    required = {'mean_kl_nats', 'mean_tv', 'maximum_row_tv', 'perplexity_ratio'}
+def enforce(metrics: dict, limits: dict, *, required=None) -> list[str]:
+    if required is None:
+        required = {'mean_kl_nats', 'mean_tv', 'maximum_row_tv', 'perplexity_ratio'}
     if not required <= limits.keys():
         raise ValueError('missing required quality limits')
     errors = []
@@ -111,3 +121,13 @@ def enforce(metrics: dict, limits: dict) -> list[str]:
         if value > maximum:
             errors.append(f'{metric}={value} exceeds {maximum}')
     return errors
+
+
+def assess_quality(metrics: dict, declaration: dict) -> tuple[list[str], list[str]]:
+    """Preserve v1 decisions; v2 distribution shifts are visible alerts."""
+    if declaration['schema'] == 'gufo-quant-variant/1':
+        return enforce(metrics, declaration['limits']), []
+    failures = enforce(metrics, declaration['quality_limits'], required={'perplexity_ratio'})
+    alerts = enforce(metrics, declaration['investigation_triggers'],
+                     required={'mean_kl_nats', 'mean_tv', 'maximum_row_tv'})
+    return failures, alerts

@@ -246,7 +246,9 @@ contracts or performance. These limits do not block beginning #3.
 
 Status: implemented, fixture-tested and exercised on Windows/gfx1151 with
 Qwen27B Q5_K_M. The bounded campaign finished with **FAIL**; a passing variant
-has not yet validated the full workflow.
+has not yet validated the full workflow. The revised
+[version 2 policy](QUANTIZATION_POLICY.md) is implemented and fixture-tested;
+fresh held-out real-task validation remains outstanding.
 
 Goal: make a reproducible support and quality decision for a new Q4/Q5/Q6/Q8/IQ
 variant of an already-supported model. A successful load alone is insufficient.
@@ -292,6 +294,22 @@ and GSQ-RCO mixed-IQ files need separate engine support.
 
 ### Comparison contract
 
+For new campaigns, follow the [version 2 acceptance policy](QUANTIZATION_POLICY.md):
+loading/operator/state/capability failures remain hard failures; predeclared
+held-out likelihood and functional requirements govern quality. Distribution
+shifts trigger visible investigation alerts, with percentiles and exceedance
+counts, rather than automatically failing quality on one maximum-TV row.
+Same-weight cross-engine execution has its own hard budgets and scope. A
+failure there requires attribution, not an assumption that either engine is
+correct. Preserve version 1 declarations and decisions; do not retroactively
+score the observed Q5 results as a new pass. The default runner declaration
+continues to reproduce the original pilot; version 2 is selected explicitly
+with `--declaration` for a new predeclared campaign.
+
+The remaining Q5 cross-engine difference has a
+[staged investigation plan](plans/qwen27b-cross-engine-differences.md).
+Execution is deferred; policy adoption does not start that investigation.
+
 Keep two questions separate:
 
 - **Engine regression:** different builds, identical model artifacts and
@@ -327,9 +345,9 @@ Before a real qualification run, establish:
 
 - candidate and teacher/reference artifacts, checkpoint lineage, all shards,
   tokenizer/template identity, required sidecars and their immutable hashes
-- model-owned limits and rationale for distribution drift, matched-token
-  NLL/perplexity and a small relevant capability fixture, chosen before judging
-  the candidate; do not turn historical measurements into arbitrary thresholds
+- model-owned likelihood/functional limits, distribution investigation
+  triggers and their rationale, chosen before judging the candidate; keep
+  calibration inputs separate from fresh held-out acceptance inputs
 - fixed corpus/token histories, context, batching, sampling and speculative
   settings, with enough workload coverage to exercise the claimed routes
 - validated build/toolchain, GPU, memory/disk capacity and campaign scope;
@@ -362,9 +380,11 @@ mixed types, expert routes and dense re-encoding.
    model identities.
 4. **Compare quality.** Compare complete vocabulary distributions on identical
    token histories and matched-token NLL/perplexity, then the declared capability
-   fixture. Use an explicit comparator and model-owned limits; reject missing,
-   nonfinite or out-of-limit metrics. Report reference limitations and any
-   unresolved model-quality failures without relaxing gates.
+   fixtures. Use an explicit comparator and versioned model-owned policy;
+   reject missing/nonfinite data and exceeded hard limits. Report distribution
+   alerts with frequency and scope. Known smoke fixtures do not replace fresh
+   held-out functional tasks for a broader claim. Retain reference limitations
+   and unresolved execution differences without relaxing their gates.
 5. **Decide and retain.** Write JSON and Markdown evidence with support status,
    quality verdict, per-check coverage, reference identity, commands and gaps.
    Only a passing quality gate permits retained performance measurements via
@@ -384,8 +404,10 @@ experiment framework or implement every model in the first change.
   `GgmlType` or accepting a tensor is not enough to claim all runtime modes.
 - Comparison fixtures allow the intended artifact differences while rejecting
   checkpoint/tokenizer/corpus/settings mismatches and undeclared sidecar changes.
-- Missing/skipped checks, absent comparators or limits, nonfinite values and
-  exceeded limits prevent a pass. Tests cover both acceptance and refusal.
+- Missing/skipped checks, absent comparators or required limits, nonfinite
+  values and exceeded hard limits prevent a pass. Tests cover acceptance,
+  refusal and visible version 2 distribution alerts; version 1 decisions stay
+  unchanged. Tail distances alone cannot become an automatic quality failure.
 - One real candidate completes the declared workflow with retained evidence.
   Agent evaluation checks that load-only or short-NLL-only evidence cannot
   become a full support claim or trigger benchmark publication.
@@ -548,6 +570,27 @@ forward; it does not require completing the catalog first.
   This does not replace the original Q5 campaign or resolve its separate
   corpus-quality failure. Linux and performance remain unverified.
 
+- 2026-10-19: Investigated #3's Q5 corpus failure with a predeclared five-window
+  sample: 2,560 labels each for Q4, Q5 and BF16. Q5 has lower mean divergence
+  and sample perplexity loss than the local Q4 control but still exceeds the
+  original maximum-TV limit. Independent BF16/Q5 replay confirms large shifts
+  outside Gufo; additional controls expose reference batching and residual
+  execution differences. The focused Q5 CPU/GPU dequant-dot oracle passes.
+  [Evidence](models/qwen3.8-27b/artifacts/quantization-q5-investigation-20261019.json)
+  retains all results and limitations. Original verdict/limits remain unchanged;
+  acceptance-policy calibration and precision-matched reference coverage are
+  separate follow-ups. No additional inference/default/performance changes.
+
+- 2026-10-19: Adopted [quantization policy version 2](QUANTIZATION_POLICY.md)
+  for future declarations: likelihood and functional requirements stay hard
+  gates, distribution shifts become retained investigation alerts, and
+  same-artifact engine execution keeps separate budgets. Added runner support,
+  tail summaries and backward-compatibility fixtures (22 variant tool tests
+  and 23 workflow #2 tests pass). Original declaration and
+  failed Q5 evidence are unchanged; no fresh quality pass is claimed. Wrote the
+  [cross-engine investigation plan](plans/qwen27b-cross-engine-differences.md)
+  and deferred its execution. No GPU work or production arithmetic change.
+
 ## Open questions
 
 - **Resolved:** inference qualification uses declarative `qualify.json` gates;
@@ -557,7 +600,8 @@ forward; it does not require completing the catalog first.
   BF16 download, WikiText-2 sample, predeclared budgets and three capability
   fixtures establish the bounded Windows/gfx1151 #3 campaign. The SSM operator
   failure in that run has a separately validated correction; the original run
-  remains failed and its corpus-quality limit remains unresolved. No additional
+  remains failed under version 1. Version 2 still needs fresh held-out quality
+  evidence; expanded cross-engine coverage remains deferred. No additional
   candidate search is needed for the pilot intake.
 - **Resolved pilot support policy:** the CPU probe calls the production Qwen
   loader and GEMM route resolver directly. Other model adapters remain separate

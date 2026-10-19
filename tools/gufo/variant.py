@@ -11,7 +11,7 @@ from gufo.qualify.config import Command, config_for
 from gufo.qualify.record import _context, _expand_shards, _run_command
 from gufo.qualify.util import atomic_json, git_identity, hash_file, utc_now
 from gufo.variant_gguf import inventory
-from gufo.variant_metrics import capture_rows, compare, enforce
+from gufo.variant_metrics import assess_quality, capture_rows, compare, enforce
 from gufo import variant_reference
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,7 +19,8 @@ DECLARATION = ROOT / 'docs/models/qwen3.8-27b/artifacts/variant-qualify.json'
 
 
 def validate(declaration):
-    if declaration.get('schema') != 'gufo-quant-variant/1' or declaration.get('model') != 'qwen3.8-27b':
+    if (declaration.get('schema') not in ('gufo-quant-variant/1', 'gufo-quant-variant/2')
+            or declaration.get('model') != 'qwen3.8-27b'):
         raise ValueError('unsupported variant declaration')
     expected = {'short':('--capture-logits', 27, 24),
                 'prefill':('--capture-prefill-logits', 189, 168),
@@ -36,8 +37,24 @@ def validate(declaration):
         raise ValueError('missing artifact identities')
     if declaration['candidate'] == declaration['teacher']:
         raise ValueError('candidate cannot be its own BF16 teacher')
-    for policy in ('limits', 'llama_limits'):
-        enforce({k:0.0 for k in declaration[policy]}, declaration[policy])
+    enforce({k:0.0 for k in declaration['llama_limits']}, declaration['llama_limits'])
+    if declaration['schema'] == 'gufo-quant-variant/1':
+        enforce({k:0.0 for k in declaration['limits']}, declaration['limits'])
+    else:
+        if 'limits' in declaration:
+            raise ValueError('v2 uses quality_limits and investigation_triggers, not limits')
+        if (not isinstance(declaration.get('quality_limits'), dict) or
+                not isinstance(declaration.get('investigation_triggers'), dict)):
+            raise ValueError('missing v2 quality_limits or investigation_triggers')
+        if (set(declaration['quality_limits']) != {'perplexity_ratio'} or
+                set(declaration['investigation_triggers']) !=
+                {'mean_kl_nats', 'mean_tv', 'maximum_row_tv'}):
+            raise ValueError('v2 must separate likelihood gates from distribution triggers')
+        for key in ('policy_rationale', 'heldout_evaluation_plan'):
+            if not isinstance(declaration.get(key), str) or not declaration[key].strip():
+                raise ValueError('missing predeclared policy rationale/evaluation plan: ' + key)
+        assess_quality({k:0.0 for k in (*declaration['quality_limits'],
+                                     *declaration['investigation_triggers'])}, declaration)
 
 
 def compatible(reference, candidate):
@@ -81,9 +98,20 @@ def write_report(out, result):
     for name, metrics in result.get('comparisons', {}).items():
         text += [f'- {name}: {metrics["rows"]} complete rows, {metrics["labels"]} labels; '
                  f'KL {metrics["mean_kl_nats"]:.8g}, TV {metrics["mean_tv"]:.8g}, '
+                 f'maximum row TV {metrics["maximum_row_tv"]:.8g}, '
                  f'perplexity ratio {metrics["perplexity_ratio"]:.8g}.']
+        if 'row_tv_percentiles' in metrics:
+            text += [f'  99th-percentile row TV {metrics["row_tv_percentiles"]["99"]:.8g}.']
+        for tail in metrics.get('row_tv_exceedances', []):
+            text += [f'  Rows above TV {tail["threshold"]:.8g}: {tail["rows"]}/{metrics["rows"]}.']
     text += ['', '## Gaps and failures', '']
     text += ['- ' + gap for gap in result.get('errors', []) + result.get('unverified', [])]
+    text += ['', '## Distribution investigation alerts', '']
+    text += (['- ' + alert for alert in result.get('alerts', [])] or ['- None recorded.'])
+    if result.get('declaration', {}).get('schema') == 'gufo-quant-variant/2':
+        text += ['', 'Distribution alerts do not fail the v2 quality gate. '
+                 'Same-artifact execution budgets remain separate hard gates. '
+                 'See JSON for tail percentiles and exceedance counts.']
     text += ['', '## Limits of the claim', '',
              '- BF16 is the same converted model in Gufo, not original-checkpoint/conversion parity.',
              '- Corpus results cover 512 labels; short and repeated-prefill fixtures are reported separately.',
@@ -119,7 +147,7 @@ def run(args):
               'declaration':declaration, 'declaration_identity':hash_file(args.declaration),
               'source':git_identity(repo), 'tools':{'target':hash_file(tool), 'inspector':hash_file(probe)},
               'build_cache':hash_file(cache), 'commands':{}, 'comparisons':{},
-              'errors':[], 'unverified':[], 'stage':'intake'}
+              'errors':[], 'alerts':[], 'unverified':[], 'stage':'intake'}
     result['build_inputs'] = {name:hash_file(repo / name) for name in (
         'vcpkg.json', 'CMakePresets.json', 'src/models/qwen/weights.cpp',
         'src/models/qwen/gemm_route.hpp', 'tests/models/qwen27b/target_test.cpp',
@@ -217,9 +245,13 @@ def run(args):
             for name in declaration['captures']:
                 p, p_rows = captures['teacher'][name]
                 q, q_rows = captures['candidate'][name]
-                metrics = compare(p, q, p_rows, q_rows)
+                thresholds = ([declaration['investigation_triggers']['maximum_row_tv']]
+                              if declaration['schema'] == 'gufo-quant-variant/2' else [])
+                metrics = compare(p, q, p_rows, q_rows, tv_thresholds=thresholds)
                 result['comparisons'][name] = metrics
-                result['errors'] += [name + ': ' + e for e in enforce(metrics, declaration['limits'])]
+                failures, alerts = assess_quality(metrics, declaration)
+                result['errors'] += [name + ' quality: ' + e for e in failures]
+                result['alerts'] += [name + ': ' + e for e in alerts]
                 write_report(out, result)
         if args.llama_server:
             result['tools']['llama_server'] = hash_file(args.llama_server)
@@ -236,7 +268,8 @@ def run(args):
             metrics = compare(p, q, p_rows, q_rows)
             result['comparisons']['llama_same_artifact'] = metrics
             result['llama'] = evidence
-            result['errors'] += ['llama: ' + e for e in enforce(metrics, declaration['llama_limits'])]
+            result['errors'] += ['llama same-artifact execution: ' + e
+                                for e in enforce(metrics, declaration['llama_limits'])]
         else:
             result['unverified'].append('independent same-artifact llama.cpp reference missing')
         result['status'] = verdict(result)
@@ -264,7 +297,8 @@ def main():
     run_parser.add_argument('--inspect-tool', type=Path, required=True)
     run_parser.add_argument('--target-test', type=Path, required=True)
     run_parser.add_argument('--llama-server', type=Path)
-    run_parser.add_argument('--declaration', type=Path, default=DECLARATION)
+    run_parser.add_argument('--declaration', type=Path, default=DECLARATION,
+                            help='versioned campaign declaration; default preserves the v1 pilot')
     run_parser.add_argument('--out', type=Path, required=True)
     run_parser.add_argument('--timeout', type=float, default=1800)
     args = parser.parse_args()

@@ -8,7 +8,9 @@ metadata:
 # Qualify a quantization variant
 
 Read [AGENTS.md](../../../AGENTS.md), [workflow #3](../../../docs/AGENT_WORKFLOWS.md#3-qualify-a-quantization-variant)
-and the model's `QUALITY.md`. The bounded pilot is Qwen3.8-27B text AR, declared
+and the model's `QUALITY.md`. For new campaigns read the versioned
+[quantization policy](../../../docs/QUANTIZATION_POLICY.md). The bounded version 1
+pilot is Qwen3.8-27B text AR, declared
 in [variant-qualify.json](../../../docs/models/qwen3.8-27b/artifacts/variant-qualify.json).
 
 ## Intake and support
@@ -44,9 +46,11 @@ python tools/models/qualify-variant.py run \
   --out artifacts/variant/NEW_RUN
 ```
 
-Add `.exe` on Windows. Use a fresh output directory. Raw logs, captures and
-per-stage JSON remain there even when a gate fails. A successful inspect or
-build cannot become a quality pass.
+Add `.exe` on Windows. The default declaration reproduces version 1; select a
+new predeclared version 2 campaign with `--declaration CAMPAIGN.json`. Keep the
+original declaration/verdict intact. Use a fresh output directory. Raw logs,
+captures and per-stage JSON remain there even when a gate fails. A successful
+inspect or build cannot become a quality pass.
 
 The declaration pins this pilot's artifacts and corpus and sets numerical
 budgets before candidate measurements. It requires all fast/operator tests,
@@ -58,10 +62,18 @@ server or reuse its cache. No projector or draft is loaded in this AR pilot;
 embedded MTP tensors are explicitly excluded.
 
 Missing teachers/references, skipped checks, mismatched checkpoint/tokenizer/
-histories/settings, nonfinite metrics or exceeded budgets prevent `PASS`.
-Do not relax a budget or regenerate expected replies after a failure. Attribute
-the mismatch and report it. Gufo BF16 measures quantization plus native arithmetic;
-same-GGUF llama.cpp checks execution, neither proves original-checkpoint parity.
+histories/settings, nonfinite metrics or exceeded hard budgets prevent `PASS`.
+Version 2 records distribution-trigger exceedances as visible `alerts`, with
+tail percentiles/counts; a maximum-TV outlier alone is not a quality failure.
+Likelihood/functional requirements and separate same-weight execution budgets
+remain hard gates. Declare fresh held-out acceptance inputs and scoring before
+measurement, separately from calibration and known smoke/outlier cases. Verify
+the design and supplemental task evidence; the current runner's three fixed
+capability checks do not prove broad held-out quality. Do not relax a budget or
+regenerate expected replies after a failure. Attribute the mismatch and report
+it; unexplained cross-engine drift is not proof either engine is wrong. Gufo BF16
+measures quantization plus native arithmetic; same-GGUF llama.cpp checks
+execution, neither proves original-checkpoint parity.
 
 ## Retain
 

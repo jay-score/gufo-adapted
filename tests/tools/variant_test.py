@@ -13,9 +13,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
-from gufo.variant import compatible, identities, validate, verdict
+from gufo.variant import compatible, identities, validate, verdict, write_report
 from gufo.variant_gguf import InvalidGGUF, inventory
-from gufo.variant_metrics import capture_rows, compare, enforce
+from gufo.variant_metrics import assess_quality, capture_rows, compare, enforce
 from gufo.variant_reference import full_logprobs
 
 
@@ -142,17 +142,22 @@ class MetricsTest(unittest.TestCase):
         self.assertEqual(result['mean_tv'], 0)
         self.assertEqual(result['perplexity_ratio'], 1)
         self.assertEqual(result['labels'], 1)
+        self.assertEqual(result['row_tv_percentiles'], {str(p):0 for p in (50,90,95,99)})
 
     def test_reference_direction_and_nll_ratio_are_analytic(self):
         reference_rows = self.fixture((0.0, 0.0))
         reference = self.path.with_name('reference.bin')
         reference.write_bytes(self.path.read_bytes())
         candidate_rows = self.fixture((0.0, math.log(3.0)))
-        result = compare(reference, self.path, reference_rows, candidate_rows)
+        result = compare(reference, self.path, reference_rows, candidate_rows,
+                         tv_thresholds=(0.15, 0.30))
         self.assertAlmostEqual(result['mean_kl_nats'], 0.5 * math.log(4.0/3.0), places=7)
         self.assertAlmostEqual(result['mean_tv'], 0.25, places=7)
         self.assertAlmostEqual(result['perplexity_ratio'], 2.0/3.0, places=7)
         self.assertAlmostEqual(result['mean_nll_delta'], math.log(2.0/3.0), places=7)
+        self.assertEqual(result['row_tv_exceedances'],
+                         [{'threshold':0.15,'rows':1}, {'threshold':0.30,'rows':0}])
+        self.assertAlmostEqual(result['row_tv_percentiles']['99'], 0.25, places=7)
 
     def test_histories_vocabulary_and_labels_must_match(self):
         rows = self.fixture()
@@ -161,6 +166,21 @@ class MetricsTest(unittest.TestCase):
             changed[0][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
                 compare(self.path, self.path, rows, changed)
+
+    def test_tail_summary_counts_rare_shifts(self):
+        reference = self.path.with_name('reference.bin')
+        reference.write_bytes(struct.pack('<4f', 0, 0, 0, 0))
+        self.path.write_bytes(struct.pack('<4f', 0, 0, 0, math.log(3)))
+        rows = [{'case':0, 'row':i, 'vocab':2, 'prefix':[0]*(i+1), 'label':1,
+                 'sha256':hashlib.sha256(reference.read_bytes()[i*8:i*8+8]).hexdigest()}
+                for i in range(2)]
+        candidate_rows = copy.deepcopy(rows)
+        for i, row in enumerate(candidate_rows):
+            row['sha256'] = hashlib.sha256(self.path.read_bytes()[i*8:i*8+8]).hexdigest()
+        metrics = compare(reference, self.path, rows, candidate_rows, tv_thresholds=(0.15,))
+        self.assertEqual(metrics['row_tv_percentiles']['50'], 0)
+        self.assertAlmostEqual(metrics['row_tv_percentiles']['99'], 0.25, places=7)
+        self.assertEqual(metrics['row_tv_exceedances'], [{'threshold':0.15,'rows':1}])
 
     def test_nonfinite_corrupt_truncated_or_extra_raw_rows_fail(self):
         for values in ((float('nan'),1), (0,float('inf'))):
@@ -214,6 +234,67 @@ class MetricsTest(unittest.TestCase):
 
 
 class PolicyTest(unittest.TestCase):
+    def v2(self):
+        declaration = json.loads((ROOT / 'docs/models/qwen3.8-27b/artifacts/variant-qualify.json').read_text())
+        declaration['schema'] = 'gufo-quant-variant/2'
+        limits = declaration.pop('limits')
+        declaration['quality_limits'] = {'perplexity_ratio':limits.pop('perplexity_ratio')}
+        declaration['investigation_triggers'] = limits
+        declaration['policy_rationale'] = 'Synthetic fixture policy; not a new Q5 qualification.'
+        declaration['heldout_evaluation_plan'] = 'Fixture only; real campaigns require fresh held-out inputs.'
+        return declaration
+
+    def test_v2_outlier_alert_does_not_replace_quality_or_execution_failure(self):
+        declaration = self.v2()
+        validate(declaration)
+        metrics = {'mean_kl_nats':0.002, 'mean_tv':0.017,
+                   'maximum_row_tv':0.31, 'perplexity_ratio':1.002}
+        failures, alerts = assess_quality(metrics, declaration)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(alerts), 1)
+        self.assertIn('maximum_row_tv', alerts[0])
+        self.assertEqual(len(enforce(metrics, declaration['llama_limits'])), 3)
+        failures, alerts = assess_quality({**metrics,'perplexity_ratio':1.06}, declaration)
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(len(alerts), 1)
+        for key in metrics:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                assess_quality({**metrics,key:float('nan')}, declaration)
+
+    def test_v1_outlier_remains_a_failure(self):
+        declaration = json.loads((ROOT / 'docs/models/qwen3.8-27b/artifacts/variant-qualify.json').read_text())
+        failures, alerts = assess_quality({'mean_kl_nats':0.002, 'mean_tv':0.017,
+            'maximum_row_tv':0.31, 'perplexity_ratio':1.002}, declaration)
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(alerts, [])
+
+    def test_v2_refuses_ambiguous_missing_or_invalid_policy(self):
+        for key in ('quality_limits', 'investigation_triggers'):
+            declaration = self.v2()
+            del declaration[key]
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                validate(declaration)
+        for key, value in (('quality_limits',{}), ('investigation_triggers',{}),
+                           ('quality_limits',{'maximum_row_tv':0.15,'perplexity_ratio':1.05}),
+                           ('policy_rationale',''), ('heldout_evaluation_plan',''),
+                           ('investigation_triggers',{'mean_kl_nats':0.01,'mean_tv':0.05,
+                                                     'maximum_row_tv':float('inf')}),
+                           ('limits',{})):
+            declaration = self.v2()
+            declaration[key] = value
+            with self.subTest(key=key,value=value), self.assertRaises(ValueError):
+                validate(declaration)
+
+    def test_report_keeps_distribution_alerts_visible(self):
+        with tempfile.TemporaryDirectory(prefix='gufo-variant-report-') as temp:
+            out = Path(temp)
+            result = {'status':'PASS', 'scope':'Synthetic fixture',
+                      'declaration':self.v2(), 'alerts':['corpus: maximum_row_tv outlier']}
+            write_report(out, result)
+            self.assertEqual(json.loads((out / 'qualification.json').read_text())['alerts'],
+                             result['alerts'])
+            self.assertIn(result['alerts'][0], (out / 'qualification.md').read_text())
+
     def test_failed_skipped_or_missing_gates_never_pass(self):
         commands = ('inspect-candidate', 'fast', 'kernels', 'state',
                     'capability-candidate', 'inspect-teacher', 'capability-teacher',
@@ -222,6 +303,8 @@ class PolicyTest(unittest.TestCase):
         result = {'errors':[], 'unverified':[],
                   'commands':{name:{'status':'pass'} for name in commands},
                   'comparisons':{k:{} for k in ('short','prefill','corpus','llama_same_artifact')}}
+        self.assertEqual(verdict(result),'PASS')
+        result['alerts'] = ['distribution outlier; investigate']
         self.assertEqual(verdict(result),'PASS')
         for status in ('fail','skipped','not-applicable','timeout'):
             changed = copy.deepcopy(result)

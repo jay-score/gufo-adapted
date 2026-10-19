@@ -101,6 +101,80 @@ budgets, model defaults or inference arithmetic were changed to admit Q5, and
 no performance measurements were published. A failed pilot is not a general
 claim that this quantization is unusable.
 
+### Q5 follow-up: corpus tails and reference execution
+
+October 19, 2026: a separately declared diagnostic sample retains the original
+512 labels and adds four article-start windows spread through WikiText-2,
+for **2,560 matched labels per model**. Windows reset context and use scalar
+teacher forcing with complete vocabulary rows. All artifact hashes match;
+architecture/tokenizer metadata and 353 shared AR FP32 tensors agree across
+Q4, Q5 and BF16. Fresh leading BF16/Q5 captures reproduce the original raw
+files exactly. The original declaration and failed verdict remain unchanged.
+
+| Local variant versus Gufo BF16 | Mean TV | 99th-percentile TV | Maximum TV | Rows above 15% TV | Sample perplexity increase |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| UD-Q4_K_XL | 2.62% | 15.31% | 28.39% | 27/2,560 | 0.57% |
+| UD-Q5_K_M | 1.73% | 9.41% | 30.54% | 6/2,560 | 0.16% |
+
+The four new windows alone contain 2,048 labels: Q5 sample perplexity rises
+0.115% against BF16, versus 0.423% for Q4. Q5 has lower aggregate divergence
+but a larger single-row maximum. Neither average likelihood nor an existing
+variant's use establishes broad capability quality or invalidates a declared
+fidelity limit.
+
+At the original worst history, Gufo and llama.cpp BF16 differ by only 0.55%
+TV, while Q5 versus BF16 within llama.cpp differs by 25.04%. Replaying the
+worst Q5 history from each window independently finds BF16 engine differences
+of 0.24--1.18% TV and Q5/BF16 differences within llama.cpp of 11.98--27.27%.
+Large shifts therefore persist outside Gufo, supporting quantization
+sensitivity as a substantial cause; this does not establish a defective file.
+
+Reference execution is a separate uncertainty. On those five selected
+outliers, same-Q5 Gufo/llama differences reach 9.00% TV. A three-history
+one-token-microbatch control finds up to 10.06% TV between llama.cpp's own
+batched and scalar-like results. Gufo versus that control retains up to 6.87%
+TV, although all three top choices agree. These selected rows are diagnostics,
+not an extension of the original 27-prefix execution-budget pass. The residual
+has not been localized to a particular operator.
+
+Arithmetic contracts also differ: Gufo's
+[scalar Q5_K dot path](../../../src/models/qwen/hip/quant_ops.hpp) consumes
+FP32 activations, while the pinned llama.cpp
+[GPU quantized matvec](https://raw.githubusercontent.com/ggml-org/llama.cpp/42b70032b/ggml/src/ggml-cuda/mmvq.cu)
+uses Q8_1 activation blocks. This is a possible contributor, not a measured
+attribution of every residual. The focused `qwen_kquant_gemv_ops_test` passes;
+its synthetic Q5 dequant/dot CPU oracle has maximum relative error 2.23e-7.
+
+[Identities, per-window metrics, independent outliers and protocol controls](artifacts/quantization-q5-investigation-20261019.json)
+are retained, with raw vectors and requests under ignored
+`artifacts/variant/qwen27b-q5-followup-20261019/`. This investigation changes no
+production arithmetic, model default or budget. Linux, performance,
+long-context and broad capability quality remain unverified.
+
+### Future acceptance policy and deferred execution work
+
+October 19, 2026: [policy version 2](../../QUANTIZATION_POLICY.md) separates
+quantization quality from distribution investigation alerts and same-artifact
+execution. A large maximum-TV row alone will not fail a future version 2
+quality gate. Loading, finite-output, operator/state/replay and required
+functional checks remain hard gates, as do predeclared likelihood budgets and
+separate same-weight execution budgets. Reports retain KL/TV, tail percentiles,
+maximum and exceedance frequency; alerts remain visible even on a scoped pass.
+
+The original version 1 declaration and failed record remain unchanged. This
+policy change grants no new Q5 pass: choose and justify a fresh held-out corpus
+and functional evaluation before making a new quality claim. The existing
+three capability cases are smoke checks, not broad held-out task coverage.
+Do not fit new limits to the already observed Q5 measurements.
+
+The [cross-engine investigation plan](../../plans/qwen27b-cross-engine-differences.md)
+starts with protocol/precision alignment, traces the earliest divergent stage,
+then uses actual operator inputs and an independent arithmetic oracle to test
+the cause. It retains both batching and BF16 controls and keeps any production
+fix under workflow #2. **Execution is deferred.** The residual 6.87% TV on the
+three scalar-like controls remains unexplained; neither an expanded parity
+pass nor a demonstrated Gufo defect is claimed.
+
 ### Earlier Q4/Q8 measurements
 
 September 24, 2026: short teacher-forced comparison against **Gufo's BF16 target**, with identical
