@@ -743,6 +743,7 @@ int RunServe(std::span<const char* const> args) {
   std::string parse_err;
 
   std::shared_ptr<server::InferenceBackend> backend;
+  std::string text_model_path;
   std::shared_ptr<server::VideoJobService> video_jobs;
   std::shared_ptr<server::TtsService> tts;
   std::shared_ptr<server::AsrService> asr;
@@ -1208,6 +1209,7 @@ int RunServe(std::span<const char* const> args) {
       return 1;
     }
     backend->set_model_id(served_model_name);
+    text_model_path = model;
     backend->set_sampling_defaults(
         max_tokens < 0 ? 0 : static_cast<std::size_t>(max_tokens),
         sampling_config);
@@ -1235,6 +1237,11 @@ int RunServe(std::span<const char* const> args) {
           .max_connections = max_connections,
           .api_key = std::move(api_key),
           .debug_tool_calls = debug_tool_calls,
+          .model_path = text_model_path,
+          // As `gufo --version` prints it.
+          .build_info = GUFO_VERSION,
+          .total_slots = session_count,
+          .context_tokens = backend != nullptr ? backend->max_context() : 0,
       },
       images);
   std::string err;

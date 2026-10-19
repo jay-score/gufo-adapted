@@ -51,6 +51,7 @@ public:
   std::string model_id() const override { return "test"; }
   bool ready() const override { return true; }
   bool supports_image_input() const override { return vision; }
+  SamplingDefaults sampling_defaults() const override { return defaults; }
   gufo::ReasoningOptions reasoning_defaults() const override {
     return reasoning;
   }
@@ -125,6 +126,7 @@ public:
   }
   std::atomic<int> calls{0};
   bool vision{false};
+  SamplingDefaults defaults;
   std::atomic<int> failure{0};
   std::string forced_stop_sequence;
   gufo::ReasoningOptions reasoning;
@@ -265,6 +267,55 @@ void TestVisionDiscovery() {
       assert(props.member_str("model") == "test");
       assert(props.find("modalities")->find("vision")->as_bool() == vision);
     }
+  }
+  ExpectStatus(server.Send("GET /props?model=other HTTP/1.1\r\n\r\n"), 404);
+  assert(server.backend->calls == 0);
+}
+
+// /props reports what the server runs, as llama-server's does, so a client
+// can record which model, build and settings answered it.
+void TestLlamaProps() {
+  const auto props = [](RunningServer& server, const std::string& path) {
+    const auto response = server.Send("GET " + path + " HTTP/1.1\r\n\r\n");
+    ExpectStatus(response, 200);
+    return gufo::json::parse(response.substr(response.find("\r\n\r\n") + 4));
+  };
+
+  // Nothing is invented for what the server does not report.
+  {
+    RunningServer server;
+    const auto bare = props(server, "/props");
+    assert(bare.member_str("model") == "test");
+    assert(!bare.contains("model_path"));
+    assert(!bare.contains("build_info"));
+    assert(!bare.contains("total_slots"));
+    const auto* generation = bare.find("default_generation_settings");
+    assert(generation != nullptr && !generation->contains("n_ctx"));
+    const auto* params = generation->find("params");
+    assert(params != nullptr && params->contains("temperature"));
+    assert(!params->contains("n_predict"));
+    assert(!bare.find("modalities")->find("audio")->as_bool(true));
+  }
+
+  RunningServer server({.model_path = "/models/model-00001-of-00002.gguf",
+                        .build_info = "abc1234",
+                        .total_slots = 2,
+                        .context_tokens = 65536});
+  server.backend->defaults.max_tokens = 512;
+  server.backend->defaults.sampling.temperature = 0.5F;
+  server.backend->defaults.sampling.top_k = 20;
+  for (const auto* path : {"/props", "/props?model=test"}) {
+    const auto full = props(server, path);
+    assert(full.member_str("model_path") ==
+           "/models/model-00001-of-00002.gguf");
+    assert(full.member_str("build_info") == "abc1234");
+    assert(full.member_size("total_slots") == 2);
+    const auto* generation = full.find("default_generation_settings");
+    assert(generation->member_size("n_ctx") == 65536);
+    const auto* params = generation->find("params");
+    assert(params->member_double("temperature") == 0.5);
+    assert(params->member_size("top_k") == 20);
+    assert(params->member_size("n_predict") == 512);
   }
   ExpectStatus(server.Send("GET /props?model=other HTTP/1.1\r\n\r\n"), 404);
   assert(server.backend->calls == 0);
@@ -1195,6 +1246,7 @@ int main() {
   TestRequestLogging();
   TestInvalidBindSettings();
   TestQueryParameters();
+  TestLlamaProps();
   TestAuthorization();
   TestVisionDiscovery();
   TestFramingAndMetrics();
