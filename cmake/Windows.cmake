@@ -101,12 +101,13 @@ if (BUILD_TESTING)
     ${PROJECT_SOURCE_DIR}/tests/platform/win32_host_test.cpp
     ${PROJECT_SOURCE_DIR}/src/cli/serve/continuation_cache.cpp
     ${PROJECT_SOURCE_DIR}/src/cli/serve/continuation_disk_store.cpp
+    ${PROJECT_SOURCE_DIR}/src/cli/serve/component_text_cache.cpp
     ${PROJECT_SOURCE_DIR}/src/cli/serve/text_model_runner.cpp)
   # Created before enable_language(HIP) in the root file, so the global
   # CMAKE_HIP_ARCHITECTURES initializer has not run for this target yet.
   set_target_properties(win32_host_test PROPERTIES HIP_ARCHITECTURES gfx1151)
   target_compile_options(win32_host_test PRIVATE -UNDEBUG)
-  target_link_libraries(win32_host_test PRIVATE gufo_diagnostics gufo_logging gufo_core)
+  target_link_libraries(win32_host_test PRIVATE gufo_diagnostics gufo_logging gufo_core gufo_cache)
   add_test(NAME win32_host_test COMMAND win32_host_test)
   set_tests_properties(win32_host_test PROPERTIES LABELS "cpu;windows;diagnostics" TIMEOUT 30)
   add_test(NAME win32_server_shutdown_test

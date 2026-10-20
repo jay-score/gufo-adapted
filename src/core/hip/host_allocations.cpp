@@ -1,15 +1,28 @@
 #include "src/core/hip/host_allocations.hpp"
 
+#ifndef _WIN32
 #include <linux/io_uring.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <new>
 
 namespace gufo::hip {
 
+#ifdef _WIN32
+// Windows has no io_uring long-term registration and does not compact user
+// pages. HIP's own registration is retained, as on Linux when the pin fails.
+int PinHostPages(void* data, std::size_t bytes) noexcept {
+  (void)data;
+  (void)bytes;
+  return -1;
+}
+
+void UnpinHostPages(int ring) noexcept { (void)ring; }
+#else
 int PinHostPages(void* data, std::size_t bytes) noexcept {
   if (!data || !bytes)
     return -1;
@@ -44,6 +57,7 @@ void UnpinHostPages(int ring) noexcept {
     close(ring);
   }
 }
+#endif
 
 HostAllocations::~HostAllocations() {
   Reset();

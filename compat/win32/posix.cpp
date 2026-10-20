@@ -20,6 +20,10 @@
 // - mmap() offsets are aligned down to the 64 KiB allocation granularity and
 //   munmap() releases whole views.
 
+/* rand_s() is declared by <stdlib.h> only with this opt-in. */
+#ifndef _CRT_RAND_S
+#define _CRT_RAND_S
+#endif
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -777,6 +781,25 @@ ssize_t pread(int fd, void* buf, size_t count, off_t offset) {
 
 ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset) {
   return Transfer(fd, const_cast<void*>(buf), count, offset, true);
+}
+
+ssize_t getrandom(void* buffer, size_t length, unsigned int flags) {
+  (void)flags;
+  auto* out = static_cast<unsigned char*>(buffer);
+  size_t written = 0;
+  while (written < length) {
+    unsigned int value = 0;
+    if (rand_s(&value) != 0) {
+      errno = EIO;
+      return -1;
+    }
+    const size_t remaining = length - written;
+    const size_t chunk =
+        remaining < sizeof(value) ? remaining : sizeof(value);
+    memcpy(out + written, &value, chunk);
+    written += chunk;
+  }
+  return static_cast<ssize_t>(written);
 }
 
 off_t lseek(int fd, off_t offset, int whence) {

@@ -803,31 +803,33 @@ void TestExpectContinue() {
   RunningServer server({.max_request_body_bytes = 8192});
   for (const std::string expect :
        {"Expect: 100-continue", "expect: 100-Continue"}) {
-    const int fd = server.Connect();
+    const auto fd = server.Connect();
     const std::string head =
         "POST /echo HTTP/1.1\r\n" + expect + "\r\nContent-Length: 5\r\n\r\n";
-    assert(::send(fd, head.data(), head.size(), MSG_NOSIGNAL) ==
+    assert(gufo::platform::SocketSend(fd, head.data(), head.size(),
+                                      MSG_NOSIGNAL) ==
            static_cast<ssize_t>(head.size()));
     // The interim response arrives before any body byte is sent.
     const std::string_view interim = "HTTP/1.1 100 Continue\r\n\r\n";
     std::string response;
     char buffer[4096];
     while (response.size() < interim.size()) {
-      const auto count = ::read(fd, buffer, interim.size() - response.size());
+      const auto count = gufo::platform::SocketRead(
+          fd, buffer, interim.size() - response.size());
       assert(count > 0);
       response.append(buffer, static_cast<std::size_t>(count));
     }
     assert(response == interim);
-    assert(::send(fd, "hello", 5, MSG_NOSIGNAL) == 5);
+    assert(gufo::platform::SocketSend(fd, "hello", 5, MSG_NOSIGNAL) == 5);
     response.clear();
     for (;;) {
-      const auto count = ::read(fd, buffer, sizeof(buffer));
+      const auto count = gufo::platform::SocketRead(fd, buffer, sizeof(buffer));
       assert(count >= 0);
       if (count == 0)
         break;
       response.append(buffer, static_cast<std::size_t>(count));
     }
-    ::close(fd);
+    gufo::platform::CloseSocket(fd);
     ExpectStatus(response, 200);
     assert(response.substr(response.find("\r\n\r\n") + 4) == "hello");
   }
@@ -2427,24 +2429,32 @@ void TestInvalidBindSettings() {
 
 // Some CI containers have no IPv6 loopback; listener checks skip there.
 bool HasIpv6Loopback() {
-  const int fd = ::socket(AF_INET6, SOCK_STREAM, 0);
-  if (fd < 0)
+  const auto fd = ::socket(AF_INET6, SOCK_STREAM, 0);
+  if (fd == gufo::platform::kInvalidSocket)
     return false;
   sockaddr_in6 address{};
   address.sin6_family = AF_INET6;
   address.sin6_addr = in6addr_loopback;
   const bool bound = ::bind(fd, reinterpret_cast<const sockaddr*>(&address),
                             sizeof(address)) == 0;
-  ::close(fd);
+  gufo::platform::CloseSocket(fd);
   return bound;
 }
 
 void TestListenAddresses() {
   using gufo::server::IsListenAddress;
-  for (const char* host : {"127.0.0.1", "0.0.0.0", "::", "::1", "fe80::1%lo"})
+  for (const char* host : {"127.0.0.1", "0.0.0.0", "::", "::1"})
     assert(IsListenAddress(host));
-  for (const char* host : {"", "localhost", "127.1", "[::1]", "bad.address"})
+#ifndef _WIN32
+  // Winsock resolves a zone name only when it names an installed interface;
+  // "lo" is a Linux interface name.
+  assert(IsListenAddress("fe80::1%lo"));
+#endif
+  for (const char* host : {"", "localhost", "127.1", "[::1]", "bad.address"}) {
+    if (IsListenAddress(host))
+      std::cerr << "unexpected listen address: '" << host << "'\n";
     assert(!IsListenAddress(host));
+  }
   if (!HasIpv6Loopback()) {
     std::cout << "IPv6 loopback unavailable; skipping IPv6 listener checks.\n";
     return;
@@ -2479,17 +2489,17 @@ int FreePort(const std::string& host = "127.0.0.1") {
     ipv6->sin6_family = AF_INET6;
     length = sizeof(*ipv6);
   }
-  const int fd = ::socket(address.ss_family, SOCK_STREAM, 0);
-  assert(fd >= 0);
+  const auto fd = ::socket(address.ss_family, SOCK_STREAM, 0);
+  assert(fd != gufo::platform::kInvalidSocket);
   assert(::bind(fd, reinterpret_cast<const sockaddr*>(&address), length) == 0);
   assert(::getsockname(fd, reinterpret_cast<sockaddr*>(&address), &length) ==
          0);
-  ::close(fd);
+  gufo::platform::CloseSocket(fd);
   return ntohs(address.ss_family == AF_INET6 ? ipv6->sin6_port
                                              : ipv4->sin_port);
 }
 
-int ConnectTo(const std::string& host, int port) {
+gufo::platform::SocketHandle ConnectTo(const std::string& host, int port) {
   sockaddr_storage address{};
   socklen_t length = 0;
   auto* ipv4 = reinterpret_cast<sockaddr_in*>(&address);
@@ -2504,14 +2514,13 @@ int ConnectTo(const std::string& host, int port) {
     ipv6->sin6_port = htons(static_cast<std::uint16_t>(port));
     length = sizeof(*ipv6);
   }
-  const int fd = ::socket(address.ss_family, SOCK_STREAM, 0);
-  assert(fd >= 0);
-  const timeval timeout{3, 0};
-  assert(::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) ==
-         0);
+  const auto fd = ::socket(address.ss_family, SOCK_STREAM, 0);
+  assert(fd != gufo::platform::kInvalidSocket);
+  assert(gufo::platform::SetSocketTimeout(fd, SO_RCVTIMEO,
+                                          std::chrono::seconds(3)) == 0);
   if (::connect(fd, reinterpret_cast<const sockaddr*>(&address), length) != 0) {
-    ::close(fd);
-    return -1;
+    gufo::platform::CloseSocket(fd);
+    return gufo::platform::kInvalidSocket;
   }
   return fd;
 }
@@ -2519,24 +2528,25 @@ int ConnectTo(const std::string& host, int port) {
 // Sends each part separately, pausing between them, and reads to EOF.
 std::string SendParts(const std::string& host, int port,
                       const std::vector<std::string>& parts) {
-  const int fd = ConnectTo(host, port);
-  assert(fd >= 0);
+  const auto fd = ConnectTo(host, port);
+  assert(fd != gufo::platform::kInvalidSocket);
   for (std::size_t index = 0; index < parts.size(); ++index) {
     if (index > 0)
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    assert(::send(fd, parts[index].data(), parts[index].size(), MSG_NOSIGNAL) ==
+    assert(gufo::platform::SocketSend(fd, parts[index].data(),
+                                      parts[index].size(), MSG_NOSIGNAL) ==
            static_cast<ssize_t>(parts[index].size()));
   }
   std::string response;
   char buffer[4096];
   for (;;) {
-    const auto count = ::read(fd, buffer, sizeof(buffer));
+    const auto count = gufo::platform::SocketRead(fd, buffer, sizeof(buffer));
     assert(count >= 0);
     if (count == 0)
       break;
     response.append(buffer, static_cast<std::size_t>(count));
   }
-  ::close(fd);
+  gufo::platform::CloseSocket(fd);
   return response;
 }
 
@@ -2582,19 +2592,19 @@ void TestLoadingResponder() {
 
   // A client that connects and sends nothing delays neither the next client
   // nor stop() beyond the bounded request wait.
-  const int idle = ConnectTo("127.0.0.1", port);
-  assert(idle >= 0);
+  const auto idle = ConnectTo("127.0.0.1", port);
+  assert(idle != gufo::platform::kInvalidSocket);
   auto started = std::chrono::steady_clock::now();
   ExpectLoading(SendParts("127.0.0.1", port, {"GET /health HTTP/1.1\r\n\r\n"}));
   assert(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
-  const int idle_during_stop = ConnectTo("127.0.0.1", port);
-  assert(idle_during_stop >= 0);
+  const auto idle_during_stop = ConnectTo("127.0.0.1", port);
+  assert(idle_during_stop != gufo::platform::kInvalidSocket);
   started = std::chrono::steady_clock::now();
   loading.stop();
   assert(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
   assert(!loading.listening());
-  ::close(idle);
-  ::close(idle_during_stop);
+  gufo::platform::CloseSocket(idle);
+  gufo::platform::CloseSocket(idle_during_stop);
 
   // Handoff: the real server binds the same address and answers health.
   HttpServer server("127.0.0.1", port, nullptr);

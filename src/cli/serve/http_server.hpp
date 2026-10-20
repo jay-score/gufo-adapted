@@ -184,7 +184,9 @@ public:
   LoadingResponder& operator=(LoadingResponder&&) = delete;
 
   /// True while the responder owns the listen socket.
-  [[nodiscard]] bool listening() const noexcept { return listen_fd_ >= 0; }
+  [[nodiscard]] bool listening() const noexcept {
+    return listen_fd_ != platform::kInvalidSocket;
+  }
 
   /// Stops answering and releases the port. Returns within one poll interval
   /// plus the bounded wait for a request that is still arriving.
@@ -193,7 +195,7 @@ public:
 private:
   void serve();
 
-  int listen_fd_ = -1;
+  platform::SocketHandle listen_fd_ = platform::kInvalidSocket;
   std::atomic<bool> stopped_{false};
   std::thread thread_;
 };

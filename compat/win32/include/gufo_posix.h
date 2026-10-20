@@ -250,6 +250,8 @@ ssize_t read(int fd, void* buf, size_t count);
 ssize_t write(int fd, const void* buf, size_t count);
 ssize_t pread(int fd, void* buf, size_t count, off_t offset);
 ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset);
+/* Same contract as Linux: fills the whole buffer or returns -1. */
+ssize_t getrandom(void* buffer, size_t length, unsigned int flags);
 off_t lseek(int fd, off_t offset, int whence);
 int fsync(int fd);
 int fdatasync(int fd);

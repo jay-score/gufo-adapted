@@ -1636,6 +1636,10 @@ HttpResponse LlamaMetrics(const HttpRequest&, TextGenerationBackend& b) {
 // goes through getaddrinfo so link-local scopes (`fe80::1%eth0`) resolve.
 bool ParseListenAddress(const std::string& host, int port,
                         sockaddr_storage* address, socklen_t* length) {
+  // Bracketed literals are URL syntax, not a host address. Linux getaddrinfo
+  // rejects them; Winsock accepts them, so reject them here on both platforms.
+  if (host.empty() || host.front() == '[')
+    return false;
   *address = {};
   const auto network_port = htons(static_cast<std::uint16_t>(port));
   auto* ipv4 = reinterpret_cast<sockaddr_in*>(address);
@@ -1699,22 +1703,26 @@ LoadingResponder::LoadingResponder(const std::string& host, int port) {
   if (port <= 0 || port > 65535 ||
       !ParseListenAddress(host, port, &addr, &addr_length))
     return;
-  const int fd = ::socket(addr.ss_family, SOCK_STREAM, 0);
-  if (fd < 0)
+  const platform::SocketHandle fd = ::socket(addr.ss_family, SOCK_STREAM, 0);
+  if (fd == platform::kInvalidSocket)
     return;
   // Match HttpServer::start, which binds the same address after stop().
   const int yes = 1;
   const int no = 0;
-  ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+#ifdef _WIN32
+  platform::SetSocketOption(fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, yes);
+#else
+  platform::SetSocketOption(fd, SOL_SOCKET, SO_REUSEADDR, yes);
+#endif
   if ((addr.ss_family == AF_INET6 &&
-       ::setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof(no)) != 0) ||
+       platform::SetSocketOption(fd, IPPROTO_IPV6, IPV6_V6ONLY, no) != 0) ||
       ::bind(fd, reinterpret_cast<sockaddr*>(&addr), addr_length) < 0 ||
       ::listen(fd, 16) < 0) {
     const int error = errno;
     Logger::Debug("server", "event=loading_listener_unavailable host=" + host +
                                 " port=" + std::to_string(port) +
                                 " errno=" + std::to_string(error));
-    ::close(fd);
+    platform::CloseSocket(fd);
     return;
   }
   listen_fd_ = fd;
@@ -1729,9 +1737,9 @@ void LoadingResponder::stop() {
   stopped_.store(true, std::memory_order_release);
   if (thread_.joinable())
     thread_.join();
-  if (listen_fd_ >= 0) {
-    ::close(listen_fd_);
-    listen_fd_ = -1;
+  if (listen_fd_ != platform::kInvalidSocket) {
+    platform::CloseSocket(listen_fd_);
+    listen_fd_ = platform::kInvalidSocket;
   }
 }
 
@@ -1745,11 +1753,15 @@ void LoadingResponder::serve() {
   // the wait: a client that connects and sends nothing must not delay stop().
   constexpr auto kRequestWait = std::chrono::milliseconds(500);
   while (!stopped_.load(std::memory_order_acquire)) {
-    pollfd listener{.fd = listen_fd_, .events = POLLIN, .revents = 0};
+    pollfd listener{
+        .fd = static_cast<decltype(pollfd::fd)>(listen_fd_),
+        .events = POLLIN,
+        .revents = 0};
     if (::poll(&listener, 1, 100) <= 0)
       continue;
-    const int client_fd = ::accept(listen_fd_, nullptr, nullptr);
-    if (client_fd < 0)
+    const platform::SocketHandle client_fd =
+        ::accept(listen_fd_, nullptr, nullptr);
+    if (client_fd == platform::kInvalidSocket)
       continue;
     std::string head;
     const auto deadline = std::chrono::steady_clock::now() + kRequestWait;
@@ -1759,19 +1771,23 @@ void LoadingResponder::serve() {
           std::chrono::duration_cast<std::chrono::milliseconds>(
               deadline - std::chrono::steady_clock::now())
               .count();
-      pollfd client{.fd = client_fd, .events = POLLIN, .revents = 0};
+      pollfd client{
+          .fd = static_cast<decltype(pollfd::fd)>(client_fd),
+          .events = POLLIN,
+          .revents = 0};
       if (remaining <= 0 ||
           ::poll(&client, 1, static_cast<int>(remaining)) <= 0)
         break;
       char buffer[2048];
-      const ssize_t received = ::recv(client_fd, buffer, sizeof(buffer), 0);
+      const ssize_t received =
+          platform::SocketRead(client_fd, buffer, sizeof(buffer));
       if (received <= 0)
         break;
       head.append(buffer, static_cast<std::size_t>(received));
     }
     (void)SendAll(client_fd, reply);
     ::shutdown(client_fd, SHUT_WR);
-    ::close(client_fd);
+    platform::CloseSocket(client_fd);
   }
 }
 

@@ -408,8 +408,15 @@ __attribute__((target("pclmul,ssse3"))) std::uint64_t ChecksumFold(
 }  // namespace
 std::uint64_t DiskChecksum(std::span<const std::uint8_t> bytes,
                            std::uint64_t crc) {
+#ifdef _WIN32
+  // TheRock clang links -nostdlib on Windows, so the compiler-rt symbol behind
+  // __builtin_cpu_supports is absent. Every Windows x64 target allowed by this
+  // port (gfx1151 Strix Halo and the Windows 11 CI image) has both features.
+  static constexpr bool folding = true;
+#else
   static const bool folding =
       __builtin_cpu_supports("pclmul") && __builtin_cpu_supports("ssse3");
+#endif
   if (folding && bytes.size() >= 256)
     return ChecksumFold(bytes, crc);
   return ChecksumTable(bytes, crc);
