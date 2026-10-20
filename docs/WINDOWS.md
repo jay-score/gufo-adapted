@@ -17,6 +17,24 @@ and their implementation/regression checks.
 
 ## Prerequisites and build
 
+For guided source setup on Windows 11 Strix Halo, run
+[`setup-windows.bat`](../setup-windows.bat). It detects existing tools, previews
+missing prerequisites, asks before installation, builds `windows-gpu`, checks
+GPU startup, and prepares/opens the browser launcher. Saved GUI settings are
+preserved. This is a developer source build with the same qualification and
+redistribution limits described below.
+
+To preview without installing or building, or reuse a nondefault vcpkg checkout:
+
+```powershell
+./setup-windows.bat -CheckOnly
+./setup-windows.bat -Vcpkg C:\path\to\vcpkg -NoLaunch
+```
+
+The setup script also accepts `-Rocm`, `-Jobs`, and `-Yes` (accept the displayed
+setup plan). Logs and reusable tool selections are saved under `build/`.
+For manual setup or CPU-only builds, follow the commands below.
+
 Use Windows 11 x64, Visual Studio C++ Build Tools with the Windows SDK, CMake 3.21
 or newer, Ninja, Python, Git, and a bootstrapped vcpkg checkout. The initial
 compiler for the HIP integration is the clang distributed with TheRock 10.0.0,
