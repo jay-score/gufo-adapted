@@ -853,13 +853,12 @@ void TestFallbackBackendMetrics() {
            Endpoint{"/v1/responses", R"({"input":"hi"})"},
        }) {
     for (const bool stream : {false, true}) {
-      const auto prompt_before = metrics::TotalPromptTokens().load();
+      const auto prompt_before = metrics::TotalPromptMetrics().Snapshot();
       const auto generated_before = metrics::TotalGenTokens().load();
       const auto cached_before = metrics::TotalCachedPromptTokens().load();
       const auto rounds_before = metrics::TotalDraftRounds().load();
       const auto drafts_before = metrics::TotalDraftTokens().load();
       const auto accepted_before = metrics::TotalDraftAcceptedTokens().load();
-      const auto prompt_seconds_before = metrics::TotalPromptSeconds().load();
       const auto gen_seconds_before = metrics::TotalGenSeconds().load();
       auto body = gufo::json::parse(endpoint.body);
       body["model"] = "test";
@@ -869,7 +868,7 @@ void TestFallbackBackendMetrics() {
       ExpectStatus(response, 200);
       // The backend reports 10 prompt tokens, of which 8 were cached.
       assert(response.find("llamacpp:prompt_tokens_total " +
-                           std::to_string(prompt_before + 2) + "\n") !=
+                           std::to_string(prompt_before.tokens + 2) + "\n") !=
              std::string::npos);
       assert(response.find("llamacpp:prompt_tokens_cached_total " +
                            std::to_string(cached_before + 8) + "\n") !=
@@ -883,7 +882,8 @@ void TestFallbackBackendMetrics() {
       assert(response.find("llamacpp:spec_decode_num_accepted_tokens_total " +
                            std::to_string(accepted_before + 4) + "\n") !=
              std::string::npos);
-      assert(metrics::TotalPromptSeconds().load() - prompt_seconds_before >
+      assert(metrics::TotalPromptMetrics().Snapshot().seconds -
+                     prompt_before.seconds >
                  0.0039 &&
              metrics::TotalGenSeconds().load() - gen_seconds_before > 0.0019);
       assert(metrics::MaxSequenceTokens().load() >= 11);
@@ -905,7 +905,7 @@ void TestFallbackBackendMetrics() {
            Case{0, 0, true, 0},
            Case{3, 0, true, 3},
        }) {
-    const auto prompt_before = metrics::TotalPromptTokens().load();
+    const auto prompt_before = metrics::TotalPromptMetrics().Snapshot().tokens;
     const auto generated_before = metrics::TotalGenTokens().load();
     TextGenerationBackend::Result result;
     result.prompt_tokens = 10;
@@ -914,7 +914,7 @@ void TestFallbackBackendMetrics() {
     result.completion_tokens = 2;
     result.cancelled = test.cancelled;
     gufo::server::RecordServerMetrics(result);
-    assert(metrics::TotalPromptTokens().load() ==
+    assert(metrics::TotalPromptMetrics().Snapshot().tokens ==
            prompt_before + test.expected_prompt);
     assert(metrics::TotalGenTokens().load() == generated_before + 2);
   }
@@ -1704,11 +1704,11 @@ void TestCompatibilityRequests() {
            std::size_t{16});
   }
   for (const auto* invalid : {"2147483648", "18446744073709551616", "1e30"}) {
-    const auto rejected = server.Post(
-        "/v1/messages",
-        std::string(R"({"messages":[{"role":"user","content":"hi"}],
+    const auto rejected =
+        server.Post("/v1/messages",
+                    std::string(R"({"messages":[{"role":"user","content":"hi"}],
         "thinking":{"type":"enabled","budget_tokens":)") +
-            invalid + "}}");
+                        invalid + "}}");
     ExpectStatus(rejected, 400);
     assert(rejected.find("thinking.budget_tokens") != std::string::npos);
   }

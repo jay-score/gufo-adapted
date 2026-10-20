@@ -200,8 +200,8 @@ private:
   std::thread thread_;
 };
 
-/// Scheduled requests are recorded by the scheduler when they finish. Other
-/// backends contribute here, at completion.
+/// Scheduled requests publish prompt work as each chunk executes. Other
+/// backends contribute their prompt work here, at completion.
 inline void RecordServerMetrics(const TextGenerationBackend::Result& result) {
   if (result.token_metrics_recorded)
     return;
@@ -212,8 +212,7 @@ inline void RecordServerMetrics(const TextGenerationBackend::Result& result) {
           ? result.prefill_tokens
           : result.prompt_tokens -
                 std::min(result.prompt_tokens, result.cached_prompt_tokens);
-  detail::TotalPromptTokens().fetch_add(prompt_tokens,
-                                        std::memory_order_relaxed);
+  detail::TotalPromptMetrics().Add(prompt_tokens, result.prefill_ms);
   detail::TotalGenTokens().fetch_add(result.completion_tokens,
                                      std::memory_order_relaxed);
   RecordRequestMetrics(result);

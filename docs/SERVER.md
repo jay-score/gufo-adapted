@@ -1129,24 +1129,27 @@ a restart is the only recovery.
 ## Metrics
 
 `/metrics` exposes total prompt/generated tokens and the latest prompt/decode
-speeds. The token counters advance as each prefill chunk and generated token
-executes, so their rates show live throughput; prompt tokens exclude cache
-hits. `llamacpp:requests_processing` counts admitted requests, including cache
-preparation and cleanup; `llamacpp:requests_deferred` counts requests waiting
-for a session. The speed gauges retain the latest nonzero request rates.
+speeds. Prompt tokens and measured prompt processing time advance together as
+each prefill chunk executes, so live prefill rates exclude idle time;
+generated tokens advance per token, so rates show live throughput. Prompt
+tokens exclude cache hits. `llamacpp:requests_processing` counts admitted
+requests, including cache preparation and cleanup;
+`llamacpp:requests_deferred` counts requests waiting for a session. The speed
+gauges retain the latest nonzero request rates.
 When the scheduler finishes or cancels a request, whether or not the client
 reads the result, it adds the request's cached prompt tokens
-(`llamacpp:prompt_tokens_cached_total`), prefill and decode seconds
-(`llamacpp:prompt_seconds_total`, `llamacpp:tokens_predicted_seconds_total`),
-speculative verification rounds (`llamacpp:spec_decode_num_drafts_total`),
-proposed and accepted draft tokens
+(`llamacpp:prompt_tokens_cached_total`), decode seconds
+(`llamacpp:tokens_predicted_seconds_total`), speculative verification rounds
+(`llamacpp:spec_decode_num_drafts_total`), proposed and accepted draft tokens
 (`llamacpp:spec_decode_num_draft_tokens_total`,
 `llamacpp:spec_decode_num_accepted_tokens_total`), proposed and accepted
 prompt-lookup copies (`gufo_spec_lookup_tokens_total`,
 `gufo_spec_lookup_accepted_tokens_total`), and raises
 `llamacpp:n_tokens_max` to its prompt plus generated tokens. A request counts
 even if the client disconnects before reading it; requests that fail in the
-scheduler, such as on a deadline or a runner error, add none of these.
+scheduler, such as on a deadline or a runner error, add none of these
+completion totals, though prefill work already executed remains in the live
+prompt counters.
 `llamacpp:kv_cache_usage_ratio` is the in-flight prompt and generated tokens
 over sessions times context; retained cache entries are not counted.
 `Server-Timing`, generation `timings`, and Chat Completions `usage.gufo`

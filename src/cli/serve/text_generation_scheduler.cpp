@@ -1311,8 +1311,7 @@ struct TextGenerationScheduler::Impl {
         publication_prefill.Observe(step.consumed_tokens, step_ms);
       request->live_prefill_tokens.store(request->result.prefill_tokens,
                                          std::memory_order_relaxed);
-      detail::TotalPromptTokens().fetch_add(step.consumed_tokens,
-                                            std::memory_order_relaxed);
+      detail::TotalPromptMetrics().Add(step.consumed_tokens, step_ms);
       ++request->result.prefill_chunks;
       request->result.max_prefill_chunk_tokens = std::max(
           request->result.max_prefill_chunk_tokens, step.consumed_tokens);

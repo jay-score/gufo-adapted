@@ -1541,6 +1541,7 @@ double KvCacheUsageRatio(const TextGenerationBackend& b) {
 
 HttpResponse LlamaMetrics(const HttpRequest&, TextGenerationBackend& b) {
   std::ostringstream out;
+  const auto prompt = detail::TotalPromptMetrics().Snapshot();
   out << std::setprecision(std::numeric_limits<double>::max_digits10);
   out << "# HELP gufo_device_lost_total Confirmed GPU context losses\n"
       << "# TYPE gufo_device_lost_total counter\n"
@@ -1549,8 +1550,7 @@ HttpResponse LlamaMetrics(const HttpRequest&, TextGenerationBackend& b) {
   out << "# HELP llamacpp:prompt_tokens_total Total prompt tokens processed, "
          "excluding cache hits\n"
       << "# TYPE llamacpp:prompt_tokens_total counter\n"
-      << "llamacpp:prompt_tokens_total "
-      << detail::TotalPromptTokens().load(std::memory_order_relaxed) << "\n"
+      << "llamacpp:prompt_tokens_total " << prompt.tokens << "\n"
       << "# HELP llamacpp:prompt_tokens_cached_total Total prompt tokens "
          "reused from cache\n"
       << "# TYPE llamacpp:prompt_tokens_cached_total counter\n"
@@ -1559,8 +1559,7 @@ HttpResponse LlamaMetrics(const HttpRequest&, TextGenerationBackend& b) {
       << "\n"
       << "# HELP llamacpp:prompt_seconds_total Prompt process time\n"
       << "# TYPE llamacpp:prompt_seconds_total counter\n"
-      << "llamacpp:prompt_seconds_total "
-      << detail::TotalPromptSeconds().load(std::memory_order_relaxed) << "\n"
+      << "llamacpp:prompt_seconds_total " << prompt.seconds << "\n"
       << "# HELP llamacpp:tokens_predicted_total Total tokens generated\n"
       << "# TYPE llamacpp:tokens_predicted_total counter\n"
       << "llamacpp:tokens_predicted_total "
