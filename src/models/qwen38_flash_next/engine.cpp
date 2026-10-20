@@ -273,6 +273,10 @@ std::size_t Session::AllocatedBytes() const noexcept {
   return session_->AllocatedBytes();
 }
 
+NgramTotals Session::NgramRowTotals() const noexcept {
+  return session_->NgramRowTotals();
+}
+
 bool Session::MtpEnabled() const noexcept {
   return session_->mtp_enabled();
 }
@@ -1185,7 +1189,8 @@ bool Session::FinishDecode(const DecodeRequest& request,
 
 bool Session::DecodeStep(std::size_t max_tokens,
                          sampling::SamplerState& sampler, DecodeResult* result,
-                         std::string* error_msg, bool stop_at_eos) {
+                         std::string* error_msg, bool stop_at_eos,
+                         std::uint32_t occupancy) {
   if (continuation_hooks_)
     continuation_hooks_->BeforeExecution();
   if (!valid_) {
@@ -1196,7 +1201,8 @@ bool Session::DecodeStep(std::size_t max_tokens,
   valid_ = false;
   const DecodeRequest request{this, max_tokens, &sampler, result, stop_at_eos};
   PendingDecode pending;
-  if (!PrepareDecode(request, &pending, error_msg)) {
+  if (!PrepareDecode(request, &pending, error_msg, false, std::nullopt,
+                     occupancy)) {
     return false;
   }
   if (pending.chain.empty()) {
