@@ -2,9 +2,9 @@ name: Windows CPU
 
 on:
   push:
-    branches: [main, feat/windows-cpu-compat]
+    branches: [main, windows-main, feat/windows-cpu-compat]
   pull_request:
-    branches: [main, feat/windows-cpu-compat]
+    branches: [main, windows-main, feat/windows-cpu-compat]
   workflow_dispatch:
 
 permissions:
