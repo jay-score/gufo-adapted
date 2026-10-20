@@ -12,6 +12,9 @@ Windows CPU CI is implemented; hosted results and the bounded-fixture correction
 are recorded below. Disk checkpoint persistence is deferred from
 the initial port. GGUF digest caching and private content tracing are enabled.
 
+For every upstream merge, review the [Windows compatibility contracts](WINDOWS-COMPATIBILITY.md)
+and their implementation/regression checks.
+
 ## Prerequisites and build
 
 Use Windows 11 x64, Visual Studio C++ Build Tools with the Windows SDK, CMake 3.21

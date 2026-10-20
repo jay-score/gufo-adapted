@@ -311,6 +311,10 @@ candidate branch for each update, run the bounded Windows/Linux gates, then
 merge the verified candidate into the maintained branch. Do not routinely
 rebase a shared branch or rewrite its published history.
 
+Use the [Windows compatibility contracts](../WINDOWS-COMPATIBILITY.md) as the
+review checklist for each sync. They identify the maintained OS boundaries,
+their regression checks, and the local GPU/model gates beyond hosted CPU CI.
+
 Record the official base SHA, imported compatibility source SHAs, and the small
 set of modified upstream call sites. At each update, inspect
 `git diff --stat official/main..HEAD` and the actual changed shared files to
