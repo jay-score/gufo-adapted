@@ -298,6 +298,39 @@ void InPassCapturePreservesBoundaryAndLiveTail() {
     independent.Invalidate();
   }
 }
+void ColdAcquireResetsOnce() {
+  auto runner = std::make_shared<Runner>();
+  ComponentTextCache cache(runner, 1, 1 << 22, {});
+  const std::vector<TextRunnerToken> prompt{1, 2, 3};
+  auto first = cache.Acquire(prompt, {}, {}, true, 0, true);
+  assert(runner->adapter->Invalidations() == 1);
+  auto& state = dynamic_cast<State&>(first->state());
+  runner->adapter->Append(state.slot, prompt, prompt);
+  (void)first->Commit(prompt, {}, prompt);
+  auto second = cache.Acquire(prompt, {}, {}, false, 0, true);
+  assert(!second->cache_hit());
+  assert(runner->adapter->Invalidations() == 2);
+}
+void FailedRestoreResetsOnce() {
+  auto runner = std::make_shared<Runner>();
+  ComponentTextCache cache(runner, 2, 1 << 22, {});
+  const std::vector<TextRunnerToken> prompt{1, 2, 3};
+  auto source = cache.Acquire(prompt, {}, {}, true, 0, true);
+  auto& state = dynamic_cast<State&>(source->state());
+  runner->adapter->Append(state.slot, prompt, prompt);
+  assert(source->TryReserveSnapshot(source->CaptureBytes(), prompt.size(),
+                                    false, SnapshotPurpose::kContinuation, {}));
+  assert(source->PublishSnapshot(prompt, source->Capture(), false));
+  const auto before = runner->adapter->Invalidations();
+  runner->adapter->FailNextTransfer();
+  auto failed = cache.Acquire(prompt, {}, {}, true, 0, true);
+  assert(!failed->cache_hit());
+  assert(runner->adapter->Invalidations() == before + 2);
+  auto& cold = dynamic_cast<State&>(failed->state());
+  runner->adapter->Append(cold.slot, prompt, prompt);
+  assert(runner->adapter->RecurrentHash(cold.slot) ==
+         runner->adapter->RecurrentHash(state.slot));
+}
 void RestoreFromBusyBorrowedSource() {
   auto runner = std::make_shared<Runner>();
   ComponentTextCache cache(runner, 2, 1 << 22, {});
@@ -1471,6 +1504,8 @@ int main() {
   CompletedCancelledPromptGetsARetrySnapshot();
   BudgetUsesAllocatedSlotsInsteadOfLazyStateClaim();
   InPassCapturePreservesBoundaryAndLiveTail();
+  ColdAcquireResetsOnce();
+  FailedRestoreResetsOnce();
   RestoreFromBusyBorrowedSource();
   ImageAfterCachedTextPrefixCaptures();
   ColdAssignmentPrefersPreservedSlot();
