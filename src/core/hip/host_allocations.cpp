@@ -21,7 +21,9 @@ int PinHostPages(void* data, std::size_t bytes) noexcept {
   return -1;
 }
 
-void UnpinHostPages(int ring) noexcept { (void)ring; }
+void UnpinHostPages(int ring) noexcept {
+  (void)ring;
+}
 #else
 int PinHostPages(void* data, std::size_t bytes) noexcept {
   if (!data || !bytes)

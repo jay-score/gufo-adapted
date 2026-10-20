@@ -1753,10 +1753,9 @@ void LoadingResponder::serve() {
   // the wait: a client that connects and sends nothing must not delay stop().
   constexpr auto kRequestWait = std::chrono::milliseconds(500);
   while (!stopped_.load(std::memory_order_acquire)) {
-    pollfd listener{
-        .fd = static_cast<decltype(pollfd::fd)>(listen_fd_),
-        .events = POLLIN,
-        .revents = 0};
+    pollfd listener{.fd = static_cast<decltype(pollfd::fd)>(listen_fd_),
+                    .events = POLLIN,
+                    .revents = 0};
     if (::poll(&listener, 1, 100) <= 0)
       continue;
     const platform::SocketHandle client_fd =
@@ -1771,10 +1770,9 @@ void LoadingResponder::serve() {
           std::chrono::duration_cast<std::chrono::milliseconds>(
               deadline - std::chrono::steady_clock::now())
               .count();
-      pollfd client{
-          .fd = static_cast<decltype(pollfd::fd)>(client_fd),
-          .events = POLLIN,
-          .revents = 0};
+      pollfd client{.fd = static_cast<decltype(pollfd::fd)>(client_fd),
+                    .events = POLLIN,
+                    .revents = 0};
       if (remaining <= 0 ||
           ::poll(&client, 1, static_cast<int>(remaining)) <= 0)
         break;
