@@ -1,5 +1,31 @@
 # Qwen3.8 Flash-Next benchmarks
 
+## Windows cold-prompt control (October 20, 2026)
+
+On the native Windows port, restoring cached overlapped n-gram reads fixes an
+NTFS direct-I/O regression introduced during the upstream forward-port.
+This local control uses the same four-shard `UD-Q4_K_XL` target and shared-Q8
+MTP sidecar, one session, context 150000, thinking enabled, greedy tg128,
+5 GiB RAM cache and no disk cache. Both requests explicitly disable prompt
+reuse and process 16459 prompt tokens; the second repeats the same text in
+the same process. A fresh process does not imply a cold filesystem cache.
+
+| Request | Rebased direct I/O (tok/s) | Restored Windows reads (tok/s) |
+| --- | ---: | ---: |
+| First long prompt | 783.93 | 1693.09 |
+| Same prompt, no prompt reuse | 1634.86 | 1705.27 |
+
+The saved default-branch engine (`5d14289a`, unchanged engine sources through
+`db324991`) measures 1387.87 and 1520.73 tok/s for the same two requests.
+Rerunning the saved pre-fix binary after the fixed run reproduces 787.28 and
+1637.85 tok/s, ruling out run order as the explanation for the large gain.
+GUI live rates match the server's measured per-chunk processing rates.
+The fixed standard warmed CLI MTP pp2048/tg128 control measures 1729.35 and
+38.01 tok/s respectively; its synthetic workload differs from HTTP prose.
+These focused Windows controls do not replace the Linux tables below.
+
+## Linux benchmark configuration
+
 AMD Strix Halo `gfx1151`, 128 GB unified memory. Unsloth `UD-Q4_K_XL` target and
 shared-Q8_0 MTP sidecar; Gufo uses adaptive MTP. HTTP, greedy, thinking off.
 All Gufo tables measured October 18, 2026, with `fec4759d` and the

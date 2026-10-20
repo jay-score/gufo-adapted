@@ -1,5 +1,11 @@
 # Qwen3.8 Flash-Next experiments
 
+## Windows n-gram I/O (October 20, 2026)
+
+| Experiment | Outcome |
+| --- | --- |
+| Restore cached overlapped n-gram reads on Windows | Retained: the upstream forward-port lost `O_CONCURRENT_RANDOM` and used direct reads of a model shard that is also mapped, triggering NTFS serialization. The first uncached 16459-token MTP prompt improves from 783.93 to 1693.09 tok/s; the identical uncached repeat measures 1634.86 to 1705.27. Both tg128 completions remain byte-identical, and independent n-gram row/hash tests pass. GUI live processing rates agree with server timings. Linux file-open behavior is unchanged. See [controls](BENCHMARKS.md#windows-cold-prompt-control-october-20-2026). |
+
 ## Component-cache admission (October 20, 2026)
 
 | Experiment | Outcome |

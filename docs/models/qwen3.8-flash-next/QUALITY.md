@@ -1,5 +1,17 @@
 # Qwen3.8 Flash-Next quality
 
+**Windows n-gram I/O, October 20:** restore the Windows-only cached overlapped
+file open that the upstream forward-port dropped. Linux retains direct I/O.
+The existing `qwen38_flash_next.ngram` check passes independent hash fixtures,
+BF16/IQ4_NL row decoding, distant offsets, descriptor identity and counters.
+Both uncached 16459-token MTP HTTP requests retain byte-identical greedy
+128-token completions, prompt counts and zero prompt reuse before/after the
+change. The GUI processing-time counter agrees with response and server
+timings; all 14 launcher process/metrics tests pass. This is a focused I/O
+qualification, not a new full-model numerical or platform qualification.
+Local commands, executable identities, full responses and metric scrapes are
+retained in `build/prefill-investigation/`.
+
 **Component-cache admission, October 20:** production code `195f9374` avoids
 repeated slot ranking, full checkpoint lookup results for presence checks and
 a second cold reset. Focused cache/runner/index/RAM-and-disk CPU tests pass;
