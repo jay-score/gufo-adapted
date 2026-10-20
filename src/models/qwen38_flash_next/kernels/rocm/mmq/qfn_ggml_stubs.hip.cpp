@@ -7,17 +7,18 @@ namespace qfn_mmq {
 // defining.
 //
 
-#include "common.hpp"   // pulls in qfn_ggml_stubs.h via redirect headers
-
 #include <hip/hip_runtime.h>
 #include <hipblas/hipblas.h>
 
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <vector>
+
+#include "common.hpp"  // pulls in qfn_ggml_stubs.h via redirect headers
 
 // ----------------------------------------------------------------------------
 // Device info singleton.
@@ -30,61 +31,66 @@ namespace qfn_mmq {
 // vmm_granularity, total_vram, warp_size, supports_cooperative_launch }.
 // ----------------------------------------------------------------------------
 
-const ggml_hip_device_info & ggml_hip_info() {
-    static ggml_hip_device_info info;
-    static std::once_flag once;
-    std::call_once(once, []{
-        int count = 0;
-        hipError_t err = hipGetDeviceCount(&count);
-        if (err != hipSuccess) {
-            fprintf(stderr, "ggml_hip_info: hipGetDeviceCount failed: %s\n", hipGetErrorString(err));
-            count = 0;
-        }
-        if (count > GGML_HIP_MAX_DEVICES) count = GGML_HIP_MAX_DEVICES;
-        info.device_count = count;
-        for (int i = 0; i < count; i++) {
-            hipDeviceProp_t p;
-            HIP_CHECK(hipGetDeviceProperties(&p, i));
-            unsigned arch = 0;
-            if (sscanf(p.gcnArchName, "gfx%x", &arch) != 1) {
-                fprintf(stderr, "ggml_hip_info: unsupported HIP architecture '%s'\n", p.gcnArchName);
-            }
-            info.devices[i].cc                          = GGML_HIP_CC_OFFSET_AMD + (int)arch;
-            info.devices[i].nsm                         = p.multiProcessorCount;
-            info.devices[i].smpb                        = p.sharedMemPerBlock;
-            info.devices[i].smpbo                       = p.sharedMemPerBlockOptin;
-            info.devices[i].integrated                  = p.integrated != 0;
-            info.devices[i].vmm                         = false;
-            info.devices[i].vmm_granularity             = 0;
-            info.devices[i].total_vram                  = p.totalGlobalMem;
-            info.devices[i].warp_size                   = p.warpSize;
-            info.devices[i].supports_cooperative_launch = p.cooperativeLaunch != 0;
-        }
-    });
-    return info;
+const ggml_hip_device_info& ggml_hip_info() {
+  static ggml_hip_device_info info;
+  static std::once_flag once;
+  std::call_once(once, [] {
+    int count = 0;
+    hipError_t err = hipGetDeviceCount(&count);
+    if (err != hipSuccess) {
+      fprintf(stderr, "ggml_hip_info: hipGetDeviceCount failed: %s\n",
+              hipGetErrorString(err));
+      count = 0;
+    }
+    if (count > GGML_HIP_MAX_DEVICES)
+      count = GGML_HIP_MAX_DEVICES;
+    info.device_count = count;
+    for (int i = 0; i < count; i++) {
+      hipDeviceProp_t p;
+      HIP_CHECK(hipGetDeviceProperties(&p, i));
+      unsigned arch = 0;
+      if (sscanf(p.gcnArchName, "gfx%x", &arch) != 1) {
+        fprintf(stderr, "ggml_hip_info: unsupported HIP architecture '%s'\n",
+                p.gcnArchName);
+      }
+      info.devices[i].cc = GGML_HIP_CC_OFFSET_AMD + (int)arch;
+      info.devices[i].nsm = p.multiProcessorCount;
+      info.devices[i].smpb = p.sharedMemPerBlock;
+      info.devices[i].smpbo = p.sharedMemPerBlockOptin;
+      info.devices[i].integrated = p.integrated != 0;
+      info.devices[i].vmm = false;
+      info.devices[i].vmm_granularity = 0;
+      info.devices[i].total_vram = p.totalGlobalMem;
+      info.devices[i].warp_size = p.warpSize;
+      info.devices[i].supports_cooperative_launch = p.cooperativeLaunch != 0;
+    }
+  });
+  return info;
 }
 
 // ggml_hip_get_device / ggml_hip_set_device are declared (not defined) in
 // common.hpp. We provide thin wrappers.
 
 int ggml_hip_get_device() {
-    int dev = 0;
-    hipGetDevice(&dev);
-    return dev;
+  int dev = 0;
+  hipGetDevice(&dev);
+  return dev;
 }
 
 void ggml_hip_set_device(int device) {
-    int cur = -1;
-    hipGetDevice(&cur);
-    if (cur != device) {
-        HIP_CHECK(hipSetDevice(device));
-    }
+  int cur = -1;
+  hipGetDevice(&cur);
+  if (cur != device) {
+    HIP_CHECK(hipSetDevice(device));
+  }
 }
 
 int64_t ggml_time_us() {
-    using clock = std::chrono::steady_clock;
-    static const auto t0 = clock::now();
-    return std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - t0).count();
+  using clock = std::chrono::steady_clock;
+  static const auto t0 = clock::now();
+  return std::chrono::duration_cast<std::chrono::microseconds>(clock::now() -
+                                                               t0)
+      .count();
 }
 
 // ----------------------------------------------------------------------------
@@ -93,10 +99,12 @@ int64_t ggml_time_us() {
 // (common.hpp:155) - abort() satisfies that contract.
 // ----------------------------------------------------------------------------
 
-[[noreturn]] void ggml_hip_error(const char * stmt, const char * func, const char * file, int line, const char * msg) {
-    fprintf(stderr, "HIP error: %s\n  call: %s\n  in: %s at %s:%d\n", msg, stmt, func, file, line);
-    fflush(stderr);
-    abort();
+[[noreturn]] void ggml_hip_error(const char* stmt, const char* func,
+                                 const char* file, int line, const char* msg) {
+  fprintf(stderr, "HIP error: %s\n  call: %s\n  in: %s at %s:%d\n", msg, stmt,
+          func, file, line);
+  fflush(stderr);
+  abort();
 }
 
 // ----------------------------------------------------------------------------
@@ -111,72 +119,107 @@ namespace {
  * hipMallocAsync/hipFreeAsync, whose reuse of a just-freed block raced with
  * in-flight kernels on this ROCm and made prefill logits nondeterministic. */
 struct qfn_stack_pool : public ggml_hip_pool {
-    int device;
-    char *base = nullptr;
-    size_t capacity = 0;
-    size_t top = 0;
-    std::vector<std::pair<char *, size_t>> live;
+  int device;
+  char* base = nullptr;
+  size_t capacity = 0;
+  size_t top = 0;
+  bool frozen = false;
+  std::vector<std::pair<char*, size_t>> live;
 
-    explicit qfn_stack_pool(int device) : device(device) {}
+  explicit qfn_stack_pool(int device) : device(device) {}
 
-    ~qfn_stack_pool() override {
-        if (base) (void)hipFree(base);
+  ~qfn_stack_pool() override {
+    if (base)
+      (void)hipFree(base);
+  }
+
+  bool reserve(size_t bytes) override {
+    if (bytes <= capacity)
+      return true;
+    /* Growing invalidates outstanding pointers, so it only happens while
+     * nothing is live; the arena starts generous to keep that true. */
+    if (frozen || top != 0)
+      return false;
+    if (hipDeviceSynchronize() != hipSuccess)
+      return false;
+    if (base) {
+      if (hipFree(base) != hipSuccess)
+        return false;
+      base = nullptr;
+      capacity = 0;
     }
-
-    void reserve(size_t bytes) {
-        if (bytes <= capacity) return;
-        /* Growing invalidates outstanding pointers, so it only happens while
-         * nothing is live; the arena starts generous to keep that true. */
-        if (top != 0) {
-            fprintf(stderr, "qfn_stack_pool: arena exhausted with live allocations\n");
-            abort();
-        }
-        (void)hipDeviceSynchronize();
-        if (base) (void)hipFree(base);
-        size_t next = capacity ? capacity : (size_t) 256 << 20;
-        while (next < bytes) next *= 2;
-        HIP_CHECK(hipMalloc((void **) &base, next));
-        capacity = next;
+    size_t next = capacity ? capacity : (size_t)256 << 20;
+    while (next < bytes) {
+      if (next > std::numeric_limits<size_t>::max() / 2)
+        return false;
+      next *= 2;
     }
+    if (hipMalloc((void**)&base, next) != hipSuccess)
+      return false;
+    capacity = next;
+    return true;
+  }
 
-    void * alloc(size_t size, size_t * actual_size) override {
-        ggml_hip_set_device(device);
-        const size_t aligned = (size + 255) & ~(size_t) 255;
-        if (top + aligned > capacity) reserve(top + aligned);
-        char *ptr = base + top;
-        top += aligned;
-        live.emplace_back(ptr, aligned);
-        if (actual_size) *actual_size = aligned;
-        return ptr;
-    }
+  void freeze() override { frozen = true; }
 
-    void free(void * ptr, size_t /*size*/) override {
-        if (!ptr) return;
-        if (live.empty() || live.back().first != ptr) {
-            fprintf(stderr, "qfn_stack_pool: non-LIFO free\n");
-            abort();
-        }
-        top -= live.back().second;
-        live.pop_back();
+  void* alloc(size_t size, size_t* actual_size) override {
+    ggml_hip_set_device(device);
+    if (size > std::numeric_limits<size_t>::max() - 255) {
+      fprintf(stderr, "qfn_stack_pool: allocation size overflows\n");
+      abort();
     }
+    const size_t aligned = (size + 255) & ~(size_t)255;
+    if (aligned > capacity - top) {
+      if (frozen) {
+        fprintf(stderr,
+                "qfn_stack_pool: inference scratch exceeded the load-time "
+                "reservation "
+                "(%zu > %zu bytes)\n",
+                top + aligned, capacity);
+        abort();
+      }
+      if (!reserve(top + aligned)) {
+        fprintf(stderr, "qfn_stack_pool: arena reservation failed\n");
+        abort();
+      }
+    }
+    char* ptr = base + top;
+    top += aligned;
+    live.emplace_back(ptr, aligned);
+    if (actual_size)
+      *actual_size = aligned;
+    return ptr;
+  }
+
+  void free(void* ptr, size_t /*size*/) override {
+    if (!ptr)
+      return;
+    if (live.empty() || live.back().first != ptr) {
+      fprintf(stderr, "qfn_stack_pool: non-LIFO free\n");
+      abort();
+    }
+    top -= live.back().second;
+    live.pop_back();
+  }
 };
 
-} // anonymous namespace
+}  // anonymous namespace
 
-std::unique_ptr<ggml_hip_pool> ggml_backend_hip_context::new_pool_for_device(int device, int /*stream_no*/) {
-    return std::unique_ptr<ggml_hip_pool>(new qfn_stack_pool(device));
+std::unique_ptr<ggml_hip_pool> ggml_backend_hip_context::new_pool_for_device(
+    int device, int /*stream_no*/) {
+  return std::unique_ptr<ggml_hip_pool>(new qfn_stack_pool(device));
 }
 
 ggml_backend_hip_context::~ggml_backend_hip_context() {
-    if (copy_event) {
-        hipEventDestroy(copy_event);
-        copy_event = nullptr;
-    }
-    // streams[][], hipblas_handles[], and pools[][] are owned-by-value
-    // (hipStream_t and hipblasHandle_t are opaque handles - destroying the
-    // context "should" tear them down, but in our shim ds4 manages streams
-    // externally and we leave them alone. The pools auto-destruct via
-    // unique_ptr.).
+  if (copy_event) {
+    hipEventDestroy(copy_event);
+    copy_event = nullptr;
+  }
+  // streams[][], hipblas_handles[], and pools[][] are owned-by-value
+  // (hipStream_t and hipblasHandle_t are opaque handles - destroying the
+  // context "should" tear them down, but in our shim ds4 manages streams
+  // externally and we leave them alone. The pools auto-destruct via
+  // unique_ptr.).
 }
 
 }  // namespace qfn_mmq

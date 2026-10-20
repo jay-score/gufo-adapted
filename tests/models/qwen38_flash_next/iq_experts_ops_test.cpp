@@ -8,6 +8,7 @@
 #include <hip/hip_runtime.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -18,6 +19,7 @@
 
 #include "src/core/gguf_reader.hpp"
 #include "src/core/quant/ggml_dequant.hpp"
+#include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/mmq/qfn_mmq.h"
 
 namespace {
@@ -212,6 +214,136 @@ bool Run(const Format& f, int rows, int cols, int tokens, int experts, int used,
   return ok;
 }
 
+bool SplitPassEquivalent(const Format& f, int rows, int cols, int tokens,
+                         int experts, int used, bool per_slot, bool tiled,
+                         std::uint32_t seed) {
+  const auto weights = MakeWeights(f, std::size_t(experts) * rows, cols, seed);
+  const int inputs = per_slot ? tokens * used : tokens;
+  std::vector<float> x(std::size_t(inputs) * cols);
+  for (auto& value : x)
+    value = static_cast<float>(int(NextRandom(&seed) % 2001) - 1000) / 1000.F;
+  std::vector<int> ids(std::size_t(tokens) * used);
+  for (int t = 0; t < tokens; ++t)
+    for (int slot = 0; slot < used; ++slot)
+      ids[t * used + slot] = (t * 7 + slot * 3) % experts;
+
+  void* device_weights = Upload(weights.blocks, "split-pass weights");
+  float* device_x = Upload(x, "split-pass input");
+  auto* device_ids = reinterpret_cast<std::int32_t*>(Upload(ids, "split IDs"));
+  const std::size_t output_count = std::size_t(tokens) * used * rows;
+  std::vector<float> zeros(output_count, 0.0F);
+  float* device_full = Upload(zeros, "full expert output");
+  float* device_split = Upload(zeros, "split expert output");
+  std::vector<float> route_weights(std::size_t(tokens) * used);
+  std::vector<float> shared(std::size_t(tokens) * rows);
+  std::vector<float> gate(std::size_t(tokens) * (experts + 1), 0.0F);
+  for (auto& value : route_weights)
+    value = static_cast<float>(NextRandom(&seed) % 1001) / 1000.F;
+  for (auto& value : shared)
+    value = static_cast<float>(int(NextRandom(&seed) % 2001) - 1000) / 1000.F;
+  for (int token = 0; token < tokens; ++token)
+    gate[std::size_t(token) * (experts + 1)] =
+        static_cast<float>(int(NextRandom(&seed) % 2001) - 1000) / 1000.F;
+  float* device_route_weights = Upload(route_weights, "route weights");
+  float* device_shared = Upload(shared, "shared expert output");
+  float* device_gate = Upload(gate, "shared expert gate");
+  std::vector<float> epilogue_zeros(std::size_t(tokens) * rows, 0.0F);
+  float* device_full_epilogue = Upload(epilogue_zeros, "full epilogue");
+  float* device_split_epilogue = Upload(epilogue_zeros, "split epilogue");
+  const int T = per_slot ? tokens * used : tokens;
+  const int U = per_slot ? 1 : used;
+  if (tiled) {
+    qfn_mmq_set_routed_max_expert_rows(T * U);
+    qfn_mmq_set_routed_tile_cols(32);
+  }
+  if (Raw(f, device_weights, device_x, device_ids, device_full, rows, cols, T,
+          experts, U) != 0) {
+    throw std::runtime_error("full expert reference launch failed");
+  }
+  CheckHip(hipDeviceSynchronize(), "full expert reference");
+  std::vector<std::uint8_t> owners(ids.size(), 0);
+  for (int pass = 0; pass < 2; ++pass) {
+    std::vector<std::int32_t> masked(ids.begin(), ids.end());
+    for (std::size_t pair = 0; pair < masked.size(); ++pair) {
+      auto& expert = masked[pair];
+      if ((expert & 1) != pass) {
+        expert = -1;
+      } else {
+        ++owners[pair];
+      }
+    }
+    CheckHip(
+        hipMemcpy(device_ids, masked.data(),
+                  masked.size() * sizeof(std::int32_t), hipMemcpyHostToDevice),
+        "upload split route IDs");
+    if (Raw(f, device_weights, device_x, device_ids, device_split, rows, cols,
+            T, experts, U) != 0) {
+      throw std::runtime_error("masked expert pass launch failed");
+    }
+  }
+  CheckHip(hipDeviceSynchronize(), "split expert passes");
+  std::vector<float> full(output_count), split(output_count);
+  CheckHip(hipMemcpy(full.data(), device_full, output_count * sizeof(float),
+                     hipMemcpyDeviceToHost),
+           "download full expert output");
+  CheckHip(hipMemcpy(split.data(), device_split, output_count * sizeof(float),
+                     hipMemcpyDeviceToHost),
+           "download split expert output");
+  namespace q = gufo::models::qwen38_flash_next::rocm;
+  q::MoeEpilogueVec4(device_full, device_route_weights, device_shared,
+                     device_gate, experts + 1, device_full_epilogue, tokens,
+                     used, rows, nullptr);
+  q::MoeEpilogueVec4(device_split, device_route_weights, device_shared,
+                     device_gate, experts + 1, device_split_epilogue, tokens,
+                     used, rows, nullptr);
+  CheckHip(hipDeviceSynchronize(), "single post-pass MoE epilogue");
+  std::vector<float> full_epilogue(std::size_t(tokens) * rows);
+  std::vector<float> split_epilogue(std::size_t(tokens) * rows);
+  CheckHip(
+      hipMemcpy(full_epilogue.data(), device_full_epilogue,
+                full_epilogue.size() * sizeof(float), hipMemcpyDeviceToHost),
+      "download full epilogue");
+  CheckHip(
+      hipMemcpy(split_epilogue.data(), device_split_epilogue,
+                split_epilogue.size() * sizeof(float), hipMemcpyDeviceToHost),
+      "download split epilogue");
+  for (void* pointer :
+       {device_weights, static_cast<void*>(device_x),
+        static_cast<void*>(device_ids), static_cast<void*>(device_full),
+        static_cast<void*>(device_split),
+        static_cast<void*>(device_route_weights),
+        static_cast<void*>(device_shared), static_cast<void*>(device_gate),
+        static_cast<void*>(device_full_epilogue),
+        static_cast<void*>(device_split_epilogue)})
+    (void)hipFree(pointer);
+
+  if (std::any_of(owners.begin(), owners.end(),
+                  [](std::uint8_t count) { return count != 1; })) {
+    throw std::runtime_error("a routed pair was omitted or assigned twice");
+  }
+  for (std::size_t i = 0; i < output_count; ++i) {
+    if (std::bit_cast<std::uint32_t>(full[i]) !=
+        std::bit_cast<std::uint32_t>(split[i])) {
+      std::cout << "FAIL " << f.name << " masked split-pass pair row " << i
+                << " differs: full=" << full[i] << " split=" << split[i]
+                << '\n';
+      return false;
+    }
+  }
+  for (std::size_t i = 0; i < full_epilogue.size(); ++i) {
+    if (std::bit_cast<std::uint32_t>(full_epilogue[i]) !=
+        std::bit_cast<std::uint32_t>(split_epilogue[i])) {
+      std::cout << "FAIL " << f.name << " one-shot epilogue row " << i
+                << " differs after split passes\n";
+      return false;
+    }
+  }
+  std::cout << "PASS " << f.name
+            << " masked desk/room passes preserve pair rows"
+            << (per_slot ? " (down layout)" : " (top-k layout)") << '\n';
+  return true;
+}
+
 }  // namespace
 
 int main() {
@@ -230,6 +362,15 @@ int main() {
     ok = Run(kIQ4_NL, 128, 640, 3, 16, 8, true, false, false, 0xE2U) && ok;
     ok = Run(kIQ4_NL, 128, 640, 65, 16, 8, true, true, false, 0xE3U) && ok;
     ok = Run(kIQ4_NL, 2560, 640, 40, 16, 8, true, true, false, 0xE4U) && ok;
+    ok =
+        SplitPassEquivalent(kIQ3_S, 64, 2560, 97, 16, 8, false, true, 0xF11U) &&
+        ok;
+    ok = SplitPassEquivalent(kIQ4_XS, 64, 2560, 97, 16, 8, false, false,
+                             0xF12U) &&
+         ok;
+    ok =
+        SplitPassEquivalent(kIQ4_NL, 128, 640, 13, 16, 8, true, true, 0xF13U) &&
+        ok;
     return ok ? 0 : 1;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

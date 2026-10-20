@@ -12,8 +12,10 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+// clang-format off
 #include <windows.h>
 #include <psapi.h>
+// clang-format on
 #else
 #include <sys/resource.h>
 #endif
@@ -139,13 +141,16 @@ void SsdStats::Start(std::size_t budget_bytes) {
   monitor_ = std::thread([this] { MonitorMemory(); });
 }
 
-void SsdStats::RecordExpertDemand(
-    std::uint64_t requests, std::uint64_t resident_hits,
-    std::uint64_t prefetched_hits_in_time, std::uint64_t cold_misses,
-    std::uint64_t late_prefetch_requests,
-    std::chrono::nanoseconds hard_stall) noexcept {
+void SsdStats::RecordExpertDemand(std::uint64_t requests,
+                                  std::uint64_t resident_hits,
+                                  std::uint64_t prefetched_hits_in_time,
+                                  std::uint64_t cold_misses,
+                                  std::uint64_t late_prefetch_requests,
+                                  std::chrono::nanoseconds hard_stall,
+                                  bool prefill) noexcept {
   if (!enabled_.load(std::memory_order_relaxed))
     return;
+  auto& phase = phase_counters_[prefill ? 0 : 1];
   expert_requests_.fetch_add(requests, std::memory_order_relaxed);
   resident_hits_.fetch_add(resident_hits, std::memory_order_relaxed);
   prefetched_hits_in_time_.fetch_add(prefetched_hits_in_time,
@@ -153,46 +158,95 @@ void SsdStats::RecordExpertDemand(
   cold_misses_.fetch_add(cold_misses, std::memory_order_relaxed);
   late_prefetch_requests_.fetch_add(late_prefetch_requests,
                                     std::memory_order_relaxed);
+  phase.expert_requests.fetch_add(requests, std::memory_order_relaxed);
+  phase.cache_hits.fetch_add(resident_hits + prefetched_hits_in_time,
+                             std::memory_order_relaxed);
+  phase.cold_misses.fetch_add(cold_misses, std::memory_order_relaxed);
+  phase.late_prefetch_requests.fetch_add(late_prefetch_requests,
+                                         std::memory_order_relaxed);
   if (hard_stall.count() > 0) {
-    hard_stall_nanoseconds_.fetch_add(
-        static_cast<std::uint64_t>(hard_stall.count()),
-        std::memory_order_relaxed);
+    const auto ns = static_cast<std::uint64_t>(hard_stall.count());
+    hard_stall_nanoseconds_.fetch_add(ns, std::memory_order_relaxed);
+    phase.hard_stall_nanoseconds.fetch_add(ns, std::memory_order_relaxed);
   }
 }
 
-void SsdStats::RecordPrefetchRequests(std::uint64_t requests) noexcept {
-  if (enabled_.load(std::memory_order_relaxed))
+void SsdStats::RecordPrefetchRequests(std::uint64_t requests,
+                                      bool prefill) noexcept {
+  if (enabled_.load(std::memory_order_relaxed)) {
     prefetch_requests_.fetch_add(requests, std::memory_order_relaxed);
+    phase_counters_[prefill ? 0 : 1].prefetch_requests.fetch_add(
+        requests, std::memory_order_relaxed);
+  }
 }
 
-void SsdStats::RecordPleLookup(bool cache_hit) noexcept {
+void SsdStats::RecordPleLookup(bool cache_hit, bool prefill) noexcept {
   if (!enabled_.load(std::memory_order_relaxed))
     return;
   ple_requests_.fetch_add(1, std::memory_order_relaxed);
-  if (cache_hit)
+  auto& phase = phase_counters_[prefill ? 0 : 1];
+  phase.ple_requests.fetch_add(1, std::memory_order_relaxed);
+  if (cache_hit) {
     ple_hits_.fetch_add(1, std::memory_order_relaxed);
+    phase.ple_hits.fetch_add(1, std::memory_order_relaxed);
+  }
 }
 
 void SsdStats::RecordStorageRead(std::uint64_t bytes,
-                                 std::chrono::nanoseconds elapsed) noexcept {
+                                 std::chrono::nanoseconds elapsed, bool prefill,
+                                 bool prefetch) noexcept {
   if (!enabled_.load(std::memory_order_relaxed))
     return;
-  RecordStorageBytes(bytes);
-  RecordStorageElapsed(elapsed);
+  RecordStorageBytes(bytes, prefill, prefetch);
+  RecordStorageElapsed(elapsed, prefill, prefetch);
 }
 
-void SsdStats::RecordStorageBytes(std::uint64_t bytes) noexcept {
-  if (enabled_.load(std::memory_order_relaxed))
+void SsdStats::RecordStorageBytes(std::uint64_t bytes, bool prefill,
+                                  bool prefetch) noexcept {
+  if (enabled_.load(std::memory_order_relaxed)) {
     ssd_bytes_read_.fetch_add(bytes, std::memory_order_relaxed);
+    auto& phase = phase_counters_[prefill ? 0 : 1];
+    (prefetch ? phase.prefetch_bytes_read : phase.demand_bytes_read)
+        .fetch_add(bytes, std::memory_order_relaxed);
+  }
 }
 
-void SsdStats::RecordStorageElapsed(std::chrono::nanoseconds elapsed) noexcept {
+void SsdStats::RecordStorageElapsed(std::chrono::nanoseconds elapsed,
+                                    bool prefill, bool prefetch) noexcept {
   if (!enabled_.load(std::memory_order_relaxed))
     return;
   if (elapsed.count() > 0) {
-    ssd_read_nanoseconds_.fetch_add(static_cast<std::uint64_t>(elapsed.count()),
-                                    std::memory_order_relaxed);
+    const auto ns = static_cast<std::uint64_t>(elapsed.count());
+    ssd_read_nanoseconds_.fetch_add(ns, std::memory_order_relaxed);
+    auto& phase = phase_counters_[prefill ? 0 : 1];
+    (prefetch ? phase.prefetch_read_nanoseconds : phase.demand_read_nanoseconds)
+        .fetch_add(ns, std::memory_order_relaxed);
   }
+}
+
+SsdPhaseStatsSnapshot SsdStats::PhaseSnapshot(bool prefill) const noexcept {
+  const auto& phase = phase_counters_[prefill ? 0 : 1];
+  return {
+      .expert_requests = phase.expert_requests.load(std::memory_order_relaxed),
+      .cache_hits = phase.cache_hits.load(std::memory_order_relaxed),
+      .cold_misses = phase.cold_misses.load(std::memory_order_relaxed),
+      .prefetch_requests =
+          phase.prefetch_requests.load(std::memory_order_relaxed),
+      .late_prefetch_requests =
+          phase.late_prefetch_requests.load(std::memory_order_relaxed),
+      .hard_stall_nanoseconds =
+          phase.hard_stall_nanoseconds.load(std::memory_order_relaxed),
+      .demand_bytes_read =
+          phase.demand_bytes_read.load(std::memory_order_relaxed),
+      .prefetch_bytes_read =
+          phase.prefetch_bytes_read.load(std::memory_order_relaxed),
+      .demand_read_nanoseconds =
+          phase.demand_read_nanoseconds.load(std::memory_order_relaxed),
+      .prefetch_read_nanoseconds =
+          phase.prefetch_read_nanoseconds.load(std::memory_order_relaxed),
+      .ple_requests = phase.ple_requests.load(std::memory_order_relaxed),
+      .ple_hits = phase.ple_hits.load(std::memory_order_relaxed),
+  };
 }
 
 void SsdStats::RecordSessionWrite(std::uint64_t bytes) noexcept {
@@ -238,6 +292,8 @@ SsdStatsSnapshot SsdStats::Snapshot() const noexcept {
       .session_bytes_written =
           session_bytes_written_.load(std::memory_order_relaxed),
       .elapsed_nanoseconds = static_cast<std::uint64_t>(elapsed),
+      .prefill = PhaseSnapshot(true),
+      .decode = PhaseSnapshot(false),
   };
 }
 
@@ -282,6 +338,29 @@ std::string SsdStats::Format() const {
       << '\n'
       << "  inference_window_ms:      "
       << static_cast<double>(stats.elapsed_nanoseconds) / 1.0e6 << '\n';
+  const auto write_phase = [&](const char* name,
+                               const SsdPhaseStatsSnapshot& phase) {
+    out << "  " << name << "_phase:\n"
+        << "    expert_requests:        " << phase.expert_requests << '\n'
+        << "    cache_hits:             " << phase.cache_hits << '\n'
+        << "    cold_misses_sync:       " << phase.cold_misses << '\n'
+        << "    prefetch_requests:      " << phase.prefetch_requests << '\n'
+        << "    prefetch_late_waits:    " << phase.late_prefetch_requests
+        << '\n'
+        << "    hard_stall_ms:          "
+        << static_cast<double>(phase.hard_stall_nanoseconds) / 1.0e6 << '\n'
+        << "    demand_bytes_read:      " << phase.demand_bytes_read << '\n'
+        << "    prefetch_bytes_read:    " << phase.prefetch_bytes_read << '\n'
+        << "    demand_read_ms:         "
+        << static_cast<double>(phase.demand_read_nanoseconds) / 1.0e6 << '\n'
+        << "    prefetch_read_ms:       "
+        << static_cast<double>(phase.prefetch_read_nanoseconds) / 1.0e6 << '\n'
+        << "    ple_shelf_requests:     " << phase.ple_requests << '\n'
+        << "    ple_shelf_hit_pct:      "
+        << Percent(phase.ple_hits, phase.ple_requests) << '\n';
+  };
+  write_phase("prefill", stats.prefill);
+  write_phase("decode", stats.decode);
   return out.str();
 }
 

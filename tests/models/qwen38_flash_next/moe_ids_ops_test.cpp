@@ -1,6 +1,7 @@
 #include <hip/hip_runtime.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -142,6 +143,30 @@ Maps Build(const std::vector<std::int32_t>& ids, int n_tokens, int n_used,
   (void)hipFree(d_dst);
   (void)hipFree(d_bounds);
   return m;
+}
+
+void CheckRemappedExpertCounts() {
+  namespace q = gufo::models::qwen38_flash_next::rocm;
+  const std::vector<std::int32_t> ids{2, -1, 1, 2, 0, -1};
+  std::int32_t* device_ids = nullptr;
+  std::uint32_t* device_counts = nullptr;
+  CheckHip(hipMalloc(&device_ids, ids.size() * sizeof(std::int32_t)),
+           "remapped ids");
+  CheckHip(hipMalloc(&device_counts, 4 * sizeof(std::uint32_t)),
+           "remapped counts");
+  CheckHip(hipMemcpy(device_ids, ids.data(), ids.size() * sizeof(std::int32_t),
+                     hipMemcpyHostToDevice),
+           "upload remapped ids");
+  q::ExpertCounts(device_ids, device_counts, 3, 4, 2, nullptr);
+  CheckHip(hipDeviceSynchronize(), "remapped expert counts");
+  std::array<std::uint32_t, 4> counts{};
+  CheckHip(hipMemcpy(counts.data(), device_counts, sizeof(counts),
+                     hipMemcpyDeviceToHost),
+           "download remapped counts");
+  (void)hipFree(device_ids);
+  (void)hipFree(device_counts);
+  if (counts != std::array<std::uint32_t, 4>{1, 1, 2, 0})
+    throw std::runtime_error("remapped slot counts include an inactive pair");
 }
 
 bool Same(const Maps& a, const Maps& b, const char* what) {
@@ -295,6 +320,7 @@ int main() {
       CheckRouter(8, 512, 10, pattern);
       CheckRouter(2048, 512, 10, pattern);
     }
+    CheckRemappedExpertCounts();
     CheckRouter(17, 8, 8, 1);
     CheckRouter(17, 513, 32, 0);
     CheckRouter(17, 1024, 32, 1);

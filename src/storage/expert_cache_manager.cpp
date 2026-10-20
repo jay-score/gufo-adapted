@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <future>
 #include <limits>
 #include <map>
@@ -44,8 +45,10 @@ struct Slot {
   std::int32_t expert_id{-1};
   std::uint64_t last_used{0};
   std::uint64_t generation{0};
+  std::uint32_t future_uses{0};
   bool prefetch_pinned{false};
   bool prefetch_origin{false};
+  bool desk_reserved{false};
 };
 
 struct PrefetchJob {
@@ -54,6 +57,8 @@ struct PrefetchJob {
   SsdBatchReader::BatchId batch_id{0};
   std::vector<std::uint32_t> slots;
   std::vector<std::uint64_t> generations;
+  bool prefill{false};
+  bool speculative{true};
   bool finalized{false};
 };
 
@@ -78,6 +83,9 @@ struct CacheLayer {
   std::unordered_map<std::int32_t, TokenPrior> token_priors;
   std::uint64_t prior_clock{0};
   std::uint64_t use_counter{0};
+  std::uint64_t route_tokens_since_decay{0};
+  bool has_route_phase{false};
+  bool last_route_was_prefill{false};
 
   ~CacheLayer() {
     for (void* arena : host_arenas) {
@@ -119,10 +127,14 @@ struct ExpertCacheManager::Impl {
   std::size_t allocated_bytes{0};
   std::size_t max_expert_bytes{0};
   std::size_t reader_count{1};
+  std::shared_ptr<SsdScratchPool> scratch_pool;
   std::map<std::filesystem::path, std::unique_ptr<SsdBatchReader>> readers;
   std::mutex mutex;
   SsdStats* stats{nullptr};
   float cache_prior_bias{0.0F};
+  ExpertCacheManager::VictimPolicy victim_policy{
+      ExpertCacheManager::VictimPolicy::kLru};
+  std::uint32_t hotness_decay_tokens{1024};
 
   [[nodiscard]] std::int32_t& Mapping(std::uint32_t layer,
                                       std::uint32_t expert) {
@@ -132,30 +144,51 @@ struct ExpertCacheManager::Impl {
 
   [[nodiscard]] std::int32_t ChooseVictim(CacheLayer& cache) const {
     std::int32_t victim = -1;
+    std::int32_t protected_victim = -1;
     for (std::uint32_t slot = 0; slot < cache.slots; ++slot) {
       Slot& candidate = cache.slot_state[slot];
       const auto state = candidate.state.load(std::memory_order_acquire);
       if (state == SlotState::kFree)
         return static_cast<std::int32_t>(slot);
       if (state != SlotState::kCachedUnpinned ||
-          candidate.pin_refcount.load(std::memory_order_acquire) != 0)
+          candidate.pin_refcount.load(std::memory_order_acquire) != 0 ||
+          candidate.desk_reserved)
         continue;
+      auto less_valuable = [&](std::int32_t previous) {
+        const Slot& current =
+            cache.slot_state[static_cast<std::size_t>(previous)];
+        if (candidate.future_uses != current.future_uses)
+          return candidate.future_uses < current.future_uses;
+        const double candidate_hotness =
+            victim_policy == ExpertCacheManager::VictimPolicy::kLru
+                ? 0.0
+                : static_cast<double>(cache.route_hotness[candidate.expert_id]);
+        const double current_hotness =
+            victim_policy == ExpertCacheManager::VictimPolicy::kLru
+                ? 0.0
+                : static_cast<double>(cache.route_hotness[current.expert_id]);
+        const double hot =
+            candidate_hotness +
+            cache_prior_bias * cache.prior_score[candidate.expert_id];
+        const double current_hot =
+            current_hotness +
+            cache_prior_bias * cache.prior_score[current.expert_id];
+        return hot < current_hot ||
+               (hot == current_hot && candidate.last_used < current.last_used);
+      };
+      if (candidate.future_uses != 0) {
+        if (protected_victim < 0 || less_valuable(protected_victim))
+          protected_victim = static_cast<std::int32_t>(slot);
+        continue;
+      }
       if (victim < 0) {
         victim = static_cast<std::int32_t>(slot);
         continue;
       }
-      const Slot& current = cache.slot_state[static_cast<std::size_t>(victim)];
-      const double hot =
-          static_cast<double>(cache.route_hotness[candidate.expert_id]) +
-          cache_prior_bias * cache.prior_score[candidate.expert_id];
-      const double current_hot =
-          static_cast<double>(cache.route_hotness[current.expert_id]) +
-          cache_prior_bias * cache.prior_score[current.expert_id];
-      if (hot < current_hot ||
-          (hot == current_hot && candidate.last_used < current.last_used))
+      if (less_valuable(victim))
         victim = static_cast<std::int32_t>(slot);
     }
-    return victim;
+    return victim >= 0 ? victim : protected_victim;
   }
 
   void ReleaseLocked(CacheLayer& cache) noexcept {
@@ -196,8 +229,7 @@ struct ExpertCacheManager::Impl {
       SsdBatchReader::Options options;
       options.io_threads = std::max<std::size_t>(
           1, (kReaderThreads + reader_count - 1) / reader_count);
-      options.max_inflight_reads = std::max<std::size_t>(
-          1, (kReaderInflight + reader_count - 1) / reader_count);
+      options.max_inflight_reads = std::max<std::size_t>(1, kReaderInflight);
       if (max_expert_bytes > (std::numeric_limits<std::size_t>::max() -
                               2 * SsdBatchReader::Alignment()) /
                                  2) {
@@ -205,6 +237,7 @@ struct ExpertCacheManager::Impl {
       }
       options.max_scratch_bytes = std::max<std::size_t>(
           2 * max_expert_bytes + 2 * SsdBatchReader::Alignment(), 4096);
+      options.scratch_pool = scratch_pool;
       auto reader = std::make_unique<SsdBatchReader>(path, options);
       auto* raw = reader.get();
       readers.emplace(path, std::move(reader));
@@ -238,7 +271,8 @@ struct ExpertCacheManager::Impl {
     if (got_result) {
       transferred = result.bytes_read;
       if (stats != nullptr)
-        stats->RecordStorageRead(transferred, result.elapsed);
+        stats->RecordStorageRead(transferred, result.elapsed, job->prefill,
+                                 job->speculative);
     }
 
     for (std::size_t i = 0; i < job->slots.size(); ++i) {
@@ -315,7 +349,8 @@ std::unique_ptr<ExpertCacheManager> ExpertCacheManager::Create(
     std::span<const DeviceLayer> layers, std::size_t budget_bytes,
     std::uint32_t experts_used, std::uint32_t num_experts,
     std::span<std::int32_t> expert_id_to_slot, std::string* error_msg,
-    SsdStats* stats, float cache_prior_bias) {
+    SsdStats* stats, float cache_prior_bias, VictimPolicy victim_policy,
+    std::uint32_t hotness_decay_tokens) {
   auto manager = std::unique_ptr<ExpertCacheManager>(new ExpertCacheManager());
   auto& impl = *manager->impl_;
   impl.views.assign(layers.begin(), layers.end());
@@ -325,6 +360,8 @@ std::unique_ptr<ExpertCacheManager> ExpertCacheManager::Create(
   impl.expert_id_to_slot = expert_id_to_slot;
   impl.stats = stats;
   impl.cache_prior_bias = cache_prior_bias;
+  impl.victim_policy = victim_policy;
+  impl.hotness_decay_tokens = std::max(1U, hotness_decay_tokens);
   if (num_experts == 0 || experts_used == 0 || experts_used > num_experts ||
       layers.size() > std::numeric_limits<std::size_t>::max() / num_experts ||
       expert_id_to_slot.size() < layers.size() * num_experts) {
@@ -386,6 +423,11 @@ std::unique_ptr<ExpertCacheManager> ExpertCacheManager::Create(
   impl.slots_per_layer = slots;
 
   try {
+    const std::size_t shared_scratch_bytes = SharedScratchBytes(layers);
+    const std::size_t scratch_buffer_bytes =
+        shared_scratch_bytes / kSharedScratchBufferCount;
+    impl.scratch_pool =
+        SsdScratchPool::Create(kSharedScratchBufferCount, scratch_buffer_bytes);
     for (std::size_t layer_id = 0; layer_id < layers.size(); ++layer_id) {
       if (!layers[layer_id].experts_streamed)
         continue;
@@ -475,14 +517,111 @@ std::uint32_t ExpertCacheManager::demand_slots_available(
   return cache.slots - unavailable;
 }
 
+std::uint32_t ExpertCacheManager::room_slots_available(
+    std::uint32_t layer_id) const noexcept {
+  if (layer_id >= impl_->caches.size() || impl_->caches[layer_id] == nullptr)
+    return impl_->slots_per_layer;
+  const std::lock_guard<std::mutex> lock(impl_->mutex);
+  const CacheLayer& cache = *impl_->caches[layer_id];
+  std::uint32_t unavailable = 0;
+  for (std::uint32_t slot_id = 0; slot_id < cache.slots; ++slot_id) {
+    const Slot& slot = cache.slot_state[slot_id];
+    if (slot.desk_reserved || slot.prefetch_pinned ||
+        slot.state.load(std::memory_order_acquire) ==
+            SlotState::kInFlightPinned)
+      ++unavailable;
+  }
+  return cache.slots - unavailable;
+}
+
 std::size_t ExpertCacheManager::allocated_bytes() const noexcept {
   return impl_->allocated_bytes;
 }
 
+std::size_t ExpertCacheManager::SharedScratchBytes(
+    std::span<const DeviceLayer> layers) {
+  std::size_t max_expert_bytes = 0;
+  for (const auto& layer : layers) {
+    if (!layer.experts_streamed)
+      continue;
+    for (const auto& source : layer.expert_sources)
+      max_expert_bytes = std::max(max_expert_bytes, source.expert_bytes);
+  }
+  if (max_expert_bytes == 0 ||
+      max_expert_bytes > (std::numeric_limits<std::size_t>::max() -
+                          2 * SsdBatchReader::Alignment()) /
+                             2) {
+    throw std::invalid_argument("streamed expert scratch geometry is invalid");
+  }
+  const std::size_t max_group_bytes =
+      2 * max_expert_bytes + 2 * SsdBatchReader::Alignment();
+  const std::size_t buffer_bytes =
+      SsdScratchPool::EstimateBufferBytes(max_group_bytes);
+  if (buffer_bytes >
+      std::numeric_limits<std::size_t>::max() / kSharedScratchBufferCount) {
+    throw std::overflow_error("shared expert scratch pool size overflows");
+  }
+  return buffer_bytes * kSharedScratchBufferCount;
+}
+
+bool ExpertCacheManager::Prewarm(WarmupResult* result, std::string* error_msg) {
+  if (result != nullptr)
+    *result = {};
+  if (error_msg != nullptr)
+    error_msg->clear();
+  const auto start = std::chrono::steady_clock::now();
+  std::uint64_t bytes_read = 0;
+  for (std::uint32_t layer_id = 0; layer_id < impl_->caches.size();
+       ++layer_id) {
+    if (impl_->caches[layer_id] == nullptr)
+      continue;
+    const std::uint32_t slots = impl_->caches[layer_id]->slots;
+    std::vector<std::int32_t> experts(slots);
+    std::vector<std::int32_t> slot_ids(slots);
+    for (std::uint32_t slot = 0; slot < slots; ++slot)
+      experts[slot] = static_cast<std::int32_t>(slot);
+    std::uint64_t layer_bytes = 0;
+    if (!Resolve(layer_id, experts, slot_ids, error_msg, {}, &layer_bytes,
+                 false)) {
+      Release(layer_id);
+      if (result != nullptr) {
+        result->bytes_read = bytes_read + layer_bytes;
+        result->elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start);
+      }
+      return false;
+    }
+    Release(layer_id);
+    if (layer_bytes > std::numeric_limits<std::uint64_t>::max() - bytes_read) {
+      SetError(error_msg, "expert cache prewarm byte count overflows");
+      return false;
+    }
+    bytes_read += layer_bytes;
+  }
+  {
+    const std::lock_guard<std::mutex> lock(impl_->mutex);
+    for (auto& cache : impl_->caches) {
+      if (cache != nullptr)
+        std::fill(cache->route_hotness.begin(), cache->route_hotness.end(), 0);
+    }
+  }
+  if (result != nullptr) {
+    result->bytes_read = bytes_read;
+    result->elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - start);
+  }
+  return true;
+}
+
+void ExpertCacheManager::FinishAllPrefetch() noexcept {
+  for (std::uint32_t layer_id = 0; layer_id < impl_->caches.size(); ++layer_id)
+    FinishPrefetch(layer_id);
+}
+
 bool ExpertCacheManager::Prefetch(std::uint32_t layer_id,
                                   std::span<const std::int32_t> expert_ids,
-                                  std::size_t max_slots,
-                                  std::string* error_msg) {
+                                  std::size_t max_slots, std::string* error_msg,
+                                  bool prefill) {
   if (error_msg != nullptr)
     error_msg->clear();
   if (layer_id >= impl_->caches.size() || impl_->caches[layer_id] == nullptr) {
@@ -516,21 +655,21 @@ bool ExpertCacheManager::Prefetch(std::uint32_t layer_id,
   candidates.reserve(frequency.size());
   for (const auto& [expert, count] : frequency)
     candidates.push_back({expert, count});
-  std::sort(
-      candidates.begin(), candidates.end(),
-      [&](const Candidate& a, const Candidate& b) {
-        if (a.frequency != b.frequency)
-          return a.frequency > b.frequency;
-        const float a_prior = cache.prior_score[a.expert];
-        const float b_prior = cache.prior_score[b.expert];
-        const double a_score =
-            static_cast<double>(cache.route_hotness[a.expert]) +
-            impl_->cache_prior_bias * a_prior;
-        const double b_score =
-            static_cast<double>(cache.route_hotness[b.expert]) +
-            impl_->cache_prior_bias * b_prior;
-        return a_score != b_score ? a_score > b_score : a.expert < b.expert;
-      });
+  std::sort(candidates.begin(), candidates.end(),
+            [&](const Candidate& a, const Candidate& b) {
+              if (a.frequency != b.frequency)
+                return a.frequency > b.frequency;
+              const float a_prior = cache.prior_score[a.expert];
+              const float b_prior = cache.prior_score[b.expert];
+              const double a_score =
+                  static_cast<double>(cache.route_hotness[a.expert]) +
+                  impl_->cache_prior_bias * a_prior;
+              const double b_score =
+                  static_cast<double>(cache.route_hotness[b.expert]) +
+                  impl_->cache_prior_bias * b_prior;
+              return a_score != b_score ? a_score > b_score
+                                        : a.expert < b.expert;
+            });
   const std::size_t slot_limit = std::min(
       {max_slots, std::size_t{16}, static_cast<std::size_t>(cache.slots / 3),
        cache.slots > impl_->experts_used
@@ -602,6 +741,7 @@ bool ExpertCacheManager::Prefetch(std::uint32_t layer_id,
     if (slot.expert_id >= 0)
       impl_->Mapping(layer_id, static_cast<std::uint32_t>(slot.expert_id)) = -1;
     slot.expert_id = expert;
+    slot.future_uses = 0;
     slot.generation += 1;
     slot.pending_reads.store(0, std::memory_order_release);
     slot.read_failed.store(false, std::memory_order_release);
@@ -654,6 +794,7 @@ bool ExpertCacheManager::Prefetch(std::uint32_t layer_id,
     }
     auto job = std::make_shared<PrefetchJob>();
     job->reader = reader;
+    job->prefill = prefill;
     job->slots = std::move(group.slots);
     job->generations = std::move(group.generations);
     try {
@@ -704,14 +845,14 @@ bool ExpertCacheManager::Prefetch(std::uint32_t layer_id,
                    slot.pending_reads.load(std::memory_order_acquire) != 0 &&
                    !slot.read_failed.load(std::memory_order_acquire);
     }
-    impl_->stats->RecordPrefetchRequests(submitted);
+    impl_->stats->RecordPrefetchRequests(submitted, prefill);
   }
   return true;
 }
 
 bool ExpertCacheManager::PrefetchTokenPriors(
     std::uint32_t layer_id, std::span<const std::int32_t> tokens,
-    std::size_t max_slots, std::string* error_msg) {
+    std::size_t max_slots, std::string* error_msg, bool prefill) {
   std::vector<std::int32_t> predictions;
   {
     if (layer_id >= impl_->caches.size() || impl_->caches[layer_id] == nullptr)
@@ -727,7 +868,7 @@ bool ExpertCacheManager::PrefetchTokenPriors(
                          found->second.experts.end());
     }
   }
-  return Prefetch(layer_id, predictions, max_slots, error_msg);
+  return Prefetch(layer_id, predictions, max_slots, error_msg, prefill);
 }
 
 void ExpertCacheManager::RecordTokenRouting(
@@ -766,12 +907,75 @@ void ExpertCacheManager::RecordTokenRouting(
   }
 }
 
-bool ExpertCacheManager::Resolve(std::uint32_t layer_id,
+bool ExpertCacheManager::PinDesk(std::uint32_t layer_id,
                                  std::span<const std::int32_t> expert_ids,
                                  std::span<std::int32_t> slot_ids,
-                                 std::string* error_msg) {
+                                 std::string* error_msg, bool prefill) {
+  if (expert_ids.size() != slot_ids.size()) {
+    SetError(error_msg, "desk expert and slot arrays have different sizes");
+    return false;
+  }
+  if (expert_ids.empty())
+    return true;
+  if (!Resolve(layer_id, expert_ids, slot_ids, error_msg, {}, nullptr, true,
+               prefill, false, 0, false)) {
+    return false;
+  }
+  bool valid_slots = true;
+  bool layer_available = true;
+  {
+    const std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (layer_id >= impl_->caches.size() ||
+        impl_->caches[layer_id] == nullptr) {
+      SetError(error_msg, "desk layer is no longer available");
+      layer_available = false;
+    } else {
+      CacheLayer& cache = *impl_->caches[layer_id];
+      for (const std::int32_t slot_id : slot_ids) {
+        if (slot_id < 0 || static_cast<std::uint32_t>(slot_id) >= cache.slots) {
+          SetError(error_msg, "desk resolve returned an invalid slot");
+          valid_slots = false;
+          break;
+        }
+      }
+      if (valid_slots) {
+        for (const std::int32_t slot_id : slot_ids)
+          cache.slot_state[static_cast<std::uint32_t>(slot_id)].desk_reserved =
+              true;
+      }
+    }
+  }
+  Release(layer_id);
+  return valid_slots && layer_available;
+}
+
+void ExpertCacheManager::ReleaseDesk(
+    std::uint32_t layer_id, std::span<const std::int32_t> expert_ids) noexcept {
+  if (layer_id >= impl_->caches.size() || impl_->caches[layer_id] == nullptr)
+    return;
+  const std::lock_guard<std::mutex> lock(impl_->mutex);
+  CacheLayer& cache = *impl_->caches[layer_id];
+  for (const std::int32_t expert : expert_ids) {
+    if (expert < 0 || static_cast<std::uint32_t>(expert) >= impl_->num_experts)
+      continue;
+    const std::int32_t slot_id =
+        impl_->Mapping(layer_id, static_cast<std::uint32_t>(expert));
+    if (slot_id >= 0 && static_cast<std::uint32_t>(slot_id) < cache.slots)
+      cache.slot_state[static_cast<std::uint32_t>(slot_id)].desk_reserved =
+          false;
+  }
+}
+
+bool ExpertCacheManager::Resolve(
+    std::uint32_t layer_id, std::span<const std::int32_t> expert_ids,
+    std::span<std::int32_t> slot_ids, std::string* error_msg,
+    std::span<const std::int32_t> future_expert_ids, std::uint64_t* bytes_read,
+    bool record_stats, bool prefill, bool record_demand_stats,
+    std::uint32_t routed_tokens, bool count_route_hotness) {
   if (error_msg != nullptr)
     error_msg->clear();
+  if (bytes_read != nullptr)
+    *bytes_read = 0;
   if (layer_id >= impl_->caches.size() || impl_->caches[layer_id] == nullptr ||
       expert_ids.size() != slot_ids.size()) {
     SetError(error_msg, "expert cache resolve has invalid dimensions");
@@ -779,6 +983,15 @@ bool ExpertCacheManager::Resolve(std::uint32_t layer_id,
   }
   const std::lock_guard<std::mutex> lock(impl_->mutex);
   CacheLayer& cache = *impl_->caches[layer_id];
+  if (impl_->victim_policy == VictimPolicy::kDecayedHotness &&
+      count_route_hotness) {
+    if (cache.has_route_phase && cache.last_route_was_prefill && !prefill) {
+      std::fill(cache.route_hotness.begin(), cache.route_hotness.end(), 0);
+      cache.route_tokens_since_decay = 0;
+    }
+    cache.has_route_phase = true;
+    cache.last_route_was_prefill = prefill;
+  }
   impl_->ReapPrefetchJobs(cache);
   if (!cache.pinned_slots.empty()) {
     SetError(error_msg, "expert cache layer still has pinned slots");
@@ -789,6 +1002,16 @@ bool ExpertCacheManager::Resolve(std::uint32_t layer_id,
   unique.reserve(expert_ids.size());
   std::vector<std::uint8_t> seen(cache.num_experts, 0);
   std::vector<std::uint32_t> route_hits(cache.num_experts, 0);
+  std::vector<std::uint32_t> future_hits(cache.num_experts, 0);
+  for (const auto id : future_expert_ids) {
+    if (id < 0 || static_cast<std::uint32_t>(id) >= cache.num_experts) {
+      SetError(error_msg, "future expert hint is out of range");
+      return false;
+    }
+    auto& hits = future_hits[static_cast<std::uint32_t>(id)];
+    if (hits != std::numeric_limits<std::uint32_t>::max())
+      ++hits;
+  }
   for (const auto id : expert_ids) {
     if (id < 0 || static_cast<std::uint32_t>(id) >= cache.num_experts) {
       SetError(error_msg, "router selected an out-of-range expert ID");
@@ -805,6 +1028,13 @@ bool ExpertCacheManager::Resolve(std::uint32_t layer_id,
   if (unique.size() > cache.slots) {
     SetError(error_msg, "active expert set exceeds the layer slot capacity");
     return false;
+  }
+  for (std::uint32_t slot_id = 0; slot_id < cache.slots; ++slot_id) {
+    Slot& slot = cache.slot_state[slot_id];
+    slot.future_uses =
+        slot.expert_id >= 0
+            ? future_hits[static_cast<std::uint32_t>(slot.expert_id)]
+            : 0;
   }
 
   std::vector<std::pair<std::int32_t, std::uint32_t>> misses;
@@ -844,8 +1074,10 @@ bool ExpertCacheManager::Resolve(std::uint32_t layer_id,
           }();
           if (owns_slot) {
             found_job = true;
-            if (job->reader != nullptr)
-              (void)job->reader->PromotePrefetch(job->batch_id);
+            if (job->reader != nullptr &&
+                job->reader->PromotePrefetch(job->batch_id)) {
+              job->speculative = false;
+            }
             (void)impl_->FinishPrefetchJob(cache, job, true);
           }
         }
@@ -881,8 +1113,9 @@ bool ExpertCacheManager::Resolve(std::uint32_t layer_id,
         slot.prefetch_origin = false;
         slot.last_used = ++cache.use_counter;
         cache.pinned_slots.push_back(static_cast<std::uint32_t>(mapped));
-        cache.route_hotness[static_cast<std::uint32_t>(expert)] +=
-            route_hits[static_cast<std::uint32_t>(expert)];
+        if (count_route_hotness)
+          cache.route_hotness[static_cast<std::uint32_t>(expert)] +=
+              route_hits[static_cast<std::uint32_t>(expert)];
         continue;
       } else if (state == SlotState::kCachedUnpinned &&
                  slot.pin_refcount.load(std::memory_order_acquire) == 0) {
@@ -890,8 +1123,9 @@ bool ExpertCacheManager::Resolve(std::uint32_t layer_id,
         slot.state.store(SlotState::kReadyPinned, std::memory_order_release);
         slot.last_used = ++cache.use_counter;
         cache.pinned_slots.push_back(static_cast<std::uint32_t>(mapped));
-        cache.route_hotness[static_cast<std::uint32_t>(expert)] +=
-            route_hits[static_cast<std::uint32_t>(expert)];
+        if (count_route_hotness)
+          cache.route_hotness[static_cast<std::uint32_t>(expert)] +=
+              route_hits[static_cast<std::uint32_t>(expert)];
         if (!waited_for_prefetch)
           ++resident_hits;
         continue;
@@ -922,6 +1156,7 @@ bool ExpertCacheManager::Resolve(std::uint32_t layer_id,
                                static_cast<std::uint32_t>(slot.expert_id)] = -1;
     }
     slot.expert_id = expert;
+    slot.future_uses = future_hits[static_cast<std::uint32_t>(expert)];
     slot.last_used = ++cache.use_counter;
     slot.pin_refcount.store(1, std::memory_order_release);
     slot.pending_reads.store(0, std::memory_order_release);
@@ -935,8 +1170,9 @@ bool ExpertCacheManager::Resolve(std::uint32_t layer_id,
     cache.pinned_slots.push_back(static_cast<std::uint32_t>(victim));
     misses.emplace_back(expert, static_cast<std::uint32_t>(victim));
     newly_reserved.push_back(static_cast<std::uint32_t>(victim));
-    cache.route_hotness[static_cast<std::uint32_t>(expert)] +=
-        route_hits[static_cast<std::uint32_t>(expert)];
+    if (count_route_hotness)
+      cache.route_hotness[static_cast<std::uint32_t>(expert)] +=
+          route_hits[static_cast<std::uint32_t>(expert)];
   }
 
   struct PendingRead {
@@ -990,10 +1226,17 @@ bool ExpertCacheManager::Resolve(std::uint32_t layer_id,
     demand_batches.push_back({reader->SubmitBatchDemand(std::move(requests))});
   }
   bool demand_reads_ok = demand_submission_ok;
+  std::uint64_t total_bytes_read = 0;
   for (auto& batch : demand_batches) {
     SsdReadBatchResult result = batch.result.get();
-    if (impl_->stats != nullptr)
-      impl_->stats->RecordStorageRead(result.bytes_read, result.elapsed);
+    total_bytes_read =
+        result.bytes_read >
+                std::numeric_limits<std::uint64_t>::max() - total_bytes_read
+            ? std::numeric_limits<std::uint64_t>::max()
+            : total_bytes_read + result.bytes_read;
+    if (record_stats && impl_->stats != nullptr)
+      impl_->stats->RecordStorageRead(result.bytes_read, result.elapsed,
+                                      prefill, false);
     if (!result.success) {
       if (demand_reads_ok)
         SetError(error_msg, result.error.empty() ? "expert demand read failed"
@@ -1002,6 +1245,8 @@ bool ExpertCacheManager::Resolve(std::uint32_t layer_id,
     }
   }
   if (!demand_reads_ok) {
+    if (bytes_read != nullptr)
+      *bytes_read = total_bytes_read;
     impl_->Rollback(cache, newly_reserved);
     return false;
   }
@@ -1022,7 +1267,9 @@ bool ExpertCacheManager::Resolve(std::uint32_t layer_id,
       return false;
     }
   }
-  if (impl_->stats != nullptr) {
+  if (bytes_read != nullptr)
+    *bytes_read = total_bytes_read;
+  if (record_stats && record_demand_stats && impl_->stats != nullptr) {
     impl_->stats->RecordExpertDemand(
         unique.size(), resident_hits, prefetched_in_time, misses.size(),
         late_prefetch_requests,
@@ -1030,7 +1277,20 @@ bool ExpertCacheManager::Resolve(std::uint32_t layer_id,
             (misses.empty()
                  ? std::chrono::nanoseconds{0}
                  : std::chrono::duration_cast<std::chrono::nanoseconds>(
-                       std::chrono::steady_clock::now() - stall_start)));
+                       std::chrono::steady_clock::now() - stall_start)),
+        prefill);
+  }
+  if (impl_->victim_policy == VictimPolicy::kDecayedHotness &&
+      count_route_hotness) {
+    const auto rows = routed_tokens == 0
+                          ? expert_ids.size() / impl_->experts_used
+                          : routed_tokens;
+    cache.route_tokens_since_decay += rows;
+    while (cache.route_tokens_since_decay >= impl_->hotness_decay_tokens) {
+      for (auto& hotness : cache.route_hotness)
+        hotness >>= 1;
+      cache.route_tokens_since_decay -= impl_->hotness_decay_tokens;
+    }
   }
   return true;
 }

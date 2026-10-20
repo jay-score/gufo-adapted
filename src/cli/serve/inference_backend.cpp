@@ -2383,14 +2383,17 @@ public:
       const auto deferred = model_->DeferredScratchBytes();
       capacity = free_bytes > deferred ? free_bytes - deferred : 0;
     }
+    const std::size_t per_request_state = model_->SessionBytes(
+        use_mtp_ ? gufo::core::SessionMode::kSpeculative
+                 : gufo::core::SessionMode::kAutoregressive,
+        max_context_);
+    if (model_->DecodeConcurrency() == 1 && capacity.has_value())
+      capacity = std::min(*capacity, per_request_state);
     // Snapshots live in host memory, not in the device state pool.
     return {
         .resident_weights_bytes = model_->ResidentBytes(),
         .state_capacity_bytes = capacity,
-        .per_request_state_bytes = model_->SessionBytes(
-            use_mtp_ ? gufo::core::SessionMode::kSpeculative
-                     : gufo::core::SessionMode::kAutoregressive,
-            max_context_),
+        .per_request_state_bytes = per_request_state,
         // Runtime scratch is shared and already allocated at model load;
         // reserve its remaining lazy buffers once from aggregate capacity.
         .temporary_scratch_bytes = 0,
@@ -2400,6 +2403,8 @@ public:
   }
 
   [[nodiscard]] std::vector<TextExecutionPlan> SupportedPlans() const override {
+    if (model_->DecodeConcurrency() == 1)
+      return {{.kind = TextExecutionPlanKind::kSerial, .physical_width = 1}};
     std::vector<TextExecutionPlan> plans{
         {.kind = TextExecutionPlanKind::kSerial, .physical_width = 1}};
     for (std::size_t width = 2; width <= 8; ++width) {
@@ -3024,8 +3029,11 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
                     : std::string{},
             .max_draft_tokens = speculative_config.max_draft_tokens,
             .vision_model_path = vision_model_path,
-            .decode_concurrency = static_cast<std::uint32_t>(
-                std::clamp<std::size_t>(session_count, 1, 8)),
+            .decode_concurrency =
+                speculative_config.memory_budget_gb > 0.0
+                    ? 1
+                    : static_cast<std::uint32_t>(
+                          std::clamp<std::size_t>(session_count, 1, 8)),
             .prompt_lookup = speculative_config.prompt_lookup,
             .draft_vocabulary =
                 speculative_config.mtp_prefix_draft_vocabulary

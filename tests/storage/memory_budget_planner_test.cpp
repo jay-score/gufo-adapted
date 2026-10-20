@@ -82,11 +82,47 @@ void TestBudgetUnderflowAndInputs() {
         "fixed component overflow is rejected");
 }
 
+void TestWddmAndAuxiliaryReservations() {
+  gufo::storage::MemoryBudgetInputs inputs{
+      .budget_gb = 16.0,
+      .backbone_bytes = 2 * kGiB,
+      .kv_reserved_bytes = 2 * kGiB,
+      .scratch_bytes = kGiB,
+      .reader_scratch_bytes = kGiB / 2,
+      .continuation_cache_bytes = kGiB / 4,
+      .safety_margin_bytes = kGiB,
+      .wddm_available_bytes = 5 * kGiB,
+      .has_wddm_available = true,
+      .routed_expert_bytes = 32 * kGiB,
+  };
+  gufo::storage::MemoryBudgetPlan plan;
+  std::string error;
+  Check(gufo::storage::PlanMemoryBudget(inputs, &plan, &error),
+        "WDDM constrained budget should plan");
+  Check(plan.fixed_bytes == (27 * kGiB) / 4,
+        "all resident and auxiliary reservations are included in fixed total");
+  Check(plan.wddm_expert_limit_bytes == 2 * kGiB,
+        "WDDM free memory reserves pending allocations and safety margin");
+  Check(plan.available_for_experts_bytes == 2 * kGiB &&
+            plan.expert_cache_bytes == 2 * kGiB,
+        "expert capacity uses the tighter configured and WDDM limits");
+  Check(plan.has_wddm_available &&
+            plan.Format().find("WDDM available") != std::string::npos,
+        "plan reports the WDDM cap");
+
+  inputs.wddm_available_bytes = kGiB;
+  Check(gufo::storage::PlanMemoryBudget(inputs, &plan, &error),
+        "constrained WDDM budget remains a valid plan");
+  Check(plan.wddm_expert_limit_bytes == 0 && plan.expert_cache_bytes == 0,
+        "pending allocations cannot exceed the WDDM availability");
+}
+
 }  // namespace
 
 int main() {
   TestBudgetArithmetic();
   TestBudgetUnderflowAndInputs();
+  TestWddmAndAuxiliaryReservations();
   if (failures != 0) {
     std::cerr << failures << " memory budget planner check(s) failed\n";
     return 1;

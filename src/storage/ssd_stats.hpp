@@ -1,6 +1,7 @@
 #ifndef GUFO_STORAGE_SSD_STATS_HPP_
 #define GUFO_STORAGE_SSD_STATS_HPP_
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -9,6 +10,21 @@
 #include <thread>
 
 namespace gufo::storage {
+
+struct SsdPhaseStatsSnapshot {
+  std::uint64_t expert_requests{0};
+  std::uint64_t cache_hits{0};
+  std::uint64_t cold_misses{0};
+  std::uint64_t prefetch_requests{0};
+  std::uint64_t late_prefetch_requests{0};
+  std::uint64_t hard_stall_nanoseconds{0};
+  std::uint64_t demand_bytes_read{0};
+  std::uint64_t prefetch_bytes_read{0};
+  std::uint64_t demand_read_nanoseconds{0};
+  std::uint64_t prefetch_read_nanoseconds{0};
+  std::uint64_t ple_requests{0};
+  std::uint64_t ple_hits{0};
+};
 
 struct SsdStatsSnapshot {
   std::size_t budget_bytes{0};
@@ -28,6 +44,8 @@ struct SsdStatsSnapshot {
   std::uint64_t ssd_read_nanoseconds{0};
   std::uint64_t session_bytes_written{0};
   std::uint64_t elapsed_nanoseconds{0};
+  SsdPhaseStatsSnapshot prefill;
+  SsdPhaseStatsSnapshot decode;
 };
 
 /// Optional process-wide storage telemetry for one loaded model. Counters are
@@ -45,19 +63,41 @@ public:
                           std::uint64_t prefetched_hits_in_time,
                           std::uint64_t cold_misses,
                           std::uint64_t late_prefetch_requests,
-                          std::chrono::nanoseconds hard_stall) noexcept;
-  void RecordPrefetchRequests(std::uint64_t requests) noexcept;
-  void RecordPleLookup(bool cache_hit) noexcept;
-  void RecordStorageBytes(std::uint64_t bytes) noexcept;
-  void RecordStorageElapsed(std::chrono::nanoseconds elapsed) noexcept;
-  void RecordStorageRead(std::uint64_t bytes,
-                         std::chrono::nanoseconds elapsed) noexcept;
+                          std::chrono::nanoseconds hard_stall,
+                          bool prefill = false) noexcept;
+  void RecordPrefetchRequests(std::uint64_t requests,
+                              bool prefill = false) noexcept;
+  void RecordPleLookup(bool cache_hit, bool prefill = false) noexcept;
+  void RecordStorageBytes(std::uint64_t bytes, bool prefill = false,
+                          bool prefetch = false) noexcept;
+  void RecordStorageElapsed(std::chrono::nanoseconds elapsed,
+                            bool prefill = false,
+                            bool prefetch = false) noexcept;
+  void RecordStorageRead(std::uint64_t bytes, std::chrono::nanoseconds elapsed,
+                         bool prefill = false, bool prefetch = false) noexcept;
   void RecordSessionWrite(std::uint64_t bytes) noexcept;
 
   [[nodiscard]] SsdStatsSnapshot Snapshot() const noexcept;
   [[nodiscard]] std::string Format() const;
 
 private:
+  struct PhaseCounters {
+    std::atomic<std::uint64_t> expert_requests{0};
+    std::atomic<std::uint64_t> cache_hits{0};
+    std::atomic<std::uint64_t> cold_misses{0};
+    std::atomic<std::uint64_t> prefetch_requests{0};
+    std::atomic<std::uint64_t> late_prefetch_requests{0};
+    std::atomic<std::uint64_t> hard_stall_nanoseconds{0};
+    std::atomic<std::uint64_t> demand_bytes_read{0};
+    std::atomic<std::uint64_t> prefetch_bytes_read{0};
+    std::atomic<std::uint64_t> demand_read_nanoseconds{0};
+    std::atomic<std::uint64_t> prefetch_read_nanoseconds{0};
+    std::atomic<std::uint64_t> ple_requests{0};
+    std::atomic<std::uint64_t> ple_hits{0};
+  };
+
+  [[nodiscard]] SsdPhaseStatsSnapshot PhaseSnapshot(
+      bool prefill) const noexcept;
   void SampleMemory() noexcept;
   void MonitorMemory() noexcept;
 
@@ -81,6 +121,7 @@ private:
   std::atomic<std::uint64_t> ssd_bytes_read_{0};
   std::atomic<std::uint64_t> ssd_read_nanoseconds_{0};
   std::atomic<std::uint64_t> session_bytes_written_{0};
+  std::array<PhaseCounters, 2> phase_counters_{};
 };
 
 }  // namespace gufo::storage

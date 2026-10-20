@@ -3,6 +3,7 @@
 //
 // gpu_probe --model FIRST_SHARD.gguf --prompt TEXT [--reference]
 //           [--batch T] [--context N] [--dump logits.bin]
+//           [--expert-cache-bytes N] [--logit-rows N]
 // Independent predictor oracle: --mtp-model MTP.gguf --mtp-audit
 // Fixed-state predictor hashes: --mtp-model MTP.gguf --mtp-hashes
 // Full/tail predictor comparison: --mtp-model MTP.gguf --mtp-catchup-audit
@@ -93,6 +94,8 @@ int main(int argc, char** argv) {
   std::optional<std::uint32_t> cost_depth;
   std::uint32_t batch = 512;
   std::uint32_t context = 4096;
+  std::uint32_t requested_logit_rows = 0;
+  std::size_t expert_cache_bytes = 0;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     auto next = [&]() -> std::string {
@@ -144,6 +147,26 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s requires a positive integer\n", arg.c_str());
         return 2;
       }
+    } else if (arg == "--logit-rows" || arg == "--expert-cache-bytes") {
+      const auto value = next();
+      if (arg == "--logit-rows") {
+        const auto [end, ec] = std::from_chars(
+            value.data(), value.data() + value.size(), requested_logit_rows);
+        if (ec != std::errc{} || end != value.data() + value.size() ||
+            requested_logit_rows == 0 || requested_logit_rows > 64) {
+          std::fprintf(stderr, "--logit-rows requires a value from 1 to 64\n");
+          return 2;
+        }
+      } else {
+        const auto [end, ec] = std::from_chars(
+            value.data(), value.data() + value.size(), expert_cache_bytes);
+        if (ec != std::errc{} || end != value.data() + value.size() ||
+            expert_cache_bytes == 0) {
+          std::fprintf(stderr,
+                       "--expert-cache-bytes requires a positive integer\n");
+          return 2;
+        }
+      }
     } else if (arg == "--dump") {
       dump_path = next();
     } else {
@@ -164,8 +187,9 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "MTP audits require --mtp-model\n");
     return 2;
   }
-  if (cost_audit && (mtp_audit || mtp_hashes || mtp_catchup_audit ||
-                     reference || !dump_path.empty())) {
+  if (cost_audit &&
+      (mtp_audit || mtp_hashes || mtp_catchup_audit || reference ||
+       !dump_path.empty() || expert_cache_bytes != 0)) {
     std::fprintf(stderr, "--cost-audit cannot be combined with other probes\n");
     return 2;
   }
@@ -221,14 +245,17 @@ int main(int argc, char** argv) {
   }
   auto device = q::rocm::DeviceModel::Upload(
       *weights, *reader, mtp_weights ? &*mtp_weights : nullptr,
-      mtp_reader.get(), &error);
+      mtp_reader.get(), &error, expert_cache_bytes != 0);
   if (!device) {
     std::fprintf(stderr, "upload failed: %s\n", error.c_str());
     return 1;
   }
   q::rocm::Executor::Options options;
   options.max_batch = batch;
-  options.max_logit_rows = std::min<std::uint32_t>(batch, 64);
+  options.max_context = context;
+  options.max_logit_rows = std::min<std::uint32_t>(
+      batch, requested_logit_rows == 0 ? 64 : requested_logit_rows);
+  options.streamed_experts = expert_cache_bytes != 0;
   if (mtp_audit || mtp_hashes || mtp_catchup_audit || cost_audit)
     options.max_speculative = 8;
 
@@ -240,6 +267,11 @@ int main(int argc, char** argv) {
       q::rocm::Executor::Create(*device, ngram.get(), options, &error);
   if (!executor) {
     std::fprintf(stderr, "executor failed: %s\n", error.c_str());
+    return 1;
+  }
+  if (expert_cache_bytes != 0 &&
+      !executor->EnableExpertCache(expert_cache_bytes, nullptr, 0.0F, &error)) {
+    std::fprintf(stderr, "expert cache enable failed: %s\n", error.c_str());
     return 1;
   }
   if (cost_audit) {

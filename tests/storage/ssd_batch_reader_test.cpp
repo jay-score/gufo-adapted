@@ -130,10 +130,14 @@ void Run() {
 
   std::vector<std::uint32_t> expected;
   WriteFixture(resources, expected);
+  auto scratch_pool = gufo::storage::SsdScratchPool::Create(4, 64 * 1024);
   gufo::storage::SsdBatchReader reader(resources.file,
                                        {.io_threads = 8,
                                         .max_scratch_bytes = 64 * 1024,
-                                        .max_inflight_reads = 32});
+                                        .max_inflight_reads = 32,
+                                        .scratch_pool = scratch_pool});
+  if (scratch_pool->allocated_bytes() != 4 * 64 * 1024)
+    throw std::runtime_error("shared scratch pool reported invalid capacity");
   std::vector<gufo::storage::SsdReadRequest> requests(kExperts);
   auto* slots = static_cast<std::uint8_t*>(resources.host_slots);
   for (std::size_t expert = 0; expert < kExperts; ++expert) {
