@@ -15,6 +15,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  gui-launcher:
+    name: Browser launcher checks
+    runs-on: windows-2025
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      GUI_TEST_PYTHON: python
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install launcher fixture dependencies
+        run: python -m pip install -r tools/gui/requirements.txt
+
+      - name: Run launcher unit tests
+        run: python -m unittest discover -s tests/tools -p "gui_*_test.py"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+
+      - name: Install DOM test dependency
+        run: npm install --prefix build/gui-test-js --no-save --package-lock=false --ignore-scripts jsdom@26.1.0
+
+      - name: Check launcher browser behavior
+        run: node --experimental-vm-modules --test tests/tools/gui_dom_test.mjs tests/tools/gui_runtime_dom_test.mjs
+
   windows-cpu:
     name: Native CPU contracts
     runs-on: windows-2025

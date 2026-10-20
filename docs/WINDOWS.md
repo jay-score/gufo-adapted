@@ -6,7 +6,8 @@ engine's **CPU CLI and selected host/server checks** natively on Windows x64.
 This is an integration milestone, not a supported Windows inference release.
 Native HIP builds, Windows GPU-budget admission, pinned-memory/transfer checks,
 and selected Flash-Next live checks now pass. The Windows queue-policy boundary
-is implemented; wider runtime qualification and the GUI remain pending.
+is implemented, and an optional local browser launcher is included. Wider
+runtime qualification remains pending.
 Windows CPU CI is implemented; hosted results and the bounded-fixture correction
 are recorded below. Disk checkpoint persistence is deferred from
 the initial port. GGUF digest caching and private content tracing are enabled.
@@ -60,6 +61,44 @@ directory distribution; installation/redistributable packaging is not yet
 qualified. The locally copied VS LLVM OpenMP DLL comes from `debug_nonredist`
 and is for developer use only, not public binary redistribution. Standalone
 LLVM builds instead use the OpenMP library and DLL shipped with that compiler.
+
+## Local browser launcher
+
+The [launcher](../tools/gui/README.md) is a separate Python process that starts
+one `gufo serve llm` child. It does not load a model until **Start** is pressed
+and does not change the engine's runtime dependencies. After building a Windows
+target, double-click [launch-gui.bat](../launch-gui.bat), or run:
+
+```powershell
+.\launch-gui.bat -Port 8090
+.\launch-gui.bat -NoBrowser
+```
+
+The first run creates `build/gui-env` and installs the pinned Flask/Waitress
+requirements. The launcher opens `http://127.0.0.1:8090`; its API binds to
+localhost only. Select the executable (defaults to this checkout's
+`build/windows-gpu/gufo.exe`, then `build/windows-cpu/gufo.exe` or
+`build/release/gufo.exe`), models, and options, then save a preset. Settings live
+in `%LOCALAPPDATA%\Gufo\launcher.json`; the API and launcher ports must differ.
+Stop and Exit terminate the owned Gufo process tree; closing the browser does
+not.
+
+The launcher's disk-cache controls pass the engine's `--cache-disk*` flags, but
+Windows checkpoint persistence remains deferred as described below. Options
+saved by the older Windows-fork launcher that this engine does not expose
+(`debug_tool_calls`, `mtp_draft_vocab`, and `prompt_lookup`) are ignored when an
+existing settings file is loaded.
+
+Run the focused launcher checks with its environment:
+
+```powershell
+.\build\gui-env\Scripts\python.exe -m unittest discover -s tests/tools -p "gui_*_test.py"
+npm install --prefix build/gui-test-js --no-save --package-lock=false jsdom@26.1.0
+node --experimental-vm-modules --test tests/tools/gui_dom_test.mjs tests/tools/gui_runtime_dom_test.mjs
+```
+
+These tests use fake child processes and local HTTP fixtures; they do not load a
+model or require a GPU.
 
 ## Windows CPU CI
 
@@ -152,9 +191,9 @@ Windows port will run without disk checkpoint persistence: RAM continuation
 reuse remains in scope, but restarting the engine requires prompt recomputation.
 Conversation history kept by a client or GUI is independent of these stores.
 
-HIP configuration on Windows currently stops with an explicit stage-three
-message. Keep using the existing `windows-port` checkout for its qualified
-runtime paths while this integration proceeds.
+Native HIP configuration is enabled by the `windows-gpu` preset; the live checks
+below use that build. Requirements such as TheRock, WDDM memory budgeting, and
+pinned transfers remain development milestones, not a redistributable release.
 
 ## Stage-one validation
 
@@ -276,7 +315,7 @@ paths. At that increment both stores and persistent GGUF identity caching
 remained disabled before any directory creation. Opt-in continuation cache
 directories remain caller-selected. The persistence-foundation increment below
 qualifies the independent identity cache and tracing. Linux build verification,
-Windows CI, HIP, and the GUI remain pending.
+Windows CI, HIP, and the GUI were pending at that increment.
 
 ## Persistence foundations and unresolved cache contract
 

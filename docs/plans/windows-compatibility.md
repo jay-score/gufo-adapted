@@ -8,15 +8,17 @@ preset includes host, HTTP, audio WebSocket, and console-shutdown checks. See
 remaining limitations. Windows CPU CI is implemented and all 15 hosted checks
 pass after the bounded-test fixture correction. Stage three is
 in progress: native HIP, WDDM admission, pinned-memory
-checks and selected Flash-Next AR/MTP checks pass. Stage four and the GUI remain
-pending. Disk checkpoint persistence is outside the initial port's scope.
-Full GPU/model qualification remains pending.
+checks and selected Flash-Next AR/MTP checks pass. Stage four remains pending;
+the optional browser launcher is integrated as a separate tool. Disk checkpoint
+persistence is outside the initial port's scope. Full GPU/model qualification
+remains pending.
 
 ## Objective and baseline
 
 Build and run the current official Gufo engine natively on Windows 11 x64,
 on AMD Strix Halo (`gfx1151`), while keeping future official updates easy to
-merge. Windows compatibility is the priority; the GUI is deferred.
+merge. Windows compatibility is the priority; the GUI is an optional separate
+launcher.
 
 Inspected on 2026-10-12:
 
@@ -94,8 +96,8 @@ Useful provenance starts with the original compatibility commit above,
 Use the current fork files, not just the original commits, to retain subsequent
 fixes. Apply source hunks against current official code deliberately.
 
-Defer disk checkpoint persistence, the GUI, guided installers, double-click
-launchers, updater, fork release workflow, custom upstream-sync tools,
+Defer disk checkpoint persistence, guided installers, updater, fork release
+workflow, custom upstream-sync tools,
 `GUFO_PLATFORM_TUNING`, and fork-only
 MTP/sampling options. Windows performance optimizations can be evaluated later
 only if the official implementation exposes a measured problem. They are not
@@ -317,7 +319,7 @@ boundary. If a fix is portable and useful upstream, propose that isolated fix
 upstream when authorized so it can eventually disappear from the maintained
 difference.
 
-The GUI can later remain an independent launcher of `gufo serve`, using the
-engine's CLI and HTTP endpoints. Its current fork implementation is already
-separate from the engine; bringing it back should not require kernel or cache
-changes. Its command options would need reconciliation with the official CLI.
+The GUI remains an independent launcher of `gufo serve`, using the engine's CLI
+and HTTP endpoints. It is separate from the engine and requires no kernel or
+cache changes. Its command builder has been reconciled with the official CLI;
+older Windows-fork-only options are ignored when settings are loaded.
