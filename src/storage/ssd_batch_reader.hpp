@@ -42,6 +42,38 @@ struct SsdReadBatchResult {
   bool success{false};
 };
 
+/// Model-shared pool for aligned bounce buffers and in-flight I/O leases.
+/// Each lease reserves one of `buffer_count()` entries until the matching
+/// backend completion, even when an aligned direct read does not use its
+/// scratch bytes.
+class SsdScratchPool {
+public:
+  [[nodiscard]] static std::shared_ptr<SsdScratchPool> Create(
+      std::size_t buffer_count, std::size_t buffer_bytes);
+  ~SsdScratchPool();
+
+  SsdScratchPool(const SsdScratchPool&) = delete;
+  SsdScratchPool& operator=(const SsdScratchPool&) = delete;
+
+  [[nodiscard]] std::size_t buffer_count() const noexcept;
+  [[nodiscard]] std::size_t buffer_bytes() const noexcept;
+  [[nodiscard]] std::size_t allocated_bytes() const noexcept;
+
+  /// Blocking lease acquisition is priority-aware; queued demand leases are
+  /// granted before prefetch leases.
+  [[nodiscard]] std::size_t Acquire(bool demand);
+  [[nodiscard]] void* Buffer(std::size_t lease) const noexcept;
+  void Release(std::size_t lease) noexcept;
+
+  [[nodiscard]] static std::size_t EstimateBufferBytes(
+      std::size_t max_aligned_read_bytes);
+
+private:
+  struct Impl;
+  explicit SsdScratchPool(std::unique_ptr<Impl> impl);
+  std::unique_ptr<Impl> impl_;
+};
+
 /// Batched direct reads into caller-owned, GPU-visible host allocations.
 /// Requests may start at arbitrary GGUF offsets; the reader pads each range to
 /// 4096-byte boundaries and reports the sub-page offset through Payload().
@@ -51,6 +83,7 @@ public:
     std::size_t io_threads{8};
     std::size_t max_scratch_bytes{4 * 1024 * 1024};
     std::size_t max_inflight_reads{32};
+    std::shared_ptr<SsdScratchPool> scratch_pool;
   };
 
   using BatchId = std::uint64_t;

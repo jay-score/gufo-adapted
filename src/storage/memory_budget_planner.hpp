@@ -13,6 +13,11 @@ struct MemoryBudgetInputs {
   std::size_t ple_shelf_bytes{0};
   std::size_t kv_reserved_bytes{0};
   std::size_t scratch_bytes{0};
+  std::size_t reader_scratch_bytes{0};
+  std::size_t continuation_cache_bytes{0};
+  std::size_t safety_margin_bytes{0};
+  std::size_t wddm_available_bytes{0};
+  bool has_wddm_available{false};
   std::size_t routed_expert_bytes{0};
 };
 
@@ -23,6 +28,12 @@ struct MemoryBudgetPlan {
   std::size_t ple_shelf_bytes{0};
   std::size_t kv_reserved_bytes{0};
   std::size_t scratch_bytes{0};
+  std::size_t reader_scratch_bytes{0};
+  std::size_t continuation_cache_bytes{0};
+  std::size_t safety_margin_bytes{0};
+  std::size_t wddm_available_bytes{0};
+  std::size_t wddm_expert_limit_bytes{0};
+  bool has_wddm_available{false};
   std::size_t fixed_bytes{0};
   std::size_t routed_expert_bytes{0};
   std::size_t available_for_experts_bytes{0};

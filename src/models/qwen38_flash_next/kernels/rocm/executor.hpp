@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -28,7 +29,7 @@
 namespace gufo::storage {
 class ExpertCacheManager;
 class SsdStats;
-}
+}  // namespace gufo::storage
 
 namespace gufo::models::qwen38_flash_next::rocm {
 
@@ -185,6 +186,9 @@ class Executor {
 public:
   struct Options {
     std::uint32_t max_batch{1};
+    /// Full configured context ceiling for load-time session reservations.
+    /// Zero preserves the caller-sized reservation for standalone users.
+    std::uint32_t max_context{0};
     /// Rows of logits (and hidden states) a Forward call may return.
     std::uint32_t max_logit_rows{1};
     /// Longest speculative batch; bounds the recurrent snapshot storage.
@@ -196,6 +200,8 @@ public:
     std::vector<std::int32_t> draft_specials;
     /// Allocate bounded lookahead router scratch when expert weights stream.
     bool streamed_experts{false};
+    /// Optional JSONL route trace destination for offline cache replay.
+    std::string route_trace_path;
   };
 
   ~Executor();
@@ -220,6 +226,8 @@ public:
       std::string* error_msg = nullptr) const;
   [[nodiscard]] bool EnsureRollback(Session& session, std::uint32_t depth,
                                     std::string* error_msg) const;
+  [[nodiscard]] bool ReserveRollback(Session& session, std::uint32_t depth,
+                                     std::string* error_msg) const;
   [[nodiscard]] std::size_t SessionBytes(
       core::SessionMode mode, std::uint32_t max_context,
       std::uint32_t rollback_depth) const noexcept;
@@ -376,6 +384,12 @@ public:
 private:
   Executor() = default;
 
+  struct RouteTracePass {
+    std::uint32_t first_row{0};
+    std::uint32_t rows{0};
+    std::vector<std::int32_t> experts;
+  };
+
   [[nodiscard]] bool RestoreSnapshotImpl(Session& session,
                                          std::span<const std::uint8_t> payload,
                                          const HostSnapshot* snapshot,
@@ -472,7 +486,11 @@ private:
            const float* lookahead_residual = nullptr) const;
   /// Runs routed experts after the router and shared expert are ready.
   bool MoeExperts(const DeviceLayer& l, const float* x, float* out,
-                  std::uint32_t n_tokens, std::string* error_msg) const;
+                  std::uint32_t n_tokens, std::string* error_msg,
+                  bool defer_epilogue = false,
+                  bool recompute_route_counts = false) const;
+  bool MoeEpilogueRows(const DeviceLayer& l, float* out, std::uint32_t n_tokens,
+                       std::string* error_msg) const;
   bool MoeBatch(const DeviceLayer& l, const float* x, float* out,
                 std::uint32_t rows, std::string* error,
                 const float* lookahead_residual = nullptr) const;
@@ -480,9 +498,22 @@ private:
   [[nodiscard]] bool CaptureExpertIds(const std::int32_t* ids,
                                       std::size_t count,
                                       std::string* error_msg) const;
+  [[nodiscard]] bool WriteRouteTrace(
+      std::uint32_t layer, bool prefill, std::uint32_t rows,
+      std::uint32_t experts_used, std::span<const std::int32_t> expert_ids,
+      std::span<const std::uint32_t> windows,
+      std::span<const RouteTracePass> passes,
+      std::span<const std::int32_t> desk_experts,
+      std::span<const std::int32_t> resident_experts,
+      std::string* error_msg) const;
   [[nodiscard]] bool StreamedMoeRows(
       const DeviceLayer& layer, const float* x, float* out, std::uint32_t rows,
       std::string* error_msg, std::uint32_t compute_group_rows = 0) const;
+  [[nodiscard]] bool StreamedMoeRowsDeskRoom(const DeviceLayer& layer,
+                                             const float* x, float* out,
+                                             std::uint32_t rows,
+                                             std::uint32_t compute_group_rows,
+                                             std::string* error_msg) const;
   [[nodiscard]] bool LookaheadPrefetch(const DeviceLayer& layer,
                                        const float* residual,
                                        std::uint32_t rows,
@@ -619,6 +650,8 @@ private:
   std::int32_t* expert_id_to_slot_host_{nullptr};
   std::size_t expert_ids_capacity_{0};
   hipEvent_t expert_ids_ready_{nullptr};
+  mutable std::mutex route_trace_mutex_;
+  mutable std::ofstream route_trace_;
   float* lookahead_norm_{nullptr};
   float* lookahead_mixed_{nullptr};
   float* lookahead_inject_{nullptr};
@@ -638,6 +671,7 @@ private:
     return selected_logits_ != nullptr ? selected_logits_ : s_.logits;
   }
   std::uint32_t mask_words_{0};
+  std::size_t qfn_workspace_bytes_{0};
   /// Bounded score scratch, shared by sequential selector chunks.
   std::size_t select_score_floats_{0};
   std::size_t scratch_allocated_bytes_{0};

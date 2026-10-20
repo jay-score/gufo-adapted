@@ -116,6 +116,10 @@ void Run() {
     throw std::runtime_error("cache creation failed: " + error);
   if (manager->slots_per_layer() != kExpertsUsed)
     throw std::runtime_error("cache did not select the expected slot count");
+  gufo::storage::ExpertCacheManager::WarmupResult warmup;
+  if (!manager->Prewarm(&warmup, &error) || warmup.bytes_read == 0 ||
+      warmup.elapsed.count() <= 0 || indirection[0] < 0 || indirection[1] < 0)
+    throw std::runtime_error("expert cache prewarm failed: " + error);
 
   const std::array<std::int32_t, kExpertsUsed> first_ids{0, 1};
   std::array<std::int32_t, kExpertsUsed> first_slots{};
@@ -166,7 +170,8 @@ void Run() {
   hot_indirection.fill(-1);
   auto hot_manager = gufo::storage::ExpertCacheManager::Create(
       std::span<const DeviceLayer>(&layer, 1), three_slot_budget, kExpertsUsed,
-      kExperts, hot_indirection, &error);
+      kExperts, hot_indirection, &error, nullptr, 0.0F,
+      gufo::storage::ExpertCacheManager::VictimPolicy::kCumulativeHotness);
   if (!hot_manager || hot_manager->slots_per_layer() != 3)
     throw std::runtime_error("hotness cache creation failed: " + error);
   const std::array<std::int32_t, kExpertsUsed> hot_seed{0, 1};
@@ -174,6 +179,29 @@ void Run() {
   if (!hot_manager->Resolve(0, hot_seed, hot_seed_slots, &error))
     throw std::runtime_error("hotness seed resolve failed: " + error);
   hot_manager->Release(0);
+
+  std::array<std::int32_t, kExperts> future_indirection{};
+  future_indirection.fill(-1);
+  auto future_manager = gufo::storage::ExpertCacheManager::Create(
+      std::span<const DeviceLayer>(&layer, 1), three_slot_budget, kExpertsUsed,
+      kExperts, future_indirection, &error);
+  if (!future_manager)
+    throw std::runtime_error("future-use cache creation failed: " + error);
+  const std::array<std::int32_t, 3> future_seed{0, 1, 2};
+  std::array<std::int32_t, 3> future_seed_slots{};
+  if (!future_manager->Resolve(0, future_seed, future_seed_slots, &error))
+    throw std::runtime_error("future-use seed resolve failed: " + error);
+  future_manager->Release(0);
+  const std::array<std::int32_t, 1> current_window{3};
+  const std::array<std::int32_t, 1> future_window{1};
+  std::array<std::int32_t, 1> current_slots{};
+  if (!future_manager->Resolve(0, current_window, current_slots, &error,
+                               future_window) ||
+      future_indirection[1] < 0 || future_indirection[0] != -1) {
+    throw std::runtime_error(
+        "future-use hint did not protect the upcoming expert");
+  }
+  future_manager->Release(0);
   const std::array<std::int32_t, 4> hot_window{0, 0, 0, 1};
   std::array<std::int32_t, 4> hot_window_slots{};
   if (!hot_manager->Resolve(0, hot_window, hot_window_slots, &error))
@@ -187,6 +215,99 @@ void Run() {
         "route frequency did not protect the repeatedly activated expert");
   }
   hot_manager->Release(0);
+
+  std::array<std::int32_t, kExperts> decayed_indirection{};
+  decayed_indirection.fill(-1);
+  auto decayed_manager = gufo::storage::ExpertCacheManager::Create(
+      std::span<const DeviceLayer>(&layer, 1), three_slot_budget, kExpertsUsed,
+      kExperts, decayed_indirection, &error, nullptr, 0.0F,
+      gufo::storage::ExpertCacheManager::VictimPolicy::kDecayedHotness, 1);
+  if (!decayed_manager)
+    throw std::runtime_error("decayed cache creation failed: " + error);
+  if (!decayed_manager->Resolve(0, hot_seed, hot_seed_slots, &error, {},
+                                nullptr, true, true))
+    throw std::runtime_error("decayed cache seed failed: " + error);
+  decayed_manager->Release(0);
+  if (!decayed_manager->Resolve(0, hot_window, hot_window_slots, &error, {},
+                                nullptr, true, true))
+    throw std::runtime_error("decayed cache prefill failed: " + error);
+  decayed_manager->Release(0);
+  if (!decayed_manager->Resolve(0, cold_burst, cold_burst_slots, &error, {},
+                                nullptr, true, false) ||
+      decayed_indirection[0] != -1 || decayed_indirection[1] < 0) {
+    throw std::runtime_error(
+        "prefill hotness was not reset on transition to decode");
+  }
+  decayed_manager->Release(0);
+
+  std::array<std::int32_t, kExperts> desk_indirection{};
+  desk_indirection.fill(-1);
+  auto desk_manager = gufo::storage::ExpertCacheManager::Create(
+      std::span<const DeviceLayer>(&layer, 1), three_slot_budget, kExpertsUsed,
+      kExperts, desk_indirection, &error);
+  if (!desk_manager)
+    throw std::runtime_error("desk cache creation failed: " + error);
+  const std::array<std::int32_t, 2> desk_experts{0, 1};
+  std::array<std::int32_t, 2> desk_slots{};
+  if (!desk_manager->PinDesk(0, desk_experts, desk_slots, &error, true) ||
+      desk_manager->room_slots_available(0) != 1) {
+    throw std::runtime_error("desk slot reservation failed: " + error);
+  }
+  const std::array<std::int32_t, 2> room_experts{2, 3};
+  std::array<std::int32_t, 2> room_slots{};
+  if (desk_manager->Resolve(0, room_experts, room_slots, &error)) {
+    desk_manager->Release(0);
+    throw std::runtime_error("room resolve evicted a protected desk expert");
+  }
+  const std::array<std::int32_t, 1> room_prediction{2};
+  if (!desk_manager->Prefetch(0, room_prediction, 1, &error))
+    throw std::runtime_error("room prefetch beside desk failed: " + error);
+  const std::array<std::int32_t, 1> prefetched_room{2};
+  std::array<std::int32_t, 1> prefetched_room_slot{};
+  if (!desk_manager->Resolve(0, prefetched_room, prefetched_room_slot, &error))
+    throw std::runtime_error("prefetched room resolve failed: " + error);
+  desk_manager->Release(0);
+  desk_manager->FinishPrefetch(0);
+  if (desk_indirection[0] < 0 || desk_indirection[1] < 0)
+    throw std::runtime_error("room prefetch displaced a protected desk expert");
+  desk_manager->ReleaseDesk(0, desk_experts);
+  if (!desk_manager->Resolve(0, room_experts, room_slots, &error))
+    throw std::runtime_error("room resolve failed after releasing desk: " +
+                             error);
+  desk_manager->Release(0);
+
+  std::array<std::int32_t, kExperts> resident_indirection{};
+  resident_indirection.fill(-1);
+  auto resident_manager = gufo::storage::ExpertCacheManager::Create(
+      std::span<const DeviceLayer>(&layer, 1), three_slot_budget, kExpertsUsed,
+      kExperts, resident_indirection, &error);
+  if (!resident_manager)
+    throw std::runtime_error("resident desk cache creation failed: " + error);
+  const std::array<std::int32_t, 3> pass_zero_resident{0, 1, 2};
+  std::array<std::int32_t, 3> pass_zero_slots{};
+  if (!resident_manager->PinDesk(0, pass_zero_resident, pass_zero_slots, &error,
+                                 true) ||
+      resident_manager->room_slots_available(0) != 0) {
+    throw std::runtime_error("Pass 0 did not protect every resident expert: " +
+                             error);
+  }
+  resident_manager->ReleaseDesk(
+      0, std::span<const std::int32_t>(pass_zero_resident).subspan(1));
+  if (resident_manager->room_slots_available(0) != 2 ||
+      resident_indirection[0] < 0) {
+    throw std::runtime_error(
+        "releasing non-kept Pass 0 slots did not form Room capacity");
+  }
+  const std::array<std::int32_t, 1> first_room_expert{3};
+  std::array<std::int32_t, 1> first_room_slot{};
+  if (!resident_manager->Resolve(0, first_room_expert, first_room_slot,
+                                 &error) ||
+      resident_indirection[0] < 0) {
+    throw std::runtime_error("Room evicted the kept Desk expert: " + error);
+  }
+  resident_manager->Release(0);
+  resident_manager->ReleaseDesk(
+      0, std::span<const std::int32_t>(pass_zero_resident).first(1));
 
   std::array<std::int32_t, kExperts> async_indirection{};
   async_indirection.fill(-1);

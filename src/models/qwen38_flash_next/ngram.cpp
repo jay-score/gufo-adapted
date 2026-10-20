@@ -183,11 +183,11 @@ bool NgramTable::ReadOne(std::uint32_t row, float* dst,
   }
   if (ReadCached(row, dst)) {
     if (stats_ != nullptr)
-      stats_->RecordPleLookup(true);
+      stats_->RecordPleLookup(true, read_prefill_);
     return true;
   }
   if (stats_ != nullptr)
-    stats_->RecordPleLookup(false);
+    stats_->RecordPleLookup(false, read_prefill_);
   const std::uint64_t offset = base_offset_ + row * row_bytes_;
   const std::uint64_t begin = direct_ ? offset & ~(kPage - 1) : offset;
   const std::uint64_t end =
@@ -223,7 +223,7 @@ bool NgramTable::ReadOne(std::uint32_t row, float* dst,
     got += static_cast<std::size_t>(n);
   }
   if (stats_ != nullptr)
-    stats_->RecordStorageBytes(got);
+    stats_->RecordStorageBytes(got, read_prefill_);
   // Cache only a complete row, still in its original quantized format.
   // A busy slot is skipped; readers never wait for another row's I/O.
   if (entry != nullptr &&
@@ -273,13 +273,14 @@ bool NgramTable::Read(std::span<const std::uint32_t> rows,
 }
 
 bool NgramTable::StartRead(std::span<const std::uint32_t> rows,
-                           std::span<float> out) {
+                           std::span<float> out, bool prefill) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (active_ || rows.size() > out.size() / row_dim_ ||
       std::any_of(rows.begin(), rows.end(),
                   [this](std::uint32_t row) { return row >= rows_; })) {
     return false;
   }
+  read_prefill_ = prefill;
   // Read each distinct row once, then copy it to its other slots.
   std::unordered_map<std::uint32_t, std::size_t> first;
   first.reserve(rows.size());
@@ -304,7 +305,7 @@ bool NgramTable::StartRead(std::span<const std::uint32_t> rows,
     std::erase_if(jobs_, [this](const Job& job) {
       const bool hit = ReadCached(job.row, job.dst);
       if (hit && stats_ != nullptr)
-        stats_->RecordPleLookup(true);
+        stats_->RecordPleLookup(true, read_prefill_);
       return hit;
     });
   }
@@ -328,7 +329,8 @@ bool NgramTable::WaitRead() {
   const auto read_elapsed = std::chrono::steady_clock::now() - read_started_;
   if (stats_ != nullptr && !jobs_.empty()) {
     stats_->RecordStorageElapsed(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(read_elapsed));
+        std::chrono::duration_cast<std::chrono::nanoseconds>(read_elapsed),
+        read_prefill_);
   }
   if (!failed_) {
     for (const Copy& copy : copies_) {

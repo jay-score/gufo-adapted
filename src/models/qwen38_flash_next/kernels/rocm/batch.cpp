@@ -125,12 +125,9 @@ void Executor::UseScratch(const Scratch& scratch) const {
 }
 
 bool Executor::AllocateBatch(std::string* error) const {
-  return batch_logits_ != nullptr ||
-         Check(hipMalloc(&batch_logits_,
-                         static_cast<std::size_t>(kBatchSessions) *
-                             std::min(kDecodeRows, options_.max_logit_rows) *
-                             config().vocab_size * sizeof(float)),
-               error);
+  if (batch_logits_ != nullptr)
+    return true;
+  return Fail(error, "batch logits were not reserved at model load");
 }
 
 bool Executor::HcMixBatch(const DeviceMixer& m, const float* res, bool normed,
@@ -211,11 +208,9 @@ bool Executor::MtpForwardBatch(std::span<const MtpBatchItem> items,
     const auto& item = items.front();
     return MtpForward(*item.session, item.tokens, item.hidden_row, {}, error);
   }
-  if (!AllocateBatch(error) ||
-      (batch_controls_ == nullptr &&
-       !Check(hipHostMalloc(&batch_controls_,
-                            kBatchSessions * sizeof(Session::Control)),
-              error))) {
+  if (!AllocateBatch(error) || batch_controls_ == nullptr) {
+    if (batch_controls_ == nullptr)
+      return Fail(error, "batch controls were not reserved at model load");
     return false;
   }
   for (std::size_t i = 0; i < items.size(); ++i) {
@@ -449,14 +444,9 @@ bool Executor::MtpHeads(std::span<const MtpHeadItem> items,
   if (!AllocateBatch(error)) {
     return false;
   }
-  if (batch_candidates_host_ == nullptr) {
-    if (!Check(hipHostMalloc(&batch_candidates_host_,
-                             kBatchSessions * sizeof(MtpCandidateLogits)),
-               error))
-      return false;
-    for (std::uint32_t i = 0; i < kBatchSessions; ++i)
-      std::construct_at(batch_candidates_host_ + i);
-  }
+  if (batch_candidates_host_ == nullptr)
+    return Fail(error,
+                "batch draft candidates were not reserved at model load");
   const auto n = static_cast<std::uint32_t>(items.size());
   // Each request keeps the head it chose. A small-head row's logits are the
   // prefix rows then the special rows, `small` wide. When every row reads
@@ -819,25 +809,19 @@ bool Executor::ForwardBatch(std::span<const BatchItem> items,
   if (!AllocateBatch(error)) {
     return false;
   }
-  if (batch_controls_ == nullptr &&
-      !Check(hipHostMalloc(&batch_controls_,
-                           kBatchSessions * sizeof(Session::Control)),
-             error)) {
-    return false;
-  }
+  if (batch_controls_ == nullptr)
+    return Fail(error, "batch controls were not reserved at model load");
   const bool batch_gdn =
       items.size() > 1 && c.ssm_head_dim == 128 && c.ssm_conv_kernel == 4;
   if (batch_gdn) {
     const std::size_t bytes =
         std::size_t{c.num_layers} * kBatchSessions * sizeof(GdnBatchItem);
-    if ((batch_gdn_host_ == nullptr &&
-         !Check(hipHostMalloc(&batch_gdn_host_, bytes, hipHostMallocMapped),
-                error)) ||
-        (batch_gdn_ == nullptr &&
-         !Check(hipHostGetDevicePointer(reinterpret_cast<void**>(&batch_gdn_),
-                                        batch_gdn_host_, 0),
-                error)))
-      return false;
+    if (batch_gdn_host_ == nullptr || batch_gdn_ == nullptr ||
+        bytes !=
+            std::size_t{c.num_layers} * kBatchSessions * sizeof(GdnBatchItem))
+      return Fail(
+          error,
+          "batched recurrent descriptors were not reserved at model load");
   }
   if (ple_pending_ && !WaitPle(error)) {
     return false;

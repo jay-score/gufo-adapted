@@ -30,6 +30,8 @@ namespace {
 constexpr std::size_t kAlignment = SsdBatchReader::Alignment();
 
 std::size_t AlignUp(std::size_t bytes) {
+  if (bytes > std::numeric_limits<std::size_t>::max() - (kAlignment - 1))
+    throw std::overflow_error("SSD scratch-buffer alignment overflows");
   return (bytes + kAlignment - 1) & ~(kAlignment - 1);
 }
 
@@ -130,9 +132,106 @@ std::vector<std::size_t> SortedRequestIndices(
 
 }  // namespace
 
+struct SsdScratchPool::Impl {
+  ~Impl() {
+    for (void* buffer : buffers)
+      FreeAligned(buffer);
+  }
+
+  std::vector<void*> buffers;
+  std::deque<std::size_t> free;
+  std::size_t buffer_bytes{0};
+  std::size_t demand_waiters{0};
+  std::size_t prefetch_waiters{0};
+  mutable std::mutex mutex;
+  std::condition_variable available;
+};
+
+SsdScratchPool::SsdScratchPool(std::unique_ptr<Impl> impl)
+    : impl_(std::move(impl)) {}
+
+std::shared_ptr<SsdScratchPool> SsdScratchPool::Create(
+    std::size_t buffer_count, std::size_t buffer_bytes) {
+  if (buffer_count == 0 || buffer_bytes == 0 ||
+      buffer_count > std::numeric_limits<std::size_t>::max() / buffer_bytes) {
+    throw std::invalid_argument("SSD shared scratch-pool geometry is invalid");
+  }
+  auto impl = std::make_unique<Impl>();
+  impl->buffer_bytes = AlignUp(buffer_bytes);
+  if (buffer_count >
+      std::numeric_limits<std::size_t>::max() / impl->buffer_bytes) {
+    throw std::invalid_argument("SSD shared scratch-pool size overflows");
+  }
+  impl->buffers.reserve(buffer_count);
+  for (std::size_t i = 0; i < buffer_count; ++i) {
+    void* buffer = AllocateAligned(impl->buffer_bytes);
+    if (buffer == nullptr)
+      throw std::bad_alloc();
+    impl->buffers.push_back(buffer);
+    impl->free.push_back(i);
+  }
+  return std::shared_ptr<SsdScratchPool>(new SsdScratchPool(std::move(impl)));
+}
+
+SsdScratchPool::~SsdScratchPool() = default;
+
+std::size_t SsdScratchPool::buffer_count() const noexcept {
+  return impl_ != nullptr ? impl_->buffers.size() : 0;
+}
+
+std::size_t SsdScratchPool::buffer_bytes() const noexcept {
+  return impl_ != nullptr ? impl_->buffer_bytes : 0;
+}
+
+std::size_t SsdScratchPool::allocated_bytes() const noexcept {
+  return buffer_count() * buffer_bytes();
+}
+
+std::size_t SsdScratchPool::Acquire(bool demand) {
+  if (impl_ == nullptr)
+    throw std::logic_error("SSD shared scratch pool is unavailable");
+  std::unique_lock<std::mutex> lock(impl_->mutex);
+  auto& waiters = demand ? impl_->demand_waiters : impl_->prefetch_waiters;
+  ++waiters;
+  impl_->available.wait(lock, [&] {
+    return !impl_->free.empty() && (demand || impl_->demand_waiters == 0);
+  });
+  --waiters;
+  const std::size_t lease = impl_->free.front();
+  impl_->free.pop_front();
+  return lease;
+}
+
+void* SsdScratchPool::Buffer(std::size_t lease) const noexcept {
+  return impl_ != nullptr && lease < impl_->buffers.size()
+             ? impl_->buffers[lease]
+             : nullptr;
+}
+
+void SsdScratchPool::Release(std::size_t lease) noexcept {
+  if (impl_ == nullptr || lease >= impl_->buffers.size())
+    return;
+  {
+    const std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->free.push_back(lease);
+  }
+  impl_->available.notify_all();
+}
+
+std::size_t SsdScratchPool::EstimateBufferBytes(
+    std::size_t max_aligned_read_bytes) {
+  if (max_aligned_read_bytes == 0 ||
+      max_aligned_read_bytes >
+          std::numeric_limits<std::size_t>::max() - kAlignment) {
+    throw std::invalid_argument("SSD scratch-buffer size is invalid");
+  }
+  return AlignUp(max_aligned_read_bytes + kAlignment);
+}
+
 struct SsdBatchReader::Impl {
   struct BatchJob {
     SsdBatchReader::BatchId id{0};
+    bool prefetch{false};
     std::vector<SsdReadRequest> requests;
     std::promise<SsdReadBatchResult> completion;
   };
@@ -148,7 +247,14 @@ struct SsdBatchReader::Impl {
             std::numeric_limits<std::size_t>::max() - kAlignment) {
       throw std::invalid_argument("SSD reader scratch size is invalid");
     }
-    scratch_capacity = AlignUp(options.max_scratch_bytes + kAlignment);
+    max_inflight_reads = options.max_inflight_reads;
+    scratch_pool = std::move(options.scratch_pool);
+    scratch_capacity = scratch_pool != nullptr
+                           ? scratch_pool->buffer_bytes()
+                           : AlignUp(options.max_scratch_bytes + kAlignment);
+    if (scratch_capacity == 0 ||
+        (scratch_pool != nullptr && scratch_pool->buffer_count() == 0))
+      throw std::invalid_argument("SSD scratch pool has no buffers");
 #ifdef _WIN32
     file =
         CreateFileW(path.c_str(), GENERIC_READ,
@@ -178,7 +284,8 @@ struct SsdBatchReader::Impl {
                                std::to_string(error));
     }
     try {
-      AllocateScratch(options.max_inflight_reads);
+      if (scratch_pool == nullptr)
+        AllocateScratch(options.max_inflight_reads);
       workers.reserve(options.io_threads);
       for (std::size_t i = 0; i < options.io_threads; ++i) {
         workers.emplace_back([this] { CompletionWorker(); });
@@ -209,7 +316,8 @@ struct SsdBatchReader::Impl {
       throw std::runtime_error("open(O_DIRECT) failed for SSD reader: " +
                                std::to_string(errno));
     try {
-      AllocateScratch(options.io_threads);
+      if (scratch_pool == nullptr)
+        AllocateScratch(options.io_threads);
       worker_queues.resize(options.io_threads);
       workers.reserve(options.io_threads);
       for (std::size_t i = 0; i < options.io_threads; ++i) {
@@ -322,6 +430,7 @@ struct SsdBatchReader::Impl {
       std::vector<SsdReadRequest> requests, bool prefetch,
       SsdBatchReader::BatchId* batch_id) {
     auto job = std::make_shared<BatchJob>();
+    job->prefetch = prefetch;
     job->requests = std::move(requests);
     auto future = job->completion.get_future();
     if (job->requests.empty()) {
@@ -418,8 +527,8 @@ struct SsdBatchReader::Impl {
       result.requests = std::move(job->requests);
       const auto start = std::chrono::steady_clock::now();
       try {
-        result.success =
-            ReadBatchInline(result.requests, &result.error, &result.bytes_read);
+        result.success = ReadBatchInline(result.requests, &result.error,
+                                         &result.bytes_read, !job->prefetch);
       } catch (const std::exception& error) {
         result.error = error.what();
         result.success = false;
@@ -435,7 +544,8 @@ struct SsdBatchReader::Impl {
   }
 
   bool ReadBatchInline(std::span<SsdReadRequest> requests,
-                       std::string* error_msg, std::uint64_t* bytes_read) {
+                       std::string* error_msg, std::uint64_t* bytes_read,
+                       bool demand) {
     if (error_msg != nullptr)
       error_msg->clear();
     if (bytes_read != nullptr)
@@ -453,9 +563,9 @@ struct SsdBatchReader::Impl {
       return true;
     batch_bytes_read = 0;
 #ifdef _WIN32
-    const bool success = ReadBatchWindows(requests, error_msg);
+    const bool success = ReadBatchWindows(requests, error_msg, demand);
 #else
-    const bool success = ReadBatchPosix(requests, error_msg);
+    const bool success = ReadBatchPosix(requests, error_msg, demand);
 #endif
     if (bytes_read != nullptr)
       *bytes_read = batch_bytes_read;
@@ -482,6 +592,7 @@ struct SsdBatchReader::Impl {
     std::size_t bytes{0};
     void* io_buffer{nullptr};
     bool uses_scratch{false};
+    std::size_t scratch_lease{std::numeric_limits<std::size_t>::max()};
   };
 
   void Complete(Operation* operation, DWORD bytes, DWORD error) {
@@ -514,6 +625,11 @@ struct SsdBatchReader::Impl {
         request.used_scratch = false;
       }
     }
+    if (scratch_pool != nullptr &&
+        operation->scratch_lease != std::numeric_limits<std::size_t>::max()) {
+      scratch_pool->Release(operation->scratch_lease);
+      operation->scratch_lease = std::numeric_limits<std::size_t>::max();
+    }
     {
       const std::lock_guard<std::mutex> lock(completion_mutex);
       ++completed;
@@ -539,7 +655,7 @@ struct SsdBatchReader::Impl {
   }
 
   bool ReadBatchWindows(std::span<SsdReadRequest> requests,
-                        std::string* error_msg) {
+                        std::string* error_msg, bool demand) {
     const auto order = SortedRequestIndices(requests);
     std::vector<ReadGroup> groups;
     groups.reserve(order.size());
@@ -573,7 +689,11 @@ struct SsdBatchReader::Impl {
       }
     }
 
-    const std::size_t wave_size = scratch_buffers.size();
+    const std::size_t wave_size =
+        scratch_pool != nullptr
+            ? std::min<std::size_t>(max_inflight_reads,
+                                    scratch_pool->buffer_count())
+            : scratch_buffers.size();
     for (std::size_t base = 0; base < groups.size(); base += wave_size) {
       const std::size_t count = std::min(wave_size, groups.size() - base);
       std::vector<Operation> operations(count);
@@ -591,9 +711,16 @@ struct SsdBatchReader::Impl {
         operation.uses_scratch =
             group.segments.size() != 1 ||
             requests[group.segments.front().request_index].used_scratch;
+        void* scratch = nullptr;
+        if (scratch_pool != nullptr) {
+          operation.scratch_lease = scratch_pool->Acquire(demand);
+          scratch = scratch_pool->Buffer(operation.scratch_lease);
+        } else {
+          scratch = scratch_buffers[lane];
+        }
         operation.io_buffer =
             operation.uses_scratch
-                ? scratch_buffers[lane]
+                ? scratch
                 : requests[group.segments.front().request_index].destination;
         operation.overlapped.Offset =
             static_cast<DWORD>(operation.file_offset & 0xffffffffULL);
@@ -633,6 +760,7 @@ struct SsdBatchReader::Impl {
     SsdReadRequest* request{nullptr};
     void* io_buffer{nullptr};
     bool uses_scratch{false};
+    std::size_t scratch_lease{std::numeric_limits<std::size_t>::max()};
   };
 
   void ReadWorker(std::size_t worker_index) {
@@ -691,6 +819,9 @@ struct SsdBatchReader::Impl {
         request.payload_offset = request.file_subpage_offset;
         request.used_scratch = false;
       }
+      if (scratch_pool != nullptr &&
+          job.scratch_lease != std::numeric_limits<std::size_t>::max())
+        scratch_pool->Release(job.scratch_lease);
       {
         const std::lock_guard<std::mutex> lock(queue_mutex);
         ++completed;
@@ -700,23 +831,36 @@ struct SsdBatchReader::Impl {
   }
 
   bool ReadBatchPosix(std::span<SsdReadRequest> requests,
-                      std::string* error_msg) {
+                      std::string* error_msg, bool demand) {
     const auto order = SortedRequestIndices(requests);
-    const std::size_t wave_size = workers.size();
+    const std::size_t wave_size =
+        scratch_pool != nullptr ? std::min({max_inflight_reads, workers.size(),
+                                            scratch_pool->buffer_count()})
+                                : workers.size();
     for (std::size_t base = 0; base < order.size(); base += wave_size) {
       const std::size_t count = std::min(wave_size, order.size() - base);
       {
         const std::lock_guard<std::mutex> lock(queue_mutex);
         completed = 0;
-        for (std::size_t lane = 0; lane < count; ++lane) {
-          auto& request = requests[order[base + lane]];
-          void* io_buffer = request.used_scratch ? scratch_buffers[lane]
-                                                 : request.destination;
-          worker_queues[lane].push_back(
-              {&request, io_buffer, request.used_scratch});
-        }
       }
-      work_ready.notify_all();
+      for (std::size_t lane = 0; lane < count; ++lane) {
+        auto& request = requests[order[base + lane]];
+        std::size_t lease = std::numeric_limits<std::size_t>::max();
+        void* scratch = nullptr;
+        if (scratch_pool != nullptr) {
+          lease = scratch_pool->Acquire(demand);
+          scratch = scratch_pool->Buffer(lease);
+        } else {
+          scratch = scratch_buffers[lane];
+        }
+        void* io_buffer = request.used_scratch ? scratch : request.destination;
+        {
+          const std::lock_guard<std::mutex> lock(queue_mutex);
+          worker_queues[lane].push_back(
+              {&request, io_buffer, request.used_scratch, lease});
+        }
+        work_ready.notify_one();
+      }
       {
         std::unique_lock<std::mutex> lock(queue_mutex);
         completion_ready.wait(lock, [&] { return completed == count; });
@@ -752,6 +896,8 @@ struct SsdBatchReader::Impl {
   std::vector<std::thread> workers;
   std::vector<void*> scratch_buffers;
   std::size_t scratch_capacity{0};
+  std::size_t max_inflight_reads{0};
+  std::shared_ptr<SsdScratchPool> scratch_pool;
 #ifdef _WIN32
   HANDLE file{INVALID_HANDLE_VALUE};
   HANDLE port{nullptr};

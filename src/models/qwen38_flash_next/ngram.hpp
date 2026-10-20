@@ -64,7 +64,7 @@ public:
   /// Starts a gather on the resident readers. The output must stay alive
   /// until WaitRead; only one gather may be outstanding on this table.
   [[nodiscard]] bool StartRead(std::span<const std::uint32_t> rows,
-                               std::span<float> out);
+                               std::span<float> out, bool prefill = false);
   [[nodiscard]] bool WaitRead();
 
   [[nodiscard]] std::uint32_t RowDim() const noexcept { return row_dim_; }
@@ -120,6 +120,7 @@ private:
   bool active_{false};
   bool failed_{false};
   bool stop_{false};
+  bool read_prefill_{false};
 };
 
 }  // namespace gufo::models::qwen38_flash_next

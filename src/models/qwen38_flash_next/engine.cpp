@@ -13,6 +13,7 @@
 #include <type_traits>
 
 #include "src/core/gguf_reader.hpp"
+#include "src/core/platform/device_memory.hpp"
 #include "src/core/platform/tuning.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/device_model.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/executor.hpp"
@@ -20,6 +21,8 @@
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
 #include "src/models/qwen38_flash_next/ngram.hpp"
 #include "src/models/qwen38_flash_next/weights.hpp"
+#include "src/storage/expert_cache_manager.hpp"
+#include "src/storage/memory_budget_planner.hpp"
 #include "src/storage/ssd_stats.hpp"
 
 namespace gufo::models::qwen38_flash_next {
@@ -155,8 +158,24 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
   if (!m->device_) {
     return nullptr;
   }
+  constexpr std::size_t kGiB = std::size_t{1024} * 1024 * 1024;
+  const long double requested_safety =
+      static_cast<long double>(options.memory_budget_gb) * kGiB * 0.05L;
+  const long double max_size =
+      static_cast<long double>(std::numeric_limits<std::size_t>::max());
+  const std::size_t memory_safety_margin_bytes =
+      options.memory_budget_gb <= 0.0 ? 0
+      : requested_safety >= max_size
+          ? std::numeric_limits<std::size_t>::max()
+          : std::max<std::size_t>(kGiB,
+                                  static_cast<std::size_t>(requested_safety));
   rocm::Executor::Options exec;
   exec.max_batch = m->PrefillCapacity();
+  exec.max_context = options.max_context;
+  if (options.memory_budget_gb > 0.0) {
+    if (const char* route_trace = std::getenv("GUFO_EXPERT_ROUTE_TRACE"))
+      exec.route_trace_path = route_trace;
+  }
   exec.streamed_experts = options.memory_budget_gb > 0.0;
   exec.max_logit_rows =
       m->mtp_weights_
@@ -199,6 +218,20 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
         m->device_->backbone_bytes() +
         (m->vision_ ? m->vision_->ResidentBytes() : 0);
     const std::size_t scratch_bytes = m->executor_->ScratchBytes();
+    std::size_t reader_scratch_bytes = 0;
+    try {
+      reader_scratch_bytes =
+          storage::ExpertCacheManager::SharedScratchBytes(m->device_->layers());
+    } catch (const std::exception& error) {
+      AssignError(error_msg, error.what());
+      return nullptr;
+    }
+    std::size_t wddm_free_bytes = 0;
+    std::size_t wddm_total_bytes = 0;
+    const bool has_wddm_available =
+        platform::DeviceMemoryInfo(&wddm_free_bytes, &wddm_total_bytes) ==
+        hipSuccess;
+    (void)wddm_total_bytes;
     storage::MemoryBudgetInputs inputs{
         .budget_gb = options.memory_budget_gb,
         .backbone_bytes = backbone_bytes,
@@ -206,6 +239,11 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
         .ple_shelf_bytes = m->ngram_ ? m->ngram_->CacheBytes() : 0,
         .kv_reserved_bytes = per_session * options.decode_concurrency,
         .scratch_bytes = scratch_bytes,
+        .reader_scratch_bytes = reader_scratch_bytes,
+        .continuation_cache_bytes = per_session * options.decode_concurrency,
+        .safety_margin_bytes = memory_safety_margin_bytes,
+        .wddm_available_bytes = wddm_free_bytes,
+        .has_wddm_available = has_wddm_available,
         .routed_expert_bytes = m->device_->routed_expert_bytes(),
     };
     storage::MemoryBudgetPlan plan;
@@ -213,8 +251,21 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
       return nullptr;
     if (!plan.fits_fixed) {
       AssignError(error_msg,
-                  "memory budget is smaller than fixed backbone, drafter, "
-                  "PLE, session, and scratch reservations");
+                  "memory budget cannot reserve the requested " +
+                      std::to_string(options.max_context) +
+                      "-token context, backbone, drafter, PLE, snapshot "
+                      "reserve, reader scratch, and safety margin; reduce "
+                      "--context (try 65536 or 32768) or increase "
+                      "--memory-budget-gb");
+      return nullptr;
+    }
+    if (plan.expert_cache_bytes == 0) {
+      AssignError(error_msg,
+                  "WDDM leaves no expert-cache headroom after reserving the "
+                  "requested " +
+                      std::to_string(options.max_context) +
+                      "-token context; reduce --context (try 65536 or 32768) "
+                      "or increase --memory-budget-gb");
       return nullptr;
     }
     m->memory_budget_ = plan;

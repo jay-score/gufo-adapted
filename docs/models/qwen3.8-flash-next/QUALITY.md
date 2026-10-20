@@ -16,6 +16,20 @@ plus the anchor. Long-form prompt-lookup acceptance and draft-cap tuning remain
 unqualified because the 40 GiB prompt-lookup session failed at HIP allocation;
 these trace checks are not full-logit/perplexity equivalence evidence.
 
+October 20 Phase 6.1 Windows/gfx1151 check: the 8- and 64-output traces remain
+`434d749a…` and `c71e47bb…`. A raw 1,602-token prompt through Desk/Room prefill
+produces the same eight-token hash as the recorded release control. A separate
+HTTP request succeeds with `--context 32768`, MTP and a 32 GiB budget. The
+masked-pass GPU operator fixture is bit-identical to the complete assignment
+matrix for gate/up and down rows, and its single post-pass epilogue is identical.
+The final 64 complete FP32 vocabulary rows for that 1,602-token prompt were also
+captured through the existing streamed path with a 20-slot cache (Desk disabled)
+and the Desk/Room path with 157 slots. All 15,892,480 values match byte for
+byte; NLL over the 63 in-prompt labels is `0.47005817058939048` and perplexity is
+`1.6000872685296976` in both runs. This is a same-build control of the new
+streaming/Desk arithmetic; a preserved pre-change full-logit artifact is not
+available, so historical full-logit equivalence is not established.
+
 | Check | Result |
 | --- | --- |
 | MTP versus scalar CPU formulas, eight text/image states | Fusion/attention relative RMS <0.0008 (limit 0.002); full-width normalization, split projections, recursive carry and full Q8 head checked |
