@@ -540,16 +540,41 @@ function Get-GufoInstallerTag {
   return ($script:GufoInstallerTag -replace "^Windows-Gufo-", "")
 }
 
+function Test-GufoDevBuild {
+  return (-not $script:GufoInstallerTag -or $script:GufoInstallerTag -match "^@")
+}
+
 function Get-GufoDefaultInstallDir {
-  # Manage a checkout when the installer runs from one; otherwise use the profile.
-  if ($PSScriptRoot) {
-    $candidate = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
-    if ((Test-Path -LiteralPath (Join-Path $candidate "vcpkg.json")) -and
-      (Test-Path -LiteralPath (Join-Path $candidate "setup-windows.bat"))) {
-      return $candidate
-    }
-  }
   return (Join-Path $env:USERPROFILE "Gufo")
+}
+
+function Get-GufoRunningCheckout {
+  # The checkout this installer runs from (tools\installer inside it), if any.
+  if (-not $PSScriptRoot) { return "" }
+  $candidate = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+  if (Test-GufoSourceFolder $candidate) { return $candidate }
+  return ""
+}
+
+function Test-GufoSamePath {
+  param([string]$Left, [string]$Right)
+  if (-not $Left -or -not $Right) { return $false }
+  try {
+    return ([IO.Path]::GetFullPath($Left).TrimEnd([char]92) -eq [IO.Path]::GetFullPath($Right).TrimEnd([char]92))
+  } catch {
+    return $false
+  }
+}
+
+function Get-GufoInstallSourceText {
+  param([string]$Source)
+  switch ($Source) {
+    "argument" { return "set by -InstallDir" }
+    "checkout" { return "the checkout running this installer; not saved" }
+    "saved" { return "saved from a previous run" }
+    "chosen" { return "chosen in Advanced" }
+  }
+  return "default folder"
 }
 
 function Get-GufoDefaultJobs {
@@ -672,6 +697,10 @@ function New-GufoState {
     Machine = $null
     Checkout = $null
     InstallDir = Get-GufoDefaultInstallDir
+    InstallSource = "default"
+    InstallNote = ""
+    SavedInstallDir = ""
+    LauncherDir = ""
     DepsDir = Join-Path $settingsDir "dependencies"
     SettingsDir = $settingsDir
     Jobs = Get-GufoDefaultJobs
@@ -698,22 +727,90 @@ function New-GufoState {
     FetchedDir = ""
   }
   Load-GufoOptions $state
-  if ($InstallDir) { $state.InstallDir = $InstallDir }
+  Resolve-GufoInstallDir $state $InstallDir
   if ($Jobs -gt 0) { $state.Jobs = $Jobs }
   if ($Rocm) { $state.Rocm = $Rocm }
   if ($Vcpkg) { $state.Vcpkg = $Vcpkg }
   if ($PSBoundParameters.ContainsKey("Shortcut")) { $state.Shortcut = $Shortcut }
   $state.Checkout = Get-GufoCheckoutState $state.InstallDir
+  $state.LauncherDir = Get-GufoLauncherCheckout $state
   return $state
+}
+
+function Resolve-GufoInstallDir {
+  # -InstallDir wins, then the checkout running this installer, then the saved folder.
+  param($State, [string]$Requested = "")
+  $State.InstallNote = ""
+  $saved = $State.SavedInstallDir
+  $running = Get-GufoRunningCheckout
+  if ($Requested) {
+    $State.InstallDir = $Requested
+    $State.InstallSource = "argument"
+  } elseif ($running) {
+    $State.InstallDir = $running
+    $State.InstallSource = "checkout"
+  } elseif ($saved -and (Test-GufoSourceFolder $saved)) {
+    $State.InstallDir = $saved
+    $State.InstallSource = "saved"
+  } else {
+    $State.InstallDir = Get-GufoDefaultInstallDir
+    $State.InstallSource = "default"
+    if ($saved -and -not (Test-GufoSamePath $saved $State.InstallDir)) {
+      $State.InstallNote = "The saved folder $saved has no Gufo checkout, so the default folder is used."
+    }
+  }
+}
+
+function Get-GufoOptionsPath {
+  param($State)
+  # Development copies keep their own choices so they never steer a release installer.
+  $name = "installer.json"
+  if (Test-GufoDevBuild) { $name = "installer.dev.json" }
+  return (Join-Path $State.SettingsDir $name)
+}
+
+function Get-GufoLauncherCheckout {
+  # The checkout whose engine the browser launcher starts, if it is one.
+  param($State)
+  $path = Join-Path $State.SettingsDir "launcher.json"
+  if (-not (Test-Path -LiteralPath $path)) { return "" }
+  try {
+    $saved = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    $executable = [string]$saved.launcher.executable
+    if (-not $executable) { $executable = [string]$saved.executable }
+    if (-not $executable) { return "" }
+    # The engine normally sits at build\<preset>\gufo.exe inside the checkout.
+    $dir = Split-Path -Parent ([IO.Path]::GetFullPath($executable))
+    for ($depth = 0; $dir -and $depth -lt 4; $depth++) {
+      if (Test-GufoSourceFolder $dir) { return $dir }
+      $dir = Split-Path -Parent $dir
+    }
+  } catch {
+  }
+  return ""
+}
+
+function Test-GufoLauncherElsewhere {
+  param($State)
+  return ($State.LauncherDir -and -not (Test-GufoSamePath $State.LauncherDir $State.InstallDir))
+}
+
+function Set-GufoInstallDir {
+  # A folder the user picked; it is saved for the next run.
+  param($State, [string]$Dir)
+  $State.InstallDir = $Dir
+  $State.InstallSource = "chosen"
+  $State.InstallNote = ""
+  Update-GufoCheckout $State
 }
 
 function Load-GufoOptions {
   param($State)
-  $path = Join-Path $State.SettingsDir "installer.json"
+  $path = Get-GufoOptionsPath $State
   if (-not (Test-Path -LiteralPath $path)) { return }
   try {
     $saved = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-    if ($saved.installDir) { $State.InstallDir = [string]$saved.installDir }
+    if ($saved.installDir) { $State.SavedInstallDir = [string]$saved.installDir }
     if ($saved.jobs) { $State.Jobs = [int]$saved.jobs }
     if ($saved.rocm) { $State.Rocm = [string]$saved.rocm }
     if ($saved.vcpkg) { $State.Vcpkg = [string]$saved.vcpkg }
@@ -726,14 +823,23 @@ function Save-GufoOptions {
   param($State)
   try {
     if (-not (Test-Path -LiteralPath $State.SettingsDir)) { New-Item -ItemType Directory -Force -Path $State.SettingsDir | Out-Null }
+    # Only a folder someone chose, or one that now holds a checkout, is remembered.
+    # The checkout running this installer is never adopted; the earlier choice stays.
+    $installDir = ""
+    if ($State.InstallSource -eq "checkout") {
+      $installDir = $State.SavedInstallDir
+    } elseif ($State.InstallSource -ne "default" -or (Test-GufoSourceFolder $State.InstallDir)) {
+      $installDir = $State.InstallDir
+    }
+    $State.SavedInstallDir = $installDir
     $data = [ordered]@{
-      installDir = $State.InstallDir
+      installDir = $installDir
       jobs = $State.Jobs
       rocm = $State.Rocm
       vcpkg = $State.Vcpkg
       shortcut = $State.Shortcut
     }
-    [IO.File]::WriteAllText((Join-Path $State.SettingsDir "installer.json"), ($data | ConvertTo-Json))
+    [IO.File]::WriteAllText((Get-GufoOptionsPath $State), ($data | ConvertTo-Json))
   } catch {
   }
 }
@@ -753,6 +859,7 @@ function Test-GufoNoticeActive {
 function Update-GufoCheckout {
   param($State)
   $State.Checkout = Get-GufoCheckoutState $State.InstallDir
+  $State.LauncherDir = Get-GufoLauncherCheckout $State
   if ($State.Screen -eq "menu") { Update-GufoMenu $State }
 }
 
@@ -775,6 +882,9 @@ function Get-GufoMenuItems {
   }
   if ($State.Checkout.Exists -or (Test-Path -LiteralPath $State.DepsDir) -or (Test-Path -LiteralPath (Join-Path $State.SettingsDir "launcher.json"))) {
     $items.Add(@{ Key = "uninstall"; Label = "Uninstall"; Hint = "remove the checkout, build, and settings" })
+  }
+  if (Test-GufoLauncherElsewhere $State) {
+    $items.Add(@{ Key = "uselauncher"; Label = "Use launcher folder"; Hint = "manage $($State.LauncherDir) instead" })
   }
   $items.Add(@{ Key = "advanced"; Label = "Advanced"; Hint = "install folder, build jobs, GPU and vcpkg paths" })
   $items.Add(@{ Key = "quit"; Label = "Quit"; Hint = "" })
@@ -860,7 +970,7 @@ function Get-GufoUninstallItems {
     })
   }
   $settings = @()
-  foreach ($name in @("launcher.json", "installer.json")) {
+  foreach ($name in @("launcher.json", "installer.json", "installer.dev.json")) {
     $path = Join-Path $State.SettingsDir $name
     if (Test-Path -LiteralPath $path) { $settings += $path }
   }
@@ -955,6 +1065,11 @@ function Get-GufoMenuScreen {
     $installRole = "warn"
   }
   $rows.Add((Get-GufoFactRow "Install" $installValue $scheme $installRole))
+  $rows.Add((Get-GufoFactRow "" "$(Get-GufoInstallSourceText $State.InstallSource)  ·  F changes it" $scheme "muted"))
+  if ($State.InstallNote) { $rows.Add((Get-GufoFactRow "" $State.InstallNote $scheme "warn")) }
+  if (Test-GufoLauncherElsewhere $State) {
+    $rows.Add((Get-GufoFactRow "Launcher" "starts the engine in $($State.LauncherDir)" $scheme "warn"))
+  }
   if ($State.Checkout.Valid) {
     if ($State.Checkout.EngineExists) {
       $rows.Add((Get-GufoFactRow "Engine" "build\windows-gpu\gufo.exe  ·  built $(Format-GufoAge $State.Checkout.Built)" $scheme))
@@ -980,7 +1095,7 @@ function Get-GufoMenuScreen {
     $rows.Add((Get-GufoMenuRow -Item $item -Selected ($index -eq $State.MenuIndex) -Width $inner -Scheme $scheme))
     $index++
   }
-  return Format-GufoBox -Scheme $scheme -Width $State.Width -Title "Gufo Setup" -Right $State.Tag -Rows $rows.ToArray() -Footer "  $($scheme.Glyphs.UpDown) move   Enter select   A advanced   R rescan   ? keys   Q quit"
+  return Format-GufoBox -Scheme $scheme -Width $State.Width -Title "Gufo Setup" -Right $State.Tag -Rows $rows.ToArray() -Footer "  $($scheme.Glyphs.UpDown) move   Enter select   F folder   A advanced   ? keys   Q quit"
 }
 
 function Get-GufoAdvancedScreen {
@@ -1347,6 +1462,7 @@ function Get-GufoHelpScreen {
     @{ Key = "Space"; Text = "toggle a checkbox in Uninstall" },
     @{ Key = "C"; Text = "stop a running build (press twice)" },
     @{ Key = "L / O"; Text = "show the full log / open it in Notepad" },
+    @{ Key = "F"; Text = "change the install folder" },
     @{ Key = "A / R"; Text = "advanced options / rescan this PC" },
     @{ Key = "Q"; Text = "quit without changing anything" }
   )
@@ -2169,6 +2285,12 @@ function Invoke-GufoMenuAction {
     "update" { Start-GufoUpdateAction $State }
     "repair" { Start-GufoRunSetupAction $State "repair" }
     "uninstall" { Start-GufoUninstallAction $State }
+    "uselauncher" {
+      $dir = $State.LauncherDir
+      Set-GufoInstallDir $State $dir
+      Save-GufoOptions $State
+      Set-GufoNotice $State "Install folder set to $dir."
+    }
   }
 }
 
@@ -2240,6 +2362,13 @@ function Open-GufoAdvanced {
   param($State, [string]$From)
   $State.AdvancedReturn = $From
   Set-GufoScreen $State "advanced"
+}
+
+function Open-GufoInstallEdit {
+  param($State)
+  Open-GufoAdvanced $State "menu"
+  $State.AdvancedIndex = 0
+  $State.Edit = @{ Key = "install"; Buffer = [string]$State.InstallDir }
 }
 
 function Get-GufoPlanKey {
@@ -2357,8 +2486,7 @@ function Commit-GufoEdit {
       if (-not $value) { Set-GufoNotice $State "Enter a folder."; return }
       $errorText = Test-GufoInstallDir $value
       if ($errorText) { Set-GufoNotice $State $errorText; return }
-      $State.InstallDir = $value
-      Update-GufoCheckout $State
+      Set-GufoInstallDir $State $value
     }
     "jobs" {
       if (-not $value) { $State.Edit = $null; return }
@@ -2404,6 +2532,7 @@ function Invoke-GufoKey {
         "Down" { $State.MenuIndex = [Math]::Min($State.MenuItems.Count - 1, $State.MenuIndex + 1) }
         "Enter" { Invoke-GufoMenuAction $State }
         "Char:a" { Open-GufoAdvanced $State "menu" }
+        "Char:f" { Open-GufoInstallEdit $State }
         "Char:r" { Update-GufoCheckout $State; Set-GufoNotice $State "Rescanned this PC." }
         "Char:?" { Set-GufoScreen $State "help" }
         "Char:q" { $State.Quit = $true }
@@ -2564,7 +2693,11 @@ function Invoke-GufoPlain {
   param($State)
   Write-Host ""
   Write-Host "Gufo Setup $($State.Tag) - Windows source installer"
-  Write-Host "Folder   : $($State.InstallDir)"
+  Write-Host "Folder   : $($State.InstallDir) ($(Get-GufoInstallSourceText $State.InstallSource))"
+  if ($State.InstallNote) { Write-Host "Note     : $($State.InstallNote)" -ForegroundColor Yellow }
+  if (Test-GufoLauncherElsewhere $State) {
+    Write-Host "Launcher : starts the engine in $($State.LauncherDir); pass -InstallDir to manage it" -ForegroundColor Yellow
+  }
   Write-Host "Detected : $($State.Machine.Cpu)"
   Write-Host "Windows  : $($State.Machine.Os) ($($State.Machine.Build)), $($State.Machine.RamGiB) GiB RAM"
   if ($State.Checkout.Valid) {

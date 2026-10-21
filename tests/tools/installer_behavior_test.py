@@ -167,7 +167,7 @@ Assert ($removed.Count -eq 0) 'Switching folders deleted models in the abandoned
     def test_explicit_shortcut_choice_overrides_saved_preference(self):
         self.run_ps(r'''
 New-Item -ItemType Directory -Force $state.SettingsDir | Out-Null
-$path = Join-Path $state.SettingsDir 'installer.json'
+$path = Get-GufoOptionsPath $state
 [IO.File]::WriteAllText($path, '{"shortcut":true}')
 $explicit = New-GufoState -Shortcut:$false -InstallDir $state.InstallDir
 Assert (-not $explicit.Shortcut) 'Explicit NoShortcut was overridden'
@@ -185,6 +185,96 @@ function Invoke-GufoPlain {
   return 0
 }
 Assert ((Invoke-GufoInstaller) -eq 0) 'Installer failed'
+''')
+
+    def make_source(self, name):
+        folder = self.directory / name
+        folder.mkdir()
+        for marker in ("vcpkg.json", "setup-windows.bat"):
+            shutil.copy2(self.checkout / marker, folder / marker)
+        return folder
+
+    # Folder tests start outside any checkout, with an empty profile folder.
+    FOLDER_PRELUDE = r'''
+$env:USERPROFILE = $env:GUFO_CASE
+$running = ''
+function Get-GufoRunningCheckout { return $script:running }
+New-Item -ItemType Directory -Force $state.SettingsDir | Out-Null
+$path = Get-GufoOptionsPath $state
+function Save-Folder([string]$Dir) { [IO.File]::WriteAllText($path, (@{ installDir = $Dir } | ConvertTo-Json)) }
+function Read-Folder { return [string](Get-Content -LiteralPath $path -Raw | ConvertFrom-Json).installDir }
+'''
+
+    def test_folder_precedence_and_running_checkout_is_never_saved(self):
+        self.make_source("saved")
+        self.run_ps(self.FOLDER_PRELUDE + r'''
+$saved = Join-Path $env:GUFO_CASE 'saved'
+Save-Folder $saved
+$release = New-GufoState
+Assert ($release.InstallSource -eq 'saved') "Expected the saved folder, got $($release.InstallSource)"
+Assert (Test-GufoSamePath $release.InstallDir $saved) 'Saved folder was not used'
+$running = $env:GUFO_CHECKOUT
+$dev = New-GufoState
+Assert ($dev.InstallSource -eq 'checkout') 'The running checkout did not win over the saved folder'
+Assert (Test-GufoSamePath $dev.InstallDir $env:GUFO_CHECKOUT) 'Running checkout was not used'
+Save-GufoOptions $dev
+Assert (Test-GufoSamePath (Read-Folder) $saved) 'The running checkout replaced the saved folder'
+$explicit = New-GufoState -InstallDir $saved
+Assert ($explicit.InstallSource -eq 'argument') 'InstallDir did not win over the running checkout'
+$running = ''
+$chosen = New-GufoState
+Set-GufoInstallDir $chosen $env:GUFO_CHECKOUT
+Save-GufoOptions $chosen
+Assert (Test-GufoSamePath (Read-Folder) $env:GUFO_CHECKOUT) 'A folder chosen in Advanced was not saved'
+''')
+
+    def test_saved_folder_without_checkout_falls_back_to_default(self):
+        self.run_ps(self.FOLDER_PRELUDE + r'''
+Save-Folder (Join-Path $env:GUFO_CASE 'deleted-worktree')
+$fresh = New-GufoState
+Assert ($fresh.InstallSource -eq 'default') 'A folder without a checkout was still used'
+Assert (Test-GufoSamePath $fresh.InstallDir (Join-Path $env:GUFO_CASE 'Gufo')) 'Default folder was not used'
+Assert ($fresh.InstallNote -match 'deleted-worktree') 'The stale folder was not reported'
+Save-GufoOptions $fresh
+Assert (-not (Read-Folder)) 'An empty default folder was saved'
+''')
+
+    def test_dev_and_release_builds_keep_separate_settings(self):
+        self.make_source("saved")
+        self.run_ps(self.FOLDER_PRELUDE + r'''
+Assert ((Split-Path -Leaf $path) -eq 'installer.dev.json') 'A development copy used the release settings'
+$script:GufoInstallerTag = 'Windows-Gufo-2026.10.26'
+$releasePath = Get-GufoOptionsPath $state
+Assert ((Split-Path -Leaf $releasePath) -eq 'installer.json') 'A release build did not use installer.json'
+$script:GufoInstallerTag = '@TAG@'
+$dev = New-GufoState -InstallDir (Join-Path $env:GUFO_CASE 'saved')
+Save-GufoOptions $dev
+Assert (-not (Test-Path -LiteralPath $releasePath)) 'A development run wrote the release settings'
+$settings = @(Get-GufoUninstallItems $dev | Where-Object { $_.Key -eq 'settings' })[0]
+Assert (@($settings.Files) -contains $path) 'Uninstall missed the development settings'
+''')
+
+    def test_launcher_in_another_checkout_is_offered(self):
+        self.make_source("saved")
+        self.run_ps(self.FOLDER_PRELUDE + r'''
+Save-Folder (Join-Path $env:GUFO_CASE 'saved')
+$engine = Join-Path $env:GUFO_CHECKOUT 'build\windows-gpu\gufo.exe'
+$launcher = @{ version = 2; launcher = @{ executable = $engine } } | ConvertTo-Json
+[IO.File]::WriteAllText((Join-Path $state.SettingsDir 'launcher.json'), $launcher)
+$menu = New-GufoState
+Assert (Test-GufoSamePath $menu.LauncherDir $env:GUFO_CHECKOUT) 'Launcher checkout was not found'
+Assert (Test-GufoLauncherElsewhere $menu) 'Launcher mismatch was not detected'
+$menu.Screen = 'menu'
+Update-GufoMenu $menu
+$keys = @($menu.MenuItems | ForEach-Object { $_.Key })
+$menu.MenuIndex = [array]::IndexOf($keys, 'uselauncher')
+Assert ($menu.MenuIndex -ge 0) 'The menu did not offer the launcher folder'
+Invoke-GufoMenuAction $menu
+Assert (Test-GufoSamePath $menu.InstallDir $env:GUFO_CHECKOUT) 'Switching to the launcher folder failed'
+Assert (-not (Test-GufoLauncherElsewhere $menu)) 'The mismatch remained after switching'
+Assert (Test-GufoSamePath (Read-Folder) $env:GUFO_CHECKOUT) 'The launcher folder was not saved'
+Invoke-GufoKey $menu 'Char:f'
+Assert ($menu.Screen -eq 'advanced' -and $menu.Edit.Key -eq 'install') 'F did not open the install folder editor'
 ''')
 
 

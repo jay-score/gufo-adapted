@@ -21,10 +21,15 @@ and their implementation/regression checks.
 is the guided installer distributed with each release. It fetches
 `windows-main` from `thomas9120/gufo-windows`, renders the plan reported by
 `tools/windows/setup.ps1`, runs the guided setup with the chosen build jobs, and
-then offers Update, Repair, and Uninstall. The default install folder is
-`%USERPROFILE%\Gufo`, or the checkout containing the installer when it runs from
-one; shared dependencies stay under `%LOCALAPPDATA%\Gufo\dependencies` and logs
-under `%LOCALAPPDATA%\Gufo\logs`.
+then offers Update, Repair, and Uninstall. The install folder is, in order:
+`-InstallDir`; the checkout containing the installer when it runs from one; the
+folder saved by an earlier run, while it still holds a Gufo checkout; otherwise
+`%USERPROFILE%\Gufo`. The menu shows which of these applied, and **F** changes
+it. A checkout picked only because the installer ran from it is never saved, so
+running a development copy does not redirect later release installs. When the
+browser launcher starts an engine from a different checkout, the menu says so
+and offers to switch to it. Shared dependencies stay under
+`%LOCALAPPDATA%\Gufo\dependencies` and logs under `%LOCALAPPDATA%\Gufo\logs`.
 
 Release assets pair the launcher with `Gufo-Setup.ps1`; the launcher verifies the
 script's SHA-256 before running it. Running the launcher from a checkout uses
@@ -48,7 +53,8 @@ prompt. Command-line use:
 `-InstallDir`, `-Jobs`, `-Rocm`, `-Vcpkg`, and `-NoShortcut` match the Advanced
 screen; `-ColorMode` and `-AsciiGlyphs` adjust the display for terminals with
 limited colour or font support. Advanced settings persist in
-`%LOCALAPPDATA%\Gufo\installer.json`. With arguments, the launcher never waits
+`%LOCALAPPDATA%\Gufo\installer.json`; an unreleased installer from a checkout
+uses `installer.dev.json` instead. With arguments, the launcher never waits
 at a pause prompt, and exit code 2 means the run was declined or cancelled.
 
 Uninstall does not pre-select an install folder that has uncommitted or
