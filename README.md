@@ -30,37 +30,45 @@ Install the AMD graphics driver. For Flash-Next at 256K context, set **96 GB
 dedicated GPU memory** in AMD Software → Performance → Tuning → Variable
 Graphics Memory. Setup checks the computer but does not change these settings.
 
-1. Install [Git for Windows](https://git-scm.com/downloads/win), then clone this fork:
+1. Download **[Gufo-Setup.cmd](https://github.com/thomas9120/gufo-windows/releases/latest/download/Gufo-Setup.cmd)**
+   from the latest release and double-click it. If Windows SmartScreen warns
+   about the unsigned launcher, choose **More info**, then **Run anyway**.
 
-   ```powershell
-   git clone --branch windows-main https://github.com/thomas9120/gufo-adapted.git
-   ```
+2. Choose **Install Gufo** in the installer. It clones `windows-main` into
+   `%USERPROFILE%\Gufo`, shows the setup plan from `tools\windows\setup.ps1`,
+   installs missing prerequisites, builds Gufo, verifies GPU startup, and creates
+   the **Gufo** desktop shortcut plus a **Gufo Setup** Start Menu entry. Allow the
+   installers to finish; the first setup needs substantial downloads, disk space,
+   and compilation time. Interrupting is safe: completed downloads and build
+   steps are reused when you run it again.
 
-2. Open the cloned `gufo-adapted` folder and double-click **[setup-windows.bat](setup-windows.bat)**.
-   Review the plan and enter `y`. Setup reuses existing tools, installs missing
-   prerequisites, builds Gufo, and opens the GUI. Allow the installers to finish;
-   the first setup needs substantial downloads, disk space, and compilation time.
-   If interrupted, run the same file again to resume completed work.
+   The installer keeps the same options as the source setup and adds
+   **Advanced** (folder, build jobs, custom GPU/vcpkg paths) plus **Update**,
+   **Repair**, and **Uninstall** for an existing install. Logs are written to
+   `%LOCALAPPDATA%\Gufo\logs`.
 
-3. In the GUI, choose your model and optional MTP/projector files, adjust settings,
-   click **Save**, then **Start**. For Flash-Next vision, use the compatible
-   **BF16** projector. See [model download instructions](docs/models/qwen3.8-flash-next/README.md#load-and-run)
+3. Double-click the **Gufo** desktop shortcut, or **Launch launcher** in the
+   installer. In the GUI, choose your model and optional MTP/projector files,
+   adjust settings, click **Save**, then **Start**. For Flash-Next vision, use
+   the compatible **BF16** projector. See [model download instructions](docs/models/qwen3.8-flash-next/README.md#load-and-run)
    if you do not already have the files. Connect your chat client to
    **`http://127.0.0.1:8080/v1`** with the model name shown in the GUI (`gufo` by default).
 
-For subsequent launches, double-click **[launch-gui.bat](launch-gui.bat)** or a
-desktop shortcut to it. The [GUI](tools/gui/README.md) opens at
-`http://127.0.0.1:8090`; opening it does not load a model. Use **Stop** to unload
-Gufo or **Exit** to close both processes.
+The [GUI](tools/gui/README.md) opens at `http://127.0.0.1:8090`; opening it does
+not load a model. Use **Stop** to unload Gufo or **Exit** to close both processes.
 
-To update this checkout from GitHub and rebuild `build\windows-gpu\gufo.exe`, use
-**Exit** in the GUI, then double-click **[update-windows.bat](update-windows.bat)**.
-It fast-forwards `windows-main` from `thomas9120/gufo-adapted` and reuses the
-existing build tools. Commit, stash, or move local changes and untracked files
-before updating.
+To update an install, open **Gufo Setup** from the Start Menu and choose
+**Update** (it fast-forwards `windows-main` and rebuilds
+`build\windows-gpu\gufo.exe`), or run
+**[update-windows.bat](update-windows.bat)** in the install folder. Commit,
+stash, or move local changes and untracked files before updating.
 
-See [guided setup details](docs/WINDOWS.md#prerequisites-and-build) for logs, preview mode,
-and custom dependency paths, or use the [manual build instructions](docs/WINDOWS.md#prerequisites-and-build).
+For a manual source build instead, install
+[Git for Windows](https://git-scm.com/downloads/win), clone
+`https://github.com/thomas9120/gufo-windows.git` on branch `windows-main`, and run
+**[setup-windows.bat](setup-windows.bat)**. See
+[guided setup details](docs/WINDOWS.md#windows-installer) for installer flags,
+logs, preview mode, and custom dependency paths.
 
 ## Linux quickstart
 
