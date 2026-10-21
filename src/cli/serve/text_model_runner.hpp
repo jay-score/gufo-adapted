@@ -126,6 +126,9 @@ struct TextRunnerCapabilities {
   /// A completed prefill step leaves a consistent state, so a cancelled
   /// request can keep it as a live prefix for a superseding request.
   bool partial_prefill_retention{false};
+  /// Interrupted prefill rolls back to its entry frontier without consuming
+  /// input, so cancellation need not wait for the whole pass.
+  bool prefill_rollback{false};
 };
 
 /// Model-owned compatibility identity for restart-safe snapshots.
@@ -178,6 +181,7 @@ struct TextPrefillStep {
   std::size_t consumed_tokens{0};
   bool decode_ready{false};
   double checkpoint_ms{0};
+  bool interrupted{false};
 };
 
 /// Hashed n-gram embedding rows a request gathered. Each row was copied from
@@ -388,6 +392,11 @@ public:
   [[nodiscard]] virtual std::unique_ptr<TextRunnerState> BindComponentState(
       cache::Adapter&, cache::Slot&) const;
   virtual void ReconcileComponentState(TextRunnerState&, std::size_t) const;
+  /// Whether restored component state can select its next token. A boundary
+  /// captured between prefill passes cannot, so it serves only longer prompts.
+  [[nodiscard]] virtual bool HasDecodeFrontier(const TextRunnerState&) const {
+    return true;
+  }
 
   /// Optional first-token preview without advancing model state. The caller
   /// supplies a copy of the sampler; normal decoding must reproduce the token.

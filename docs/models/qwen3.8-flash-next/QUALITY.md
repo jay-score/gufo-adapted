@@ -1,5 +1,20 @@
 # Qwen3.8 Flash-Next quality
 
+## Windows sync, October 21, 2026
+
+PR #699 introduced a Windows/TheRock first-request MTP decode regression and
+is explicitly reverted, while its upstream ancestry is preserved. Do not
+reapply it unchanged. The remaining sync retains #692, #540 and #690, together
+with the Windows compatibility changes. The initial full import passes the
+independent attention/projection/expert/snapshot and sampled-verification
+checks, AR/MTP continuation probes and long-context/deep-cache correctness;
+that does not qualify its cold-start timing. Final post-revert checks and
+remaining limits are recorded in the [sync log](../../WINDOWS-UPSTREAM-SYNC.md).
+The extra scalar MTP audit fails the image head-mixer tolerance on both the
+candidate and the exact Windows base with identical errors (relative RMS
+0.0000695 versus limit 0.00005). This inherited numerical qualification gap
+remains open; the tolerance is unchanged and no oracle pass is claimed.
+
 **Windows n-gram I/O, October 20:** restore the Windows-only cached overlapped
 file open that the upstream forward-port dropped. Linux retains direct I/O.
 The existing `qwen38_flash_next.ngram` check passes independent hash fixtures,

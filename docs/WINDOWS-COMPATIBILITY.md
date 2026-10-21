@@ -5,6 +5,8 @@ Review changed implementations and new callers even when Git merges cleanly.
 Record the upstream/candidate SHAs, checks run and any unqualified cases in the
 sync review. Build commands and qualification limits live in
 [Windows status](WINDOWS.md); Linux behavior and checks must remain intact.
+Record imported PRs, revision identities and outcomes in the
+[upstream sync log](WINDOWS-UPSTREAM-SYNC.md), following its repeatable procedure.
 
 - [ ] **Cached concurrent n-gram reads.** Flash-Next on Windows reopens the
   bound GGUF descriptor with `O_CONCURRENT_RANDOM`: cached, overlapped random
@@ -45,7 +47,8 @@ sync review. Build commands and qualification limits live in
   [`transfer_pool.cpp`](../src/core/hip/transfer_pool.cpp) and
   [`snapshot_transfer.hpp`](../src/core/hip/snapshot_transfer.hpp).
   Regression: [`win32_pinned_transfer_test`](../tests/platform/win32_pinned_transfer_test.cpp)
-  checks flags, accounting, ownership, concurrency and real H2D/D2H copies.
+  checks registered backing mappings, coherent staging flags, accounting,
+  ownership, concurrency, bound execution-stream lifetime and real H2D/D2H copies.
   For snapshot changes, also run the AR/MTP cross-slot round-trip
   [continuation probe](WINDOWS.md#windows-pinned-backing-and-transfers).
   Requires Windows HIP hardware; HIP fault injection and physical memory

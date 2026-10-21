@@ -305,8 +305,10 @@ packaging is a separate follow-up if requested.
 Keep this integration branch descended from official history. Update it through
 ordinary merges from `official/main`, whose URL is
 `https://github.com/gufo-org/gufo.git`; this repository's remote named `upstream`
-points to a different fork. Retain complete official updates rather than
-continuing the old branch's selective fix-import workflow. Use an isolated
+points to a different fork. Retain complete official ancestry. Apply the
+[Windows acceptance policy](../WINDOWS-UPSTREAM-SYNC.md#windows-acceptance-policy)
+to skip or explicitly revert PRs that introduce Windows regressions, and
+document their evidence and reintroduction requirements. Use an isolated
 candidate branch for each update, run the bounded Windows/Linux gates, then
 merge the verified candidate into the maintained branch. Do not routinely
 rebase a shared branch or rewrite its published history.
@@ -314,6 +316,13 @@ rebase a shared branch or rewrite its published history.
 Use the [Windows compatibility contracts](../WINDOWS-COMPATIBILITY.md) as the
 review checklist for each sync. They identify the maintained OS boundaries,
 their regression checks, and the local GPU/model gates beyond hosted CPU CI.
+Append imported PRs and the validation record to the
+[upstream sync log](../WINDOWS-UPSTREAM-SYNC.md); its procedure records exact
+merge identities and distinguishes import from platform qualification. Read its
+known regressions before accepting a sync, and preserve explicit compatibility
+reverts until their reintroduction requirements pass. In particular, #699 is
+deferred for a Windows first-request MTP decode regression; its presence in
+upstream ancestry does not mean its code should be reapplied.
 
 Record the official base SHA, imported compatibility source SHAs, and the small
 set of modified upstream call sites. At each update, inspect
