@@ -6,6 +6,7 @@
 
 Gufo is a vertical local inference engine specifically built and optimized for the AMD Strix Halo hardware:
 Ryzen AI MAX+ 395 systems with Radeon 8060S (`gfx1151`), up to 128 GiB of unified memory. This fork is specifically for adding Windows support for Gufo.
+I intend to keep this fork up to date as best I can with the official Gufo repository.
 
 Models tested and confirmed fully functional on this fork:
 
