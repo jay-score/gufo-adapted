@@ -5,6 +5,36 @@ Windows integration branch. This log starts after the October 2026 forward-port;
 it is not a retroactive inventory of the old fork's selective imports.
 An imported PR is not automatically qualified on Windows.
 
+## Windows acceptance policy
+
+This is a Windows-specific Gufo port. Preserve Windows compatibility,
+correctness, stability and performance when accepting upstream changes.
+Upstream inclusion or passing Linux checks does not override a Windows
+regression.
+
+- Check the known-regression entries before every sync. Skip or defer the
+  code from PRs with confirmed Windows regressions until a fix passes the
+  affected Windows checks. A focused compatibility fix may be retained with
+  the PR when it is validated and documented.
+- Preserve official ancestry: normally merge the recorded upstream head,
+  then explicitly revert the regressing PR on the candidate. Record it as
+  **reverted/deferred**, rather than imported and validated. If dependencies
+  prevent a safe isolated revert, defer the dependent changes or the candidate
+  until the compatible combination is validated.
+- Confirm attribution against the previous Windows base with matched inputs
+  and toolchain. Keep inherited failures, missing coverage and noisy results
+  visibly pending; they are not automatically evidence that an incoming PR
+  caused a regression.
+- Record every skipped, reverted or deferred PR in the sync entry and known
+  regressions section. Include its URL and merge SHA, affected Windows behavior,
+  reproduction/toolchain details, baseline and candidate evidence, disposition
+  and revert/fix SHA, affected dependencies, and required reintroduction checks.
+  Keep failed observations and the original entry when a later fix resolves it.
+- Preserve these exclusions during future conflict resolution, backports and
+  related upstream changes. Reapply a deferred PR only after reviewing its fix
+  and passing the recorded Windows checks against the previous Windows base.
+  Append the fixing SHA, validation evidence and new status to its record.
+
 ## Known upstream regressions
 
 ### PR #699: Windows first-request MTP decode regression
@@ -52,7 +82,7 @@ focused cold-start control plus affected correctness checks.
    WINDOWS_BASE..OFFICIAL_HEAD`; resolve PR numbers and merge SHAs with
    `gh pr view NUMBER --repo gufo-org/gufo --json number,title,url,mergedAt,mergeCommit`.
    Include release commits and dependencies in the entry.
-3. Check the known-regression entries above before accepting changes.
+3. Apply the Windows acceptance policy and known-regression entries above.
    Merge that exact upstream SHA on an isolated candidate descended from the
    Windows base. An already isolated T3 task branch is a suitable candidate.
    Preserve official ancestry through a merge commit. Review cleanly merged
@@ -61,8 +91,12 @@ focused cold-start control plus affected correctness checks.
    Audit new callers and moved implementations. Run the bounded Windows CPU
    gate, affected GPU/model checks, documentation/formatting checks and the
    available Linux gate. Preserve individual timing results and failures.
+   Revert/defer confirmed Windows regressions and validate the resulting
+   combination before accepting the sync.
 5. Append an entry below with the PR table, base/head identities, resolutions,
    six contract outcomes, exact checks, evidence location and pending limits.
+   List skipped/reverted/deferred PRs and their reintroduction requirements
+   explicitly; do not silently omit them from the inventory.
    Verify each PR merge SHA and the recorded official head with
    `git merge-base --is-ancestor SHA HEAD`. Do not replace old entries.
 6. Integrate a qualified candidate into `windows-main` only after rechecking
