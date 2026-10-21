@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Create CalVer source release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compute next Windows-Gufo tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          DATE=$(date -u +%Y.%m)
+          PREFIX="Windows-Gufo-${DATE}."
+          REGEX="${PREFIX//./\\.}[0-9]+\$"
+          LAST=$(git ls-remote --tags origin "refs/tags/${PREFIX}*" \
+            | grep -oE "$REGEX" \
+            | awk -F. '{print $NF}' | sort -n | tail -1 || true)
+          NEXT=$(( ${LAST:-0} + 1 ))
+          TAG="${PREFIX}${NEXT}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Created tag: $TAG" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "${{ github.ref_name }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --generate-notes
