@@ -52,8 +52,13 @@ limited colour or font support. Advanced settings persist in
 at a pause prompt, and exit code 2 means the run was declined or cancelled.
 
 Uninstall does not pre-select an install folder that has uncommitted or
-untracked files, or that contains the installer itself (for example a
-development checkout); line-mode uninstall skips such folders.
+untracked files, unpublished commits on any local branch, stashes, or the
+installer itself (for example a development checkout); line-mode uninstall
+skips such folders. Folders containing model files cannot be removed through
+the installer: move the models outside the checkout first. If Git metadata or
+Git itself is unavailable, the folder is kept because models cannot be checked.
+In smaller terminals, use Page Up/Page Down to inspect the uninstall list;
+the confirmation and controls stay visible.
 
 The installer runs `tools/windows/setup.ps1` directly, the script that
 `setup-windows.bat` wraps, so a failed build never waits at the batch file's

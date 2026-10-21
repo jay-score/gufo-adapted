@@ -702,6 +702,7 @@ function New-GufoState {
   if ($Jobs -gt 0) { $state.Jobs = $Jobs }
   if ($Rocm) { $state.Rocm = $Rocm }
   if ($Vcpkg) { $state.Vcpkg = $Vcpkg }
+  if ($PSBoundParameters.ContainsKey("Shortcut")) { $state.Shortcut = $Shortcut }
   $state.Checkout = Get-GufoCheckoutState $state.InstallDir
   return $state
 }
@@ -787,6 +788,26 @@ function Test-GufoSourceFolder {
     (Test-Path -LiteralPath (Join-Path $Dir "setup-windows.bat"))
 }
 
+function Get-GufoModelWarning {
+  param([string]$Dir)
+  if (-not (Test-Path -LiteralPath (Join-Path $Dir ".git"))) {
+    return "No Git metadata: model files could not be checked. Keep this folder."
+  }
+  $git = Find-GufoGit
+  if (-not $git) { return "Git is unavailable: model files could not be checked. Keep this folder." }
+  try {
+    # Without exclusion rules, --others includes ignored files as well.
+    $models = @(& $git -C $Dir ls-files --cached --others -- `
+      ":(glob,icase)**/*.gguf" ":(glob,icase)**/*.safetensors" ":(glob,icase)**/*.ckpt" `
+      ":(glob,icase)**/pytorch_model*.bin" ":(top,glob,icase)models/**" 2>$null)
+    if ($LASTEXITCODE -ne 0) { return "Model files could not be checked. Keep this folder." }
+    if ($models.Count) { return "This folder contains model files. Move them outside the checkout before removing it." }
+  } catch {
+    return "Model files could not be checked. Keep this folder."
+  }
+  return ""
+}
+
 function Get-GufoCheckoutWarning {
   # A folder that may hold someone's work is never removed by default.
   param([string]$Dir)
@@ -803,6 +824,12 @@ function Get-GufoCheckoutWarning {
     $status = & $git -C $Dir status --porcelain 2>$null
     if ($LASTEXITCODE -ne 0) { return "Local changes could not be checked." }
     if (@($status).Count -gt 0) { return "This checkout has uncommitted or untracked files." }
+    $unpublished = & $git -C $Dir rev-list --max-count=1 --branches HEAD --not --remotes -- 2>$null
+    if ($LASTEXITCODE -ne 0) { return "Unpublished commits could not be checked." }
+    if ($unpublished) { return "This checkout has unpublished commits." }
+    $stashes = & $git -C $Dir stash list 2>$null
+    if ($LASTEXITCODE -ne 0) { return "Stashes could not be checked." }
+    if ($stashes) { return "This checkout has stashed work." }
   } catch {
     return "Local changes could not be checked."
   }
@@ -813,13 +840,15 @@ function Get-GufoUninstallItems {
   param($State)
   $items = New-Object System.Collections.Generic.List[object]
   if (Test-GufoSourceFolder $State.InstallDir) {
-    $warning = Get-GufoCheckoutWarning $State.InstallDir
+    $modelWarning = Get-GufoModelWarning $State.InstallDir
+    $warning = if ($modelWarning) { $modelWarning } else { Get-GufoCheckoutWarning $State.InstallDir }
     $items.Add(@{
       Key = "source"
       Label = "Source, build, and GUI environment"
       Files = @($State.InstallDir)
       Checked = (-not $warning)
       Warning = $warning
+      Blocked = [bool]$modelWarning
     })
   }
   if (Test-Path -LiteralPath $State.DepsDir) {
@@ -1218,6 +1247,8 @@ function Get-GufoUninstallScreen {
     $rows.Add(@(@{ t = "  Nothing to remove: no checkout, dependencies, or settings found."; c = "muted" }))
   }
   $index = 0
+  $selectedStart = 0
+  $selectedEnd = 0
   foreach ($item in $uninstall.Items) {
     $box = "[ ]"
     $boxRole = "muted"
@@ -1226,6 +1257,7 @@ function Get-GufoUninstallScreen {
       $boxRole = "ok"
     }
     $selected = ($index -eq $uninstall.Index)
+    if ($selected) { $selectedStart = $rows.Count }
     $marker = " "
     if ($selected) { $marker = $scheme.Glyphs.Arrow }
     $rows.Add(@(
@@ -1237,10 +1269,13 @@ function Get-GufoUninstallScreen {
       $rows.Add(@(@{ t = "       "; c = "muted" }, @{ t = $file; c = "muted" }))
     }
     if ($item.Warning) {
-      foreach ($line in (Get-GufoWrap "$($item.Warning) Not selected by default." ($inner - 10))) {
+      $warning = $item.Warning
+      if (-not $item.Blocked) { $warning += " Not selected by default." }
+      foreach ($line in (Get-GufoWrap $warning ($inner - 10))) {
         $rows.Add(@(@{ t = "     ! "; c = "warn" }, @{ t = $line; c = "warn" }))
       }
     }
+    if ($selected) { $selectedEnd = $rows.Count }
     $index++
   }
   $rows.Add($null)
@@ -1252,6 +1287,8 @@ function Get-GufoUninstallScreen {
     }
   }
   $rows.Add($null)
+  $body = $rows
+  $rows = New-Object System.Collections.Generic.List[object]
   $confirm = $uninstall.Confirm
   $confirmRole = "text"
   if ($confirm -eq "uninstall") { $confirmRole = "ok" }
@@ -1260,13 +1297,25 @@ function Get-GufoUninstallScreen {
     @{ t = ($confirm + "_"); c = $confirmRole }
   ))
   if (Test-GufoNoticeActive $State) {
-    $rows.Add($null)
-    foreach ($line in (Get-GufoWrap $State.Notice ($inner - 3))) {
-      $rows.Add(@(@{ t = "  ! "; c = "warn" }, @{ t = $line; c = "warn" }))
-    }
+    $rows.Add(@(@{ t = "  ! "; c = "warn" }, @{ t = $State.Notice; c = "warn" }))
   }
-  $rows.Add($null)
-  return Format-GufoBox -Scheme $scheme -Width $State.Width -Title "Gufo Setup · uninstall" -Right $State.Tag -Rows $rows.ToArray() -Footer "  $($scheme.Glyphs.UpDown) move   Space toggle   Enter remove   Esc back"
+  # Reserve the confirmation, scroll indicator, and box/footer before paging
+  # the variable-length list. Selection follows arrow keys; paging is manual.
+  $available = [Math]::Max(1, $State.Height - 5 - $rows.Count)
+  $offset = [int]$uninstall.Offset
+  if ($null -eq $uninstall.LastIndex -or $uninstall.LastIndex -ne $uninstall.Index) {
+    if ($selectedStart -lt $offset) { $offset = $selectedStart }
+    if ($selectedEnd -gt $offset + $available) { $offset = [Math]::Min($selectedStart, $selectedEnd - $available) }
+  }
+  $offset = [Math]::Max(0, [Math]::Min($offset, $body.Count - $available))
+  $uninstall.Offset = $offset
+  $uninstall.LastIndex = $uninstall.Index
+  $page = $body.GetRange($offset, [Math]::Min($available, $body.Count - $offset))
+  $scroll = ""
+  if ($body.Count -gt $available) { $scroll = "  Rows $($offset + 1)-$($offset + $page.Count) of $($body.Count) · PgUp/PgDn scroll" }
+  $page.Add(@(@{ t = $scroll; c = "muted" }))
+  $page.AddRange($rows)
+  return Format-GufoBox -Scheme $scheme -Width $State.Width -Title "Gufo Setup · uninstall" -Right $State.Tag -Rows $page.ToArray() -Footer "  $($scheme.Glyphs.UpDown) move   Space toggle   Enter remove   Esc back"
 }
 
 function Get-GufoLogScreen {
@@ -1832,7 +1881,8 @@ function Test-GufoRemovable {
   param($State, $Item)
   if ($Item.Key -eq "source") {
     return (Test-GufoSourceFolder $Item.Files[0]) -and
-      ([IO.Path]::GetFullPath($Item.Files[0]) -eq [IO.Path]::GetFullPath($State.InstallDir))
+      ([IO.Path]::GetFullPath($Item.Files[0]) -eq [IO.Path]::GetFullPath($State.InstallDir)) -and
+      (-not (Get-GufoModelWarning $Item.Files[0]))
   }
   if ($Item.Key -eq "deps") {
     return ([IO.Path]::GetFullPath($Item.Files[0]) -eq [IO.Path]::GetFullPath($State.DepsDir))
@@ -2212,7 +2262,8 @@ function Close-GufoAdvanced {
   $abandoned = $State.FetchedDir
   $State.Plan = $null
   $State.FetchedDir = ""
-  if ($abandoned -and $abandoned -ne $State.InstallDir -and (Test-GufoSourceFolder $abandoned) -and -not (Get-GufoCheckoutWarning $abandoned)) {
+  if ($abandoned -and $abandoned -ne $State.InstallDir -and (Test-GufoSourceFolder $abandoned) -and
+    -not (Get-GufoCheckoutWarning $abandoned) -and -not (Get-GufoModelWarning $abandoned)) {
     # Only the clone this run made, and only while nothing in it has changed.
     try { Remove-GufoPath $abandoned } catch {
     }
@@ -2402,9 +2453,14 @@ function Invoke-GufoKey {
       if ($Key -eq "Esc") { Set-GufoScreen $State "menu"; return }
       if ($Key -eq "Up") { $State.Uninstall.Index = [Math]::Max(0, $State.Uninstall.Index - 1); return }
       if ($Key -eq "Down") { $State.Uninstall.Index = [Math]::Min([Math]::Max(0, $State.Uninstall.Items.Count - 1), $State.Uninstall.Index + 1); return }
+      if ($Key -eq "PgUp") { $State.Uninstall.Offset = [Math]::Max(0, [int]$State.Uninstall.Offset - 5); return }
+      if ($Key -eq "PgDn") { $State.Uninstall.Offset = [int]$State.Uninstall.Offset + 5; return }
       if ($Key -eq "Space") {
         $item = $State.Uninstall.Items[$State.Uninstall.Index]
-        if ($item) { $item.Checked = -not $item.Checked }
+        if ($item) {
+          if ($item.Blocked) { Set-GufoNotice $State $item.Warning; return }
+          $item.Checked = -not $item.Checked
+        }
         return
       }
       if ($Key -eq "Backspace") {
@@ -2642,7 +2698,8 @@ function Invoke-GufoInstaller {
   } else {
     $scheme = New-GufoScheme -Mode "None"
   }
-  $state = New-GufoState -Scheme $scheme -InstallDir $InstallDir -Jobs $Jobs -Rocm $Rocm -Vcpkg $Vcpkg -Shortcut:(-not $NoShortcut) -Interactive $interactive
+  $state = New-GufoState -Scheme $scheme -InstallDir $InstallDir -Jobs $Jobs -Rocm $Rocm -Vcpkg $Vcpkg -Interactive $interactive
+  if ($NoShortcut) { $state.Shortcut = $false }
   $state.AutoConfirm = $Yes
   if ($interactive) {
     return (Invoke-GufoApp $state)

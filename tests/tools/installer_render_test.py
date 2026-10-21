@@ -88,6 +88,45 @@ class InstallerRenderTest(unittest.TestCase):
             for row in frame:
                 self.assertLessEqual(len(strip_ansi(row)), 72, row)
 
+    def test_uninstall_confirmation_stays_visible_with_all_paths_and_warnings(self):
+        script = r'''
+. $env:GUFO_PREVIEW -Screen splash -Width 72 -Height 20 -OutFile $env:GUFO_FRAME
+$state.Screen = 'uninstall'
+$state.Uninstall.Items[0].Warning = 'This checkout has unpublished commits and model files. Keep this folder.'
+$state.Uninstall.Items[2].Files = @('C:\Gufo\launcher.json', 'C:\Gufo\installer.json', 'C:\Gufo\logs', 'C:\Gufo\installer')
+$state.Uninstall.Items[3].Files += 'C:\Start Menu\Gufo Setup.lnk'
+Set-GufoNotice $state 'A warning that must stay visible while confirming uninstall.'
+foreach ($height in @(20, 30)) {
+  $state.Height = $height
+  for ($index = 0; $index -lt $state.Uninstall.Items.Count; $index++) {
+    $state.Uninstall.Index = $index
+    $frame = @(Resize-GufoFrame (Get-GufoScreen $state) $height)
+    $text = $frame -join "`n"
+    foreach ($label in @('Type uninstall to confirm', 'Space toggle', 'Enter remove', 'Esc back', $state.Uninstall.Items[$index].Label)) {
+      if (-not $text.Contains($label)) { throw "Missing $label at height $height, selection $index" }
+    }
+  }
+}
+$state.Height = 20
+$state.Uninstall.Index = 0
+[void](Get-GufoScreen $state)
+$before = $state.Uninstall.Offset
+Invoke-GufoKey $state 'PgDn'
+[void](Get-GufoScreen $state)
+if ($state.Uninstall.Offset -le $before) { throw 'Page Down did not scroll the uninstall list' }
+Invoke-GufoKey $state 'PgUp'
+[void](Get-GufoScreen $state)
+if ($state.Uninstall.Offset -ne $before) { throw 'Page Up did not restore the uninstall list' }
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [POWERSHELL, "-NoLogo", "-NoProfile", "-Command", script], cwd=ROOT,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                env={**os.environ, "GUFO_PREVIEW": str(PREVIEW),
+                     "GUFO_FRAME": str(Path(directory) / "frame.txt")},
+            )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_unknown_screen_is_rejected(self):
         command = [POWERSHELL, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
                    "-File", str(PREVIEW), "-Screen", "nope"]
