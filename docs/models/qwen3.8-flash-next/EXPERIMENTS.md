@@ -1,10 +1,33 @@
 # Qwen3.8 Flash-Next experiments
 
+## Exact sampled decode (October 21, 2026)
+
+| Experiment | Outcome |
+| --- | --- |
+| Skip a redundant neural proposal after an established sampled copy | Retained only with an accepted source, a full 24-token match and at least three available copies. New sources and short resume matches still use the neural proposal. Target rejection/correction, private history and restored RNG remain authoritative. |
+| Compact sampled target verification | Retained for unconstrained top-k/min-keep up to 64 and bounded penalty history. Transfer the exact top 64 unpenalized logits plus every penalized logit, then apply the existing FP64 target sampler. Grammar activation, forced reasoning closure and unsupported settings use full rows. Independent CPU sorting and full-row distributions agree bit for bit, including correction RNG. Complete transfer/selection/sampling costs for 1/3/7 rows: 94.60/273.17/594.92 → 75.84/156.63/323.45 µs. Reconstructing full CPU rows first was exact but slower and was removed. |
+| KV-only predictor catch-up when no proposal is needed | Retained: scalar and uniform cache-only cohorts stop after K/V and indexer updates; mixed cohorts preserve the original row arithmetic. No discarded attention/output/FFN residual is produced in the uniform path. Independent predictor checks and full-logit/RNG/cache replay pass. |
+| Prepare image-capable slots' stable RoPE descriptor before text graphs | Retained after a cancellation/resume control exposed a repeatable 5.8 ms first-token regression. Admission profiling locates 5.61 ms in image-context setup; the first image descriptor invalidated previously captured text graphs. Preparing the empty descriptor at session creation keeps its pointer stable. The same resumed request falls from 9.45–9.46 to 3.71 ms TTFT (main 3.62–3.78), with identical output and faster decode. Other Qwen models retain their existing lazy initialization. |
+| Recalibrate deterministic sampled draft lengths | Rejected after auditing depths 0/4096/32768, C1/2/4/6/8 and widths 1–8 with the actual small sampled head. New-code generation improved 75.27 → 81.57 tok/s, but thinking fell 51.90 → 49.18 and the focused repeat reproduced 51.67 → 49.04. Original policy and cost tables remain. |
+| Pack Q8 output waves and vary Q4 expert rows per wave | Rejected. Q8 variants were flat/slower after matching production allocation and rotating weights beyond MALL. Q4 one-row waves changed result bits for a sub-1% gain; exact four/eight-row variants were slower than the existing two-row path. No production GEMV changes retained. |
+| Wider lookup blocks, lookup without a sidecar and Flash-Next DFlash2 | Not retained. Wider blocks need independently qualified decode arithmetic and recurrent rollback beyond eight rows; the AR-only path currently has no speculative reserve. The available DFlash2 fork still needs an audit of its exported proposal probabilities and restore/batch fallback before a lossless port. These are separate implementation projects, not enabled features. |
+
+Matched serving gains are modest: about 1–2.5% for copying and flat ordinary
+coding/thinking. See [the focused comparison](BENCHMARKS.md#sampled-decode-follow-up-october-21)
+and [quality limits](QUALITY.md#exact-sampled-decode-october-21-2026).
+
+## Mid-size prefill passes (October 21, 2026)
+
+| Experiment | Outcome |
+| --- | --- |
+| Wide prefill routes for every prefill pass above eight rows | Retained: the fused SSM projection/convolution, fused attention projection, half-only HC mix, last-layer query skip and paired 128-row gate/up with 64-row down tiles started at 1,024 rows, so pp1023 ran at 1,432 tok/s against 1,624 for pp1024. Native AR pp, before → after: pp9 93.5 → 98.3, pp33 229.8 → 243.7, pp128 541.7 → 594.1, pp256 802.5 → 899.3, pp470 1,054.4 → 1,225.5, pp768 1,216.7 → 1,446.9, pp1023 1,432.2 → 1,578.7; pp1024+ unchanged. The paired experts supply most of the gain (pp470 1,082 → 1,225). Every row's prefill logits are byte-identical to main at 30–845 tokens and for 2,518 tokens split at 2,048; AR/MTP tg64 after 33/470/900-token prefixes keeps output hashes and draft counts. Decode and verification batches keep their routes. HTTP, pi system prompt on a new prefix (2,048 + 477-token passes), alternating arms: TTFT 1,745–1,756 → 1,684–1,696 ms; a 2,968-token single pass is unchanged. |
+
 ## Windows n-gram I/O (October 20, 2026)
 
 | Experiment | Outcome |
 | --- | --- |
 | Restore cached overlapped n-gram reads on Windows | Retained: the upstream forward-port lost `O_CONCURRENT_RANDOM` and used direct reads of a model shard that is also mapped, triggering NTFS serialization. The first uncached 16459-token MTP prompt improves from 783.93 to 1693.09 tok/s; the identical uncached repeat measures 1634.86 to 1705.27. Both tg128 completions remain byte-identical, and independent n-gram row/hash tests pass. GUI live processing rates agree with server timings. Linux file-open behavior is unchanged. See [controls](BENCHMARKS.md#windows-cold-prompt-control-october-20-2026). |
+
 
 ## Component-cache admission (October 20, 2026)
 

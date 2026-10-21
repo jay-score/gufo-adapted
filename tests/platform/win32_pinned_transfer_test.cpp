@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -40,6 +41,15 @@ void Coherent(void* address) {
   assert(hipHostGetFlags(&flags, address) == hipSuccess);
   assert(flags & hipHostMallocCoherent);
 }
+void Registered(void* address) {
+  // Committed backing now registers anonymous pages; hipHostGetFlags is
+  // defined for hipHostMalloc allocations, which staging still uses.
+  hipPointerAttribute_t attributes{};
+  assert(hipPointerGetAttributes(&attributes, address) == hipSuccess);
+  assert(attributes.type == hipMemoryTypeHost);
+  void* mapped{};
+  assert(hipHostGetDevicePointer(&mapped, address, 0) == hipSuccess && mapped);
+}
 void Backing() {
   cache::ResourceLedger ledger(Limits());
   std::optional<gpu::BackingPin> survivor;
@@ -59,7 +69,7 @@ void Backing() {
                                  [](std::byte b) { return b == std::byte{}; }));
       blocks[i]->Convert();
     }
-    Coherent(addresses[0]);
+    Registered(addresses[0]);
     assert(!pool.TryAcquire(Category::kPrivateState));
     auto pin = std::make_optional(blocks[0]->PinPersistence());
     blocks[0].reset();
@@ -239,6 +249,45 @@ void PendingAndLifetime() {
   assert(survivor->Wait() == Result::kSucceeded && survivor->Ready());
   survivor.reset();
 }
+void BoundStreamLifetime() {
+  std::optional<cache::Completion> completion;
+  std::weak_ptr<void> retained;
+  std::array<std::uint8_t, 257> source{}, copied{};
+  for (std::size_t i = 0; i < source.size(); ++i)
+    source[i] = static_cast<std::uint8_t>(i * 37 + 11);
+  void* device{};
+  assert(hipMalloc(&device, source.size()) == hipSuccess);
+  {
+    hipStream_t native{};
+    assert(hipStreamCreateWithFlags(&native, hipStreamNonBlocking) ==
+           hipSuccess);
+    auto owner = std::shared_ptr<void>(native, [](void* stream) {
+      assert(hipStreamDestroy(static_cast<hipStream_t>(stream)) == hipSuccess);
+    });
+    retained = owner;
+    gpu::TransferPool pool(1);
+    auto stream = pool.TryAcquire();
+    Throws<std::invalid_argument>([&] { stream->BindTo(nullptr, owner); });
+    Throws<std::invalid_argument>([&] { stream->BindTo(native, {}); });
+    stream->BindTo(native, owner);
+    owner.reset();
+    assert(stream->Native() == native);
+    Throws<std::logic_error>([&] { stream->BindTo(native, retained.lock()); });
+    completion.emplace(stream->Copy(device, source.data(), source.size(),
+                                    gpu::CopyDirection::kHostToDevice, 37));
+    assert(completion->Wait() == Result::kSucceeded);
+    assert(hipMemcpy(copied.data(), device, copied.size(),
+                     hipMemcpyDeviceToHost) == hipSuccess);
+    assert(source == copied);
+    stream.reset();
+    assert(!retained.expired() && !pool.TryAcquire());
+  }
+  assert(!retained.expired());
+  assert(completion->Wait() == Result::kSucceeded && completion->Ready());
+  completion.reset();
+  assert(retained.expired());
+  assert(hipFree(device) == hipSuccess);
+}
 }  // namespace
 int main() {
   hipDeviceProp_t device{};
@@ -247,6 +296,7 @@ int main() {
   Backing();
   StagingAndCopies();
   PendingAndLifetime();
+  BoundStreamLifetime();
   std::puts(
       "PASS: coherent backing/staging, accounting and pins, concurrent "
       "borrowers, bounded copies, pitched snapshots and stream lifetimes");
