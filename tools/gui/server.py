@@ -18,8 +18,8 @@ from command import build_command
 from files import browse_directory
 from launcher_process import ProcessManager
 from models import MODEL_FAMILIES, SPECULATIVE_MODES
-from presets import (change_preset, find_preset, load_document, new_document,
-                     resolved_settings, save_document)
+from presets import (change_preset, export_presets, find_preset, import_presets, load_document,
+                     new_document, resolved_settings, save_document)
 from settings import ROOT, settings_path, validate_settings
 
 
@@ -91,6 +91,23 @@ def create_app(config_path, manager, exit_event, ui_port=8090):
             document = save_document(config_path, change_preset(document, request.get_json()))
             load_error = ""
             return jsonify(document=document)
+
+    @app.get("/api/presets/export")
+    def export():
+        with action_lock:
+            return jsonify(export_presets(document))
+
+    @app.post("/api/presets/import")
+    def import_backup():
+        nonlocal document, load_error
+        # A backup of 100 presets exceeds the small default request limit.
+        request.max_content_length = 1024 * 1024
+        with action_lock:
+            added = import_presets(document, request.get_json())
+            count = len(added["presets"]) - len(document["presets"])
+            document = save_document(config_path, added)
+            load_error = ""
+            return jsonify(document=document, imported=count)
 
     @app.get("/api/browse")
     def browse():

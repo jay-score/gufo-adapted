@@ -66,6 +66,16 @@ until you click **Load preset**. Loading does not save or start the server; only
 choosing Save in the unsaved-edits prompt writes changes to disk. Preset names
 must be unique, and up to 100 presets can be saved.
 
+**Back up all…** downloads every saved preset as one `gufo-presets-<date>.json`
+file (unsaved form edits are not included). **Import…** adds the presets from such
+a file; existing presets are never changed or replaced, and a name that is already
+taken gets a numeric suffix such as `Default (2)`. The file holds only per-preset
+settings, not the shared executable, models folder, API bind address, or API port,
+so a backup can be imported on another machine. Model paths inside presets are
+absolute, so adjust them after importing on a machine with a different layout.
+The file is validated before anything is written, and the import is rejected
+whole if any preset is invalid or the 100-preset limit would be exceeded.
+
 The executable, models folder, API bind address, and API port are shared across presets. **Save
 preset** and **Save as…** also save these shared values. The form describes the
 next launch; the Server panel separately identifies the running preset and

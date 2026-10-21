@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools/gui"))
 from settings import DEFAULTS
 from launcher_process import ProcessManager
+from presets import load_document
 from server import create_app
 
 
@@ -178,6 +179,26 @@ class ServerTest(unittest.TestCase):
                                  headers=self.headers)
         self.assertEqual(stale.status_code, 400)
         self.assertIn("another tab", stale.json["error"])
+
+    def test_export_and_import_presets_over_http(self):
+        self.save(DEFAULTS | {"context": 8192})
+        backup = self.client.get("/api/presets/export", headers=self.headers)
+        self.assertEqual(backup.status_code, 200)
+        revision = self.client.get("/api/settings", headers=self.headers).json["document"]["revision"]
+        imported = self.client.post("/api/presets/import", json={"revision": revision, "data": backup.json},
+                                    headers=self.headers)
+        self.assertEqual(imported.status_code, 200)
+        self.assertEqual(imported.json["imported"], 1)
+        self.assertEqual([p["name"] for p in imported.json["document"]["presets"]], ["Default", "Default (2)"])
+        self.assertEqual(load_document(self.config), imported.json["document"])
+        # Larger than the default 32 KiB request limit, so this proves the import route accepts big backups.
+        padded = backup.json | {"padding": "x" * 40000}
+        rejected = self.client.post("/api/presets/import", json={"revision": revision + 1, "data": padded},
+                                    headers=self.headers)
+        self.assertEqual(rejected.status_code, 400)
+        self.assertIn("not a Gufo preset backup", rejected.json["error"])
+        for method, path in (("get", "/api/presets/export"), ("post", "/api/presets/import")):
+            self.assertEqual(getattr(self.client, method)(path).status_code, 403)
 
 
 if __name__ == "__main__":
