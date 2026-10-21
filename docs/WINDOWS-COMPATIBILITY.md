@@ -93,7 +93,6 @@ Record imported PRs, revision identities and outcomes in the
   the HIP executable when server startup changes. This is not a Windows queue
   residency or performance qualification.
 
-
 Run `ctest --preset windows-cpu --no-tests=error` after the bounded CPU build;
 the [Windows workflow](../.github/workflows/windows-cpu.yml) runs that gate.
 Build affected GPU/model test targets explicitly, then select the named tests

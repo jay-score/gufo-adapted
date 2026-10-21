@@ -1,5 +1,48 @@
 # Qwen3.8 Flash-Next benchmarks
 
+## Windows sync first-decode control (October 21, 2026)
+
+Native TheRock 10.0.0; same four-shard Q4_K_XL/shared-Q8 MTP artifacts,
+32K context, two sessions, thinking off, temperature zero and 8 GiB RAM cache.
+Each fresh process handles a varied 11,036-token prompt, then repeats it with
+prompt reuse disabled. Both requests report zero reuse and return `ACK`.
+Every observation is retained separately; no averaging is used.
+
+| Binary/control | First decode (ms) | Repeat decode (ms) |
+| --- | ---: | ---: |
+| Windows base `db4f6fbc`, initial | 57.51 | 52.79 |
+| Same base, focused control | 53.86 | 51.40 |
+| Same base, history control | 51.32 | 52.85 |
+| Full upstream import, initial | 60.90 | 51.88 |
+| Full import, focused repeat | 63.35 | 52.32 |
+| Import without #699, isolation | 53.55 | 52.92 |
+| Import without eager vision setup, rejected | 59.60 | 51.83 |
+| Full predictor catch-up, scalar isolation | 52.75 | 52.72 |
+| Full predictor catch-up, combined policy, rejected | 66.46 | 52.96 |
+| Explicit Q8 startup preparation, rejected | 67.02 | 51.59 |
+| Rebuilt explicit #699 revert | 53.25 | 51.52 |
+
+PR #699 is reverted on Windows. The scalar isolation did not produce a
+stable workaround; none of the experimental changes is retained. See the
+[regression record](../../WINDOWS-UPSTREAM-SYNC.md#pr-699-windows-first-request-mtp-decode-regression)
+for evidence and requirements before reintroduction. These controls do not
+replace Linux sweeps or complete Windows performance qualification. Cumulative
+asynchronous copy totals remain unqualified when copied byte counts differ.
+
+### Standard post-revert spot
+
+One repetition of pp2048/tg128 at depth zero, same artifacts/toolchain:
+
+| Mode | pp2048 (tok/s) | tg128 (tok/s) | Proposed/accepted drafts |
+| --- | ---: | ---: | ---: |
+| AR | 1807.04 | 28.88 | 0/0 |
+| MTP | 1753.56 | 38.65 | 109/58 |
+
+Both return the same greedy 128-token hash
+`5177a75da6988d5ce9a14e1a744ed16829784eda18d40139d8a1e76469af8412`.
+These retained standard spots do not qualify a sync speedup. See the sync
+log for the inherited numerical-oracle failure and open timing limits.
+
 ## Windows cold-prompt control (October 20, 2026)
 
 On the native Windows port, restoring cached overlapped n-gram reads fixes an

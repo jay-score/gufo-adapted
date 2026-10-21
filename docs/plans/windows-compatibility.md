@@ -316,7 +316,11 @@ review checklist for each sync. They identify the maintained OS boundaries,
 their regression checks, and the local GPU/model gates beyond hosted CPU CI.
 Append imported PRs and the validation record to the
 [upstream sync log](../WINDOWS-UPSTREAM-SYNC.md); its procedure records exact
-merge identities and distinguishes import from platform qualification.
+merge identities and distinguishes import from platform qualification. Read its
+known regressions before accepting a sync, and preserve explicit compatibility
+reverts until their reintroduction requirements pass. In particular, #699 is
+deferred for a Windows first-request MTP decode regression; its presence in
+upstream ancestry does not mean its code should be reapplied.
 
 Record the official base SHA, imported compatibility source SHAs, and the small
 set of modified upstream call sites. At each update, inspect

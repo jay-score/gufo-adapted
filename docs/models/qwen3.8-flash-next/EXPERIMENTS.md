@@ -1,5 +1,18 @@
 # Qwen3.8 Flash-Next experiments
 
+## Windows upstream sync (October 21, 2026)
+
+| Experiment | Outcome |
+| --- | --- |
+| Import #699 unchanged | Reverted/deferred: Windows first MTP HTTP decode is 60.90/63.35 ms against baseline controls of 51.32-57.51 ms. Warm repeats and output/cache/draft counts agree. |
+| Import with #699 removed | Retained for final validation: isolation control measures 53.55/52.92 ms first/repeat decode. |
+| Remove eager empty vision preparation | Rejected: first decode remains 59.60 ms. |
+| Restore full predictor catch-up | Rejected as a workaround: scalar isolation measures 52.75 ms, but the combined scalar/batch fallback measures 66.46 ms. |
+| Prepare missing Q8 predictor functions at startup | Rejected: first decode remains 67.02 ms. No speculative platform policy or kernel preparation change is retained. |
+
+See the [known regression and reintroduction requirements](../../WINDOWS-UPSTREAM-SYNC.md#pr-699-windows-first-request-mtp-decode-regression)
+and [individual measurements](BENCHMARKS.md#windows-sync-first-decode-control-october-21-2026).
+
 ## Mid-size prefill passes (October 21, 2026)
 
 | Experiment | Outcome |
