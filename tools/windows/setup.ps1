@@ -4,6 +4,7 @@ param(
   [string]$Rocm = "",
   [string]$Vcpkg = "",
   [switch]$CheckOnly,
+  [string]$PlanJson = "",
   [switch]$Yes,
   [switch]$NoLaunch,
   [ValidateRange(1, 64)][int]$Jobs = 4
@@ -232,14 +233,52 @@ function Save-SetupTools($Tools) {
   else { [IO.File]::Move("$stateFile.tmp", $stateFile) }
 }
 
-function Assert-SetupSpace([bool]$FreshInstall) {
-  $required = if ($FreshInstall) { 25 } else { 5 }
+function Get-SetupSpace {
   foreach ($driveRoot in @($root, $deps, $env:ProgramFiles) | ForEach-Object { [IO.Path]::GetPathRoot($_) } | Select-Object -Unique) {
     $drive = [IO.DriveInfo]::new($driveRoot)
-    $free = [math]::Round($drive.AvailableFreeSpace / 1GB, 1)
-    Write-Host "  Free space on $($drive.Name): $free GiB"
-    if ($free -lt $required) { throw "Keep at least $required GiB free for setup/build files (models need additional space)." }
+    [pscustomobject]@{ Root = $drive.RootDirectory.FullName; FreeGiB = [math]::Round($drive.AvailableFreeSpace / 1GB, 1) }
   }
+}
+
+function Assert-SetupSpace([bool]$FreshInstall) {
+  $required = if ($FreshInstall) { 25 } else { 5 }
+  foreach ($entry in Get-SetupSpace) {
+    Write-Host "  Free space on $($entry.Root): $($entry.FreeGiB) GiB"
+    if ($entry.FreeGiB -lt $required) { throw "Keep at least $required GiB free for setup/build files (models need additional space)." }
+  }
+}
+
+function Write-SetupPlan($Tools, [object[]]$Missing, [string]$Path) {
+  # The graphical installer renders this instead of re-deriving the plan.
+  $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+  $os = Get-CimInstance Win32_OperatingSystem
+  $plan = [ordered]@{
+    schema = 1
+    root = $root
+    jobs = $Jobs
+    machine = [ordered]@{
+      cpu = ([string]$cpu.Name).Trim()
+      os = ([string]$os.Caption).Trim()
+      build = [int]$os.BuildNumber
+      ramGiB = [math]::Round($os.TotalVisibleMemorySize / 1MB, 0)
+    }
+    space = @(Get-SetupSpace | ForEach-Object { [ordered]@{ root = $_.Root; freeGiB = $_.FreeGiB } })
+    packages = @($packages.Keys | ForEach-Object {
+      [ordered]@{
+        name = $_
+        wingetId = $packages[$_][0]
+        version = $packages[$_][1]
+        path = [string]$Tools.$_
+        action = $(if ($Tools.$_) { "reuse" } else { "install" })
+      }
+    })
+    rock = [ordered]@{ version = $rockVersion; path = [string]$Tools.Rocm; action = $(if ($Tools.Rocm) { "reuse" } else { "download" }) }
+    vcpkg = [ordered]@{ path = [string]$Tools.Vcpkg; action = $(if ($Tools.Vcpkg) { "reuse" } else { "prepare" }) }
+    missing = @($Missing)
+  }
+  $directory = Split-Path -Parent $Path
+  if ($directory) { New-Item -ItemType Directory -Force -Path $directory | Out-Null }
+  [IO.File]::WriteAllText($Path, ($plan | ConvertTo-Json -Depth 5))
 }
 
 function Invoke-WindowsSetup {
@@ -256,7 +295,11 @@ function Invoke-WindowsSetup {
   Write-Host $(if ($tools.Vcpkg) { "  Reuse vcpkg: $($tools.Vcpkg)" } else { "  Prepare pinned vcpkg under $deps" })
   Write-Host "  Build Gufo, verify GPU startup, prepare the GUI. Existing GUI settings are preserved."
   Assert-SetupSpace ([bool]($missing.Count -or -not $tools.Rocm))
-  if ($CheckOnly) { Write-Host "Preview only; nothing installed or changed."; return }
+  if ($CheckOnly) {
+    if ($PlanJson) { Write-SetupPlan $tools $missing $PlanJson }
+    Write-Host "Preview only; nothing installed or changed."
+    return
+  }
   if (-not $Yes -and (Read-Host "Continue with this plan? Installers may request Windows permission and license acceptance [y/N]") -notmatch '^(y|yes)$') {
     Write-Host "Setup cancelled. Nothing installed."
     return

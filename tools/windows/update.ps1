@@ -1,4 +1,4 @@
-# Update windows-main from thomas9120/gufo-adapted and rebuild Gufo.
+# Update windows-main from thomas9120/gufo-windows and rebuild Gufo.
 [CmdletBinding()]
 param(
   [string]$Rocm = "",
@@ -28,7 +28,7 @@ function Invoke-WindowsUpdate {
   $branch = & $tools.Git -C $root symbolic-ref --quiet --short HEAD
   if ($LASTEXITCODE -ne 0) { throw "Check out a branch before updating; detached HEAD cannot be updated automatically." }
   if ($branch -ne "windows-main") { throw "Check out windows-main before updating; the current branch is '$branch'." }
-  $repository = "https://github.com/thomas9120/gufo-adapted.git"
+  $repository = "https://github.com/thomas9120/gufo-windows.git"
 
   Write-Host "Updating $branch from $repository (windows-main)..." -ForegroundColor Cyan
   # Override pull settings that could rebase or automatically stash local work.

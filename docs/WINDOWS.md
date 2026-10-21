@@ -15,14 +15,60 @@ the initial port. GGUF digest caching and private content tracing are enabled.
 For every upstream merge, review the [Windows compatibility contracts](WINDOWS-COMPATIBILITY.md)
 and their implementation/regression checks.
 
+## Windows installer
+
+[`Gufo-Setup.cmd`](https://github.com/thomas9120/gufo-windows/releases/latest/download/Gufo-Setup.cmd)
+is the guided installer distributed with each release. It fetches
+`windows-main` from `thomas9120/gufo-windows`, renders the plan reported by
+`tools/windows/setup.ps1`, runs the guided setup with the chosen build jobs, and
+then offers Update, Repair, and Uninstall. The default install folder is
+`%USERPROFILE%\Gufo`, or the checkout containing the installer when it runs from
+one; shared dependencies stay under `%LOCALAPPDATA%\Gufo\dependencies` and logs
+under `%LOCALAPPDATA%\Gufo\logs`.
+
+Release assets pair the launcher with `Gufo-Setup.ps1`; the launcher verifies the
+script's SHA-256 before running it. Running the launcher from a checkout uses
+`tools/installer/Gufo-Setup.ps1` directly. After a successful setup the installer
+keeps a copy under `%LOCALAPPDATA%\Gufo\installer` with a **Gufo Setup** Start
+Menu entry, so Update, Repair, and Uninstall stay reachable.
+
+The installer needs a console with virtual-terminal support (Windows Terminal is
+the Windows 11 default). Without it, the installer falls back to a line-mode
+prompt. Command-line use:
+
+```powershell
+.\Gufo-Setup.cmd                          # full-screen installer
+.\Gufo-Setup.cmd -Action install -Yes     # unattended; no prompts
+.\Gufo-Setup.cmd -Action repair -Yes
+.\Gufo-Setup.cmd -Action update -Yes
+.\Gufo-Setup.cmd -Action uninstall -Yes
+.\Gufo-Setup.cmd -Plain                   # numbered prompt, line output
+```
+
+`-InstallDir`, `-Jobs`, `-Rocm`, `-Vcpkg`, and `-NoShortcut` match the Advanced
+screen; `-ColorMode` and `-AsciiGlyphs` adjust the display for terminals with
+limited colour or font support. Advanced settings persist in
+`%LOCALAPPDATA%\Gufo\installer.json`. With arguments, the launcher never waits
+at a pause prompt, and exit code 2 means the run was declined or cancelled.
+
+Uninstall does not pre-select an install folder that has uncommitted or
+untracked files, or that contains the installer itself (for example a
+development checkout); line-mode uninstall skips such folders.
+
+The installer runs `tools/windows/setup.ps1` directly, the script that
+`setup-windows.bat` wraps, so a failed build never waits at the batch file's
+press-any-key prompt. Setup keeps its own transcript under the checkout's
+`build/` folder; the installer records the same output in its log.
+
 ## Prerequisites and build
 
-For guided source setup on Windows 11 Strix Halo, run
-[`setup-windows.bat`](../setup-windows.bat). It detects existing tools, previews
-missing prerequisites, asks before installation, builds `windows-gpu`, checks
-GPU startup, and prepares/opens the browser launcher. Saved GUI settings are
-preserved. This is a developer source build with the same qualification and
-redistribution limits described below.
+For guided source setup on Windows 11 Strix Halo, use the
+[installer](#windows-installer) or run [`setup-windows.bat`](../setup-windows.bat)
+inside a checkout. Setup detects existing tools, previews missing prerequisites,
+asks before installation, builds `windows-gpu`, checks GPU startup, and
+prepares/opens the browser launcher. Saved GUI settings and the installer's
+choices are preserved. This is a developer source build with the same
+qualification and redistribution limits described below.
 
 To preview without installing or building, or reuse a nondefault vcpkg checkout:
 
@@ -30,6 +76,10 @@ To preview without installing or building, or reuse a nondefault vcpkg checkout:
 ./setup-windows.bat -CheckOnly
 ./setup-windows.bat -Vcpkg C:\path\to\vcpkg -NoLaunch
 ```
+
+`tools/windows/setup.ps1 -CheckOnly -PlanJson plan.json` also writes the
+machine-readable plan the installer renders. Neither form installs or builds
+anything.
 
 The setup script also accepts `-Rocm`, `-Jobs`, and `-Yes` (accept the displayed
 setup plan). Logs and reusable tool selections are saved under `build/`.

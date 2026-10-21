@@ -1,0 +1,2 @@
+# The Windows launcher must keep CRLF line endings so cmd.exe labels and goto work.
+*.cmd text eol=crlf

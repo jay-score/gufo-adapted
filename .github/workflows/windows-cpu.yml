@@ -44,6 +44,39 @@ jobs:
       - name: Check launcher browser behavior
         run: node --experimental-vm-modules --test tests/tools/gui_dom_test.mjs tests/tools/gui_runtime_dom_test.mjs
 
+  installer:
+    name: Installer checks
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Render installer screens and check layout
+        run: python -m unittest discover -s tests/tools -p "installer_*_test.py" -v
+
+      - name: Render every screen at the minimum size
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          ./tools/installer/preview.ps1 -Screen all -Width 72 -Height 20 -Mode None -OutFile build/installer-min.txt
+          Get-Content build/installer-min.txt -TotalCount 8
+
+      - name: Parse installer scripts with Windows PowerShell
+        shell: powershell
+        run: |
+          $failed = $false
+          foreach ($file in @('tools/installer/Gufo-Setup.ps1', 'tools/installer/preview.ps1')) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file), [ref]$null, [ref]$errors)
+            foreach ($error in @($errors)) {
+              Write-Host "$file`: $($error.Message)"
+              $failed = $true
+            }
+          }
+          if ($failed) { throw 'Installer scripts have parse errors' }
+
   windows-cpu:
     name: Native CPU contracts
     runs-on: windows-2025

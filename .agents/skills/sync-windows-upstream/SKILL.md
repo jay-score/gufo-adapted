@@ -28,7 +28,7 @@ status. Expected roles, subject to explicit user changes:
 | Remote/ref | Purpose |
 | --- | --- |
 | `official` → `https://github.com/gufo-org/gufo.git` | Official source of updates; merge `official/main`. |
-| `origin` → `https://github.com/thomas9120/gufo-adapted.git` | User's fork; publish Windows work here when requested. |
+| `origin` → `https://github.com/thomas9120/gufo-windows.git` | User's fork; publish Windows work here when requested. |
 | `upstream` → `https://github.com/pixmaate/gufo.git` | Different fork; not the official update source. |
 | `windows-main` tracks `origin/windows-main` | Keep this tracking relationship; do not change it to `official/main`. |
 
