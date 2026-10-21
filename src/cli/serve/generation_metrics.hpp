@@ -206,7 +206,11 @@ inline std::string GenerationLogDetails(
         << " cache_captured_capacity_bytes="
         << result.component_cache->captured_bytes
         << " cache_global_ledger_bytes="
-        << result.component_cache->ledger.total_bytes;
+        << result.component_cache->ledger.total_bytes
+        << " cache_global_ram_bytes="
+        << result.component_cache->ledger.ram_bytes
+        << " cache_copied_payload_bytes="
+        << result.component_cache->copied_payload_bytes;
   if (result.draft_tokens > 0)
     out << " acceptance_pct="
         << 100.0 * result.draft_accepted_tokens / result.draft_tokens;
