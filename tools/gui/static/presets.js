@@ -89,5 +89,31 @@ export function createPresets(initial, form, action, onChange) {
     notice("Preset deleted. Model files and the running server are unchanged.", true);
   }));
 
+  $("export-presets").addEventListener("click", () => action(async () => {
+    const backup = await api("presets/export");
+    const link = Object.assign(window.document.createElement("a"), {
+      href: URL.createObjectURL(new Blob([`${JSON.stringify(backup, null, 2)}
+`], { type: "application/json" })),
+      download: `gufo-presets-${new Date().toISOString().slice(0, 10)}.json`,
+    });
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    notice("Presets backed up: {count}. Unsaved form edits are not included.", true, { count: backup.presets.length });
+  }));
+
+  $("import-presets").addEventListener("click", () => $("import-file").click());
+  $("import-file").addEventListener("change", () => action(async () => {
+    const [file] = $("import-file").files;
+    $("import-file").value = "";
+    if (!file) return;
+    let data;
+    try { data = JSON.parse(await file.text()); }
+    catch { throw new Error("This is not a Gufo preset backup file."); }
+    const result = await api("presets/import", { data, revision: document.revision });
+    document = result.document;
+    onChange();
+    notice("Presets imported: {count}. Existing presets were not changed.", true, { count: result.imported });
+  }));
+
   return { get id() { return selectedId; }, dirty, render };
 }

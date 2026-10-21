@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools/gui"))
 from command import build_command
-from presets import (change_preset, load_document, new_document, resolved_settings,
-                     save_document, validate_document)
+from presets import (change_preset, export_presets, import_presets, load_document, new_document,
+                     resolved_settings, save_document, validate_document)
 from settings import DEFAULTS
 
 
@@ -158,6 +158,56 @@ class PresetsTest(unittest.TestCase):
             path.write_bytes(b"another broken document")
             save_document(path, new_document())
             self.assertEqual(path.with_name("launcher.json.bak").read_bytes(), original)
+
+    def test_export_round_trips_all_presets_without_shared_settings(self):
+        document = self.change(new_document(), action="create", name="Long", settings=DEFAULTS | {"context": 65536})
+        backup = export_presets(document)
+        self.assertEqual([preset["name"] for preset in backup["presets"]], ["Default", "Long"])
+        for preset in backup["presets"]:
+            self.assertFalse({"executable", "models_dir", "host", "port"} & preset["settings"].keys())
+        target = new_document({"context": 4096, "port": 9000})
+        imported = import_presets(target, {"revision": 0, "data": json.loads(json.dumps(backup))})
+        self.assertEqual(imported["revision"], 1)
+        self.assertEqual(imported["launcher"], target["launcher"])
+        self.assertEqual(imported["selected_preset"], "default")
+        self.assertEqual(imported["presets"][0], target["presets"][0])
+        self.assertEqual([preset["name"] for preset in imported["presets"]], ["Default", "Default (2)", "Long"])
+        self.assertEqual(resolved_settings(imported, imported["presets"][2]["id"])["context"], 65536)
+        self.assertEqual(resolved_settings(imported, imported["presets"][2]["id"])["port"], 9000)
+        self.assertEqual(len({preset["id"] for preset in imported["presets"]}), 3)
+
+    def test_import_rejects_bad_files_without_changing_anything(self):
+        document = new_document()
+        good = {"name": "Good", "settings": {"context": 8192}}
+        wrapper = {"format": "gufo-presets", "version": 1}
+        bad = (
+            {"format": "other", "version": 1, "presets": [good]},
+            wrapper | {"version": 2, "presets": [good]},
+            wrapper | {"presets": []},
+            wrapper | {"presets": [good, {"name": "Bad", "settings": {"context": "huge"}}]},
+            wrapper | {"presets": [{"name": "Bad", "settings": {"unknown": 1}}]},
+            wrapper | {"presets": [{"name": "", "settings": {}}]},
+            wrapper | {"presets": [good | {"extra": 1}]},
+            wrapper | {"presets": [good] * 100},
+            [good],
+        )
+        for data in bad:
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                import_presets(document, {"revision": 0, "data": data})
+        with self.assertRaisesRegex(ValueError, "another tab"):
+            import_presets(document, {"revision": 7, "data": wrapper | {"presets": [good]}})
+        self.assertEqual(document, new_document())
+
+    def test_import_ignores_shared_fields_and_keeps_long_names_unique(self):
+        document = new_document()
+        name = "x" * 80
+        data = {"format": "gufo-presets", "version": 1, "presets": [
+            {"name": name, "settings": {"port": 9999, "host": "0.0.0.0"}}, {"name": name, "settings": {}}]}
+        imported = import_presets(document, {"revision": 0, "data": data})
+        self.assertEqual(imported["launcher"], document["launcher"])
+        names = [preset["name"] for preset in imported["presets"]]
+        self.assertEqual(len(set(names)), 3)
+        self.assertTrue(all(len(item) <= 80 for item in names))
 
     def test_invalid_legacy_payload_is_not_silently_replaced_with_defaults(self):
         with tempfile.TemporaryDirectory() as directory:

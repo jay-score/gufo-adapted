@@ -174,6 +174,7 @@ fieldset:disabled { opacity: .5; }
 .preset-selector label { margin-top: 0; }
 .presets-card > .hint { flex-basis: 100%; margin: 0; }
 .preset-actions { flex-wrap: wrap; }
+.actions-divider { align-self: stretch; width: 1px; margin: 4px 3px; background: var(--button-line); }
 .small-dialog { max-width: 460px; }
 .small-dialog .actions { flex-wrap: wrap; }
 .actions .primary { min-width: 132px; }

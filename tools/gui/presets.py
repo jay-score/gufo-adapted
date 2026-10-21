@@ -12,6 +12,7 @@ from settings import validate_settings
 
 LAUNCHER_FIELDS = ("executable", "models_dir", "host", "port")
 MAX_PRESETS = 100
+EXPORT_FORMAT = "gufo-presets"
 
 
 def new_document(settings=None):
@@ -132,6 +133,59 @@ def save_document(path, document):
         if temporary is not None:
             temporary.unlink(missing_ok=True)
     return document
+
+
+def export_presets(document):
+    """Portable backup of every saved preset. Shared launcher paths and ports stay behind."""
+    return {"format": EXPORT_FORMAT, "version": 1,
+            "presets": [{"name": preset["name"], "settings": deepcopy(preset["settings"])}
+                        for preset in document["presets"]]}
+
+
+def unique_name(name, taken):
+    candidate, number = name, 1
+    while candidate.casefold() in taken:
+        number += 1
+        suffix = f" ({number})"
+        candidate = name[:80 - len(suffix)].rstrip() + suffix
+    return candidate
+
+
+def import_presets(document, request):
+    """Return a validated copy with the file's presets appended. Existing presets never change."""
+    if not isinstance(request, dict) or set(request) != {"data", "revision"}:
+        raise ValueError("Invalid preset import request.")
+    if type(request["revision"]) is not int or request["revision"] != document["revision"]:
+        raise ValueError("Presets changed in another tab. Reload before importing.")
+    data = request["data"]
+    if (not isinstance(data, dict) or data.get("format") != EXPORT_FORMAT or data.get("version") != 1
+            or set(data) != {"format", "version", "presets"}):
+        raise ValueError("This is not a Gufo preset backup file.")
+    incoming = data["presets"]
+    if not isinstance(incoming, list) or not 1 <= len(incoming) <= MAX_PRESETS:
+        raise ValueError(f"Keep between 1 and {MAX_PRESETS} presets.")
+    result = deepcopy(document)
+    if len(result["presets"]) + len(incoming) > MAX_PRESETS:
+        raise ValueError(f"Importing {len(incoming)} presets would exceed the limit of {MAX_PRESETS}.")
+    names = {preset["name"].casefold() for preset in result["presets"]}
+    for item in incoming:
+        if not isinstance(item, dict) or set(item) != {"name", "settings"}:
+            raise ValueError("Invalid preset in the backup file.")
+        name = validate_name(item["name"])
+        if not isinstance(item["settings"], dict):
+            raise ValueError(f'Preset "{name}": invalid settings.')
+        try:
+            values = validate_settings({key: value for key, value in item["settings"].items()
+                                        if key not in LAUNCHER_FIELDS})
+        except ValueError as exc:
+            raise ValueError(f'Preset "{name}": {exc}') from exc
+        name = unique_name(name, names)
+        names.add(name.casefold())
+        result["presets"].append({"id": uuid.uuid4().hex, "name": name,
+                                  "settings": {key: value for key, value in values.items()
+                                               if key not in LAUNCHER_FIELDS}})
+    result["revision"] += 1
+    return validate_document(result)
 
 
 def change_preset(document, request):
