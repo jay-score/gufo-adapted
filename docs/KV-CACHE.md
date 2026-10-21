@@ -593,6 +593,26 @@ Match these request-local IDs to `checkpoint_id` in publication/refusal logs:
 an earlier request's asynchronous write may finish after the current response.
 IDs belong to one server lifetime; correlate each restart separately.
 
+`cache_snapshot_bytes` is a per-request sum of snapshot payload bytes
+successfully admitted during that request, not the cache's current occupancy
+or the process RSS. A request can publish several checkpoints and evict older
+ones between publications, so this sum can exceed `--cache-ram-bytes`. In the
+snapshot cache (including older Flash-Next builds), complete logical payloads
+are counted even when snapshots share immutable host blocks; the counter is
+not the number of bytes freshly allocated or copied. For component-cache
+runners, use `usage.gufo.component_cache` for capture and resource accounting.
+The completion log includes `cache_global_ram_bytes`, the contemporaneous
+global RAM ledger gauge, and `cache_copied_payload_bytes`, the payload bytes
+copied by this request. These correspond to `global_ram_bytes` and
+`copied_payload_bytes` in `usage.gufo.component_cache`. The RAM gauge is cache
+accounting, not total process RSS; the copy counter measures work over the
+request, not retained memory.
+
+Snapshot-cache eviction logs omit routine byte-budget evictions and exact
+replacements. Only entry-capacity removals and skipped captures are emitted,
+so the absence of byte-budget removal lines does not establish that no such
+eviction occurred.
+
 Reading them:
 
 - `cache_n` growing turn over turn while `prompt_n` stays flat is healthy
@@ -602,8 +622,11 @@ Reading them:
   `cache_n` and only their own tail in `prompt_n`. With `--log-level debug`,
   `event=shared_prefix_wait` and `event=shared_prefix_ready` name the leader
   and position.
-- `cache_n` **pinned** at the same value while `prompt_n` grows every turn is a
-  checkpoint that stopped advancing. See #335.
+- `cache_n` **pinned** at the same value while `prompt_n` grows every turn means
+  the reusable boundary stopped advancing. Captures may have failed, been
+  evicted, or no longer match the next request's rendered tokens. Successful
+  captures alone do not establish that the next request can reuse them.
+  See #335 for one previously fixed cause.
 - A large `cache_common_prefix_tokens` on a miss means a long prefix agreed and
   could not be resumed from: a mid-history edit, or an evicted checkpoint.
 
