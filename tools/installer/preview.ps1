@@ -42,6 +42,10 @@ function New-GufoPreviewState {
       Remote = $script:GufoRepository
     }
     InstallDir = $installDir
+    InstallSource = "saved"
+    InstallNote = ""
+    SavedInstallDir = $installDir
+    LauncherDir = ""
     DepsDir = "C:\Users\you\AppData\Local\Gufo\dependencies"
     SettingsDir = "C:\Users\you\AppData\Local\Gufo"
     Jobs = 8
