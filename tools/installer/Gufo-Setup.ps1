@@ -769,7 +769,7 @@ function Get-GufoMenuItems {
   $items = New-Object System.Collections.Generic.List[object]
   if ($State.Checkout.Valid) {
     $items.Add(@{ Key = "update"; Label = "Update"; Hint = "pull windows-main and rebuild the engine" })
-    $items.Add(@{ Key = "repair"; Label = "Repair"; Hint = "recheck tools, rebuild, verify the GPU" })
+    $items.Add(@{ Key = "repair"; Label = "Install/Repair"; Hint = "recheck tools, rebuild, verify the GPU" })
   } else {
     $items.Add(@{ Key = "install"; Label = "Install Gufo"; Hint = "fetch windows-main, build for this PC, verify the GPU" })
   }
@@ -2583,7 +2583,7 @@ function Invoke-GufoPlain {
     Write-Host ""
     Write-Host "1) Install"
     Write-Host "2) Update (existing checkout)"
-    Write-Host "3) Repair (existing checkout)"
+    Write-Host "3) Install/Repair (existing checkout)"
     Write-Host "4) Uninstall"
     Write-Host "5) Quit"
     $answer = Read-Host "Choose [1-5]"
