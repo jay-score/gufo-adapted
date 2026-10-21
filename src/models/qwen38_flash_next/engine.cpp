@@ -186,17 +186,6 @@ std::unique_ptr<Session> Model::CreateSession(core::SessionMode mode,
   if (!native) {
     return nullptr;
   }
-  if (vision_) {
-    // Image-capable slots can first serve text. Prepare the stable RoPE
-    // descriptor before any graphs capture a null pointer: replacing it
-    // later destroys those graphs during image admission (5–12 ms here).
-    try {
-      native->PrepareVision(executor_->stream());
-    } catch (const std::exception& exception) {
-      AssignError(error_msg, exception.what());
-      return nullptr;
-    }
-  }
   return std::unique_ptr<Session>(
       new Session(shared_from_this(), std::move(native)));
 }
@@ -642,7 +631,6 @@ bool Session::DraftCatchUp(std::int32_t next_token, bool propose,
           *session_, replay, hidden_row,
           {.token = propose && candidates == nullptr ? &draft_token_ : nullptr,
            .candidates = candidates,
-           .kv_only = !propose,
            .draft_subset = draft_subset},
           error_msg)) {
     return false;
@@ -651,14 +639,9 @@ bool Session::DraftCatchUp(std::int32_t next_token, bool propose,
 }
 
 bool Session::DraftCatchUpBatch(std::span<const AdvanceRequest> requests,
-                                std::string* error_msg,
-                                std::span<const std::uint8_t> propose) {
+                                std::string* error_msg) {
   if (requests.empty())
     return true;
-  if (!propose.empty() && propose.size() != requests.size()) {
-    AssignError(error_msg, "draft catch-up head count differs from requests");
-    return false;
-  }
   auto& exec = *requests.front().session->model_->executor_;
   std::vector<std::vector<std::int32_t>> replays(requests.size());
   std::vector<rocm::Executor::MtpBatchItem> items;
@@ -672,8 +655,7 @@ bool Session::DraftCatchUpBatch(std::span<const AdvanceRequest> requests,
       return false;
     if (replays[i].empty())
       continue;
-    items.push_back({session.session_.get(), replays[i], hidden_row,
-                     propose.empty() || !propose[i]});
+    items.push_back({session.session_.get(), replays[i], hidden_row});
   }
   return items.empty() || exec.MtpForwardBatch(items, error_msg);
 }
@@ -875,7 +857,7 @@ void Session::AppendDraft(PendingDecode& pending) {
 }
 
 bool Session::AppendLookup(PendingDecode& pending, bool stop_at_eos,
-                           std::size_t minimum, bool require_resume) {
+                           std::size_t minimum) {
   const auto cap = pending.lookup_cap;
   if (pending.chain.size() >= cap) {
     return false;
@@ -886,8 +868,7 @@ bool Session::AppendLookup(PendingDecode& pending, bool stop_at_eos,
   const auto match =
       lookup_.Find(tokens_, pending.chain,
                    pending.sampled ? PromptLookup::kSampledMinMatch
-                                   : PromptLookup::kMinMatch,
-                   require_resume);
+                                   : PromptLookup::kMinMatch);
   if (match.length == 0) {
     return false;
   }
@@ -992,8 +973,7 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   const std::uint32_t base = static_cast<std::uint32_t>(tokens_.size());
   const bool sampled = sampler.config().uses_random_sampling();
   const bool gpu_greedy = sampler.config().temperature == 0.0F;
-  const bool gpu_verification =
-      gpu_greedy || rocm::Executor::CanCompactMtpVerification(sampler);
+  const bool gpu_verification = gpu_greedy;
   // A cycle-local proposal stream needs no pending RNG state in snapshots.
   // Target verification keeps its own draws after this independent seed.
   pending->draft_rng =
@@ -1019,11 +999,12 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   if (pending->lookup_cap != 0) {
     lookup_.Extend(tokens_, sampled);
   }
-  // A sampled copy can skip the neural head only after an accepted copy
-  // established its source and a full sampled match still holds. New or
-  // short matches retain the neural proposal: replacing it based only on
-  // shared syntax previously regressed an identical Pi code write by 9%.
-  if (AppendLookup(*pending, stop_at_eos, 3, sampled)) {
+  // Greedy copies can supply the whole chain without the neural head.
+  // Sampled requests first extend with a neural proposal: a repeated prefix
+  // alone does not predict the continuation well enough at temperature.
+  // Replacing that proposal regressed an identical Pi code write by 9%.
+  // They still append copies below, after a neural proposal extends the match.
+  if (!sampled && AppendLookup(*pending, stop_at_eos, 3)) {
     return defer_head || DraftCatchUp(anchor, false, error_msg);
   }
   if (allow_subset && !SyncDraftVocab(error_msg))
@@ -1098,29 +1079,6 @@ bool Session::FinishDecode(const DecodeRequest& request,
   std::uint32_t keep = 1;
   std::optional<std::int32_t> correction;
   bool cpu_rows = false;
-  const auto download_remaining = [&](std::uint32_t first) {
-    verify_logits_.resize(exec.max_speculative() * vocab);
-    auto rows =
-        std::span(verify_logits_).subspan(first * vocab, (k - first) * vocab);
-    if (!exec.ReadVerificationRows(first, rows, error_msg))
-      return false;
-    cpu_rows = true;
-    return true;
-  };
-  std::array<std::span<const sampling::LogitCandidate>, kMaxMtpDraftTokens>
-      candidates{};
-  if (gpu_verification && !gpu_greedy) {
-    // Accepting the anchor may activate a tool grammar, reasoning budget,
-    // or exceed the bounded penalty workspace. Keep the complete-row path.
-    if (!rocm::Executor::CanCompactMtpVerification(sampler)) {
-      if (!download_remaining(0))
-        return false;
-    } else if (!exec.SampledMtpCandidates(std::span(candidates).first(k - 1),
-                                          sampler, std::span(chain).subspan(1),
-                                          error_msg)) {
-      return false;
-    }
-  }
   while (keep < k) {
     if (gpu_greedy && !cpu_rows) {
       const auto& prediction = greedy[keep - 1];
@@ -1134,8 +1092,12 @@ bool Session::FinishDecode(const DecodeRequest& request,
         // forbidden argmax, download the remaining rows once and use exact
         // masked selection. Avoid one synchronization per rejected candidate.
         // SelectBatchLogits has already installed this session's row offset.
-        if (!download_remaining(keep - 1))
+        verify_logits_.resize(exec.max_speculative() * vocab);
+        auto rows = std::span(verify_logits_)
+                        .subspan((keep - 1) * vocab, (k - keep + 1) * vocab);
+        if (!exec.ReadVerificationRows(keep - 1, rows, error_msg))
           return false;
+        cpu_rows = true;
         continue;
       }
       if (is_stop(prediction.index)) {
@@ -1150,16 +1112,10 @@ bool Session::FinishDecode(const DecodeRequest& request,
       continue;
     }
     if (sampled) {
-      if (gpu_verification && !cpu_rows && sampler.NeedsConstraintMask() &&
-          !download_remaining(keep - 1))
-        return false;
       const auto verified =
-          gpu_verification && !cpu_rows
-              ? VerifyMtpProposal(candidates[keep - 1], vocab,
-                                  proposals[keep - 1], sampler)
-              : VerifyMtpProposal(std::span<const float>(verify_logits_)
-                                      .subspan((keep - 1) * vocab, vocab),
-                                  proposals[keep - 1], sampler);
+          VerifyMtpProposal(std::span<const float>(verify_logits_)
+                                .subspan((keep - 1) * vocab, vocab),
+                            proposals[keep - 1], sampler);
       const auto token = static_cast<std::int32_t>(verified.token);
       const bool accepted = verified.accepted;
       if (is_stop(token)) {
@@ -1446,15 +1402,11 @@ bool Session::DecodeBatchImpl(std::span<const DecodeRequest> requests,
     }
   }
   std::vector<AdvanceRequest> catchup;
-  std::vector<std::uint8_t> propose;
   for (std::size_t i = 0; i < requests.size(); ++i) {
-    if (!pending[i].chain.empty()) {
+    if (!pending[i].chain.empty())
       catchup.push_back({requests[i].session, pending[i].chain.front()});
-      propose.push_back(pending[i].speculative &&
-                        pending[i].chain.size() < pending[i].width);
-    }
   }
-  if (!DraftCatchUpBatch(catchup, error_msg, propose))
+  if (!DraftCatchUpBatch(catchup, error_msg))
     return false;
   // Each round shares predictor projections across ready sessions.
   // Attention state, proposal distributions and RNG streams stay private.
