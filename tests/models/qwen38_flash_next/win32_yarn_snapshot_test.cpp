@@ -1,4 +1,6 @@
 // Windows YaRN checkpoint coverage without the Linux snapshot fault hooks.
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -82,14 +84,16 @@ std::vector<std::uint8_t> CheckCheckpoint(
   if (!extended) {
     bytes.resize(checkpoint->SizeBytes());
     Require(checkpoint->CopyTo(bytes), "serialize checkpoint");
-    std::uint32_t version;
-    std::memcpy(&version, bytes.data() + 8, sizeof(version));
-    const std::uint32_t previous_version = 14;
-    std::memcpy(bytes.data() + 8, &previous_version, sizeof(previous_version));
+    constexpr std::array<std::uint8_t, 8> magic{'Q', 'F', 'N', 'S',
+                                                'N', 'A', 'P', '6'};
+    const auto executor =
+        std::search(bytes.begin(), bytes.end(), magic.begin(), magic.end());
+    Require(executor != bytes.end(), "executor snapshot header is missing");
+    executor[7] = '5';  // The executor format immediately before YaRN.
     Require(!session->RestoreSnapshot(bytes, &error),
             "pre-YaRN snapshot version was accepted");
     Require(session->Position() == boundary, "rejection changed session state");
-    std::memcpy(bytes.data() + 8, &version, sizeof(version));
+    executor[7] = '6';
     Require(session->RestoreSnapshot(bytes, &error), error);
     Require(session->Position() == boundary &&
                 std::memcmp(boundary_logits.data(), session->Logits().data(),
