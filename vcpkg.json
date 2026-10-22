@@ -8,6 +8,7 @@
     "openssl",
     "libpng",
     "libjpeg-turbo",
-    { "name": "libwebp", "default-features": false }
+    { "name": "libwebp", "default-features": false },
+    { "name": "pkgconf", "host": true }
   ]
 }

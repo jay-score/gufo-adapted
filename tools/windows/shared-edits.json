@@ -5,7 +5,7 @@
     ".github/workflows/pr-title.yml": { "reason": "Check PR titles on windows-main." },
     ".github/workflows/release-please.yml": { "reason": "Fork does not run upstream's release automation." },
     ".gitignore": { "reason": "Ignore host-specific tools/windows/local.json." },
-    "CMakeLists.txt": { "reason": "Windows platform hooks (see todo item on deferred overrides)." },
+    "CMakeLists.txt": { "reason": "Platform check, Windows.cmake include, gufo-server copy and optional roctx; other Windows changes are deferred overrides in cmake/Windows.cmake." },
     "CMakePresets.json": { "reason": "windows-cpu and windows-gpu presets." },
     "README.md": { "reason": "Fork description." },
     "docs/KV-CACHE.md": { "reason": "Snapshot byte counter semantics." },

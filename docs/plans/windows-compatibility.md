@@ -88,8 +88,7 @@ in the implementation change:
 - `tools/windows/build.ps1`, simplified to build this engine and stage its
   required runtime DLLs and kernel libraries.
 - The pinned vcpkg dependencies. Keep Linux's existing dependency discovery;
-  add Windows-specific WebP CMake discovery rather than replacing Linux's
-  `PkgConfig::WEBP` path.
+  WebP uses the same `PkgConfig::WEBP` path through vcpkg's host `pkgconf`.
 
 Useful provenance starts with the original compatibility commit above,
 `9bc346fa50a945232f2e41bc6bfca7ff4b1477f2` (build scripts),

@@ -259,6 +259,12 @@ to Gufo-owned targets; it links only Winsock, PSAPI, and Advapi32 security APIs,
 with no HIP or DXGI
 dependency. Linux does not include the module. Linux WebP discovery, Nix,
 compiler flags, model framing, algorithms, and the disk format are retained.
+WebP is found through the upstream `pkg_check_modules` line, using vcpkg's
+`libwebp.pc` and its host `pkgconf`. Deferred calls in the module adjust root
+targets after they exist instead of editing upstream lines: they exclude the
+Linux cache fault library from the default build, disable its test and
+install a `gufo-server.exe` copy. Linux's `check-pr` target is configured but
+not built on Windows.
 
 Two portable C++ changes are needed to compile the current official code:
 the JSON `size_t` constructor must tolerate Windows' identical
