@@ -190,6 +190,79 @@ Reply with exactly the word ACK."},
 }
 ```
 
+## October 22, 2026: PR #702
+
+Status: **candidate local checks pass; hosted qualification is recorded on the sync PR**.
+
+- Windows base: `e416eac00b1450eb03d82165d76ebd1970ac0364` (includes PR #73).
+- Previous official ancestor: `e060aeed923730b74ea3f4116c3c39de55741370`.
+- Imported official commit: `53ebb51ed0c0b24dbe7c1e35dce6c97d82740bfe`.
+- Integration: ordinary merge, `45bb338c2e5e42b5d99a985c65be22e05792c1fb`.
+- Fetched `official/main`: `7c819652`. This import intentionally stops at
+  #702 as requested; the six newer upstream commits are not included.
+- Evidence: `build/sync-702-2026-10-22/` in the task worktree.
+
+| PR | Upstream change | Merge SHA |
+| --- | --- | --- |
+| [#702](https://github.com/gufo-org/gufo/pull/702) | Stop the benchmark server when startup is interrupted | `53ebb51ed0c0b24dbe7c1e35dce6c97d82740bfe` |
+
+### Merge review
+
+No conflicts or files changed on both sides. The two imported files,
+`tools/gufo/model_bench/servers.py` and `tests/tools/serving_bench_test.py`,
+remain byte-identical to the recorded upstream commit. The helper now stops
+its server and re-raises when readiness checking exits through an exception,
+including `KeyboardInterrupt`. Review covered early process exit, readiness
+timeout and the existing process-group shutdown. No engine, model, CMake,
+dependency or Windows platform code changes.
+
+The inventory finds no incoming change to #699's reverted regions. Its revert
+and reintroduction requirements remain intact; the candidate check confirms
+that its six forbidden identifiers remain absent.
+
+### Compatibility and validation
+
+| Contract | Outcome |
+| --- | --- |
+| Cached concurrent n-gram reads | Reviewed/unchanged: no model or I/O path changes. |
+| WDDM admission budgets | Reviewed/unchanged: no admission or device-memory changes. |
+| Pinned memory and transfer lifetime | Reviewed/unchanged: no allocation, transfer or snapshot changes. |
+| Sockets and shutdown | Native engine paths unchanged; bounded HTTP/WebSocket and real console-shutdown checks pass. Benchmark-helper interruption cleanup passes separately under WSL. |
+| Filesystem identity, privacy and failures | Implementation unchanged; bounded identity, privacy and failure checks pass. |
+| GPU queue policy | Implementation unchanged; bounded native startup policy checks pass. |
+
+Completed checks:
+
+- `tools/windows/build.ps1 -Preset windows-cpu -Vcpkg VCPKG_PATH
+  -Ninja NINJA_PATH -Jobs 4`: pass with TheRock's compiler, MSVC 14.51.36231,
+  SDK 10.0.26100.0, CMake 4.4.0 and the existing pinned vcpkg manifest.
+- `ctest --preset windows-cpu --no-tests=error --output-on-failure`:
+  **16/16 pass**, 19.49 seconds (`cpu-build.txt`, `cpu-ctest.txt`).
+- `python3 -I tests/tools/serving_bench_test.py` under WSL/Python 3.12.3:
+  **pass**, including the new real-process interruption test
+  (`serving-bench-wsl.txt`). This helper uses POSIX process groups; this is
+  Linux lifecycle evidence, not a claim of native Windows benchmark support.
+- Matched interrupted-start control with the exact Windows-base helper and
+  candidate helper under WSL: both propagate `KeyboardInterrupt`; the base
+  leaves its real `sleep` child alive, while the candidate has already reaped
+  it. The control explicitly cleans up both test-owned processes
+  (`startup-control.py`, `base-servers.py`, `startup-control.txt`).
+- Inventory before and after merging, including `-Candidate HEAD`: pass.
+  `diff-guard.ps1`: pass, with 72 changed upstream files, unchanged by this
+  import (`inventory.md`, `candidate-inventory.md`).
+- `check-docs.py`, `check-dependencies.py`, `git diff --check`, and the
+  imported-commit ancestry check: pass. No C++ edits require formatting.
+- Hosted Linux/Nix and Windows CPU gates run on the draft sync PR; their
+  results qualify that PR's exact head.
+
+### Live checks and limits
+
+No inference or shared runtime paths changed, so no GPU/model rebuild,
+numerical sweep or inference timing comparison is required for this import.
+The existing Windows qualification limits remain unchanged. The benchmark
+cleanup result is supported by a real child process, without loading a model.
+Preserve official ancestry by merging the sync PR with a merge commit.
+
 ## October 21, 2026
 
 Status: **local handoff complete; #699 reverted; qualification limited below**
