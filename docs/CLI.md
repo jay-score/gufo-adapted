@@ -14,7 +14,8 @@ prompt caching.
 
 ## Functionalities
 
-This is an exhaustive list of functionalities and features offered by the gufo cli, the mapping between features and flags is not documented here and should be discovered using the `--help` command to avoid divergences between the implementation and the documentation.
+This page documents the primary options and workflows. Use `--help` for the
+complete list of command-specific flags and defaults.
 
 The supported modalities are LLM, image, video, and audio (TTS, ASR).
 `gufo serve image` provides [Qwen-Image-2.1 generation and editing](models/qwen-image-2.1/README.md).
@@ -36,6 +37,19 @@ The supported modalities are LLM, image, video, and audio (TTS, ASR).
   budget. This does not cap weights, live session state or disk staging.
 - `prefillChunk` — prompt tokens processed between active decode steps in
   HTTP serving. Model runtimes choose their own internal prefill batch sizes.
+- `--memory-budget-gb GB` — enables Qwen3.8 Flash-Next out-of-core expert
+  storage and sets its target memory budget; zero leaves streaming disabled.
+  Although the option is labeled `GB`, the planner converts the value using
+  2³⁰ bytes (GiB), as reflected in the `target_memory_budget_gib` statistics.
+- `--ple-shelf` — keeps a bounded 128 MiB PLE row cache in RAM. Disabled by
+  default; it can reduce repeated PLE table reads without loading the full
+  table.
+- `--ssd-stats` — prints the storage report at shutdown, including total SSD
+  traffic, expert demand/prefetch traffic, separately accounted PLE bytes and
+  read time, cache behavior, and memory/swap samples.
+- `--cache-prior-bias FLOAT` — non-negative weight for learned token-to-expert
+  priors when ranking prefetch candidates and choosing retained cache entries.
+  The default is `0`, which leaves the prior score out of those rankings.
 - `maxTokens` — maximum number of tokens a request may generate. In practice:
   stops a model that rambles forever.
 

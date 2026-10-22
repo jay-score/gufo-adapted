@@ -20,8 +20,10 @@ struct SsdPhaseStatsSnapshot {
   std::uint64_t hard_stall_nanoseconds{0};
   std::uint64_t demand_bytes_read{0};
   std::uint64_t prefetch_bytes_read{0};
+  std::uint64_t ple_bytes_read{0};
   std::uint64_t demand_read_nanoseconds{0};
   std::uint64_t prefetch_read_nanoseconds{0};
+  std::uint64_t ple_read_nanoseconds{0};
   std::uint64_t ple_requests{0};
   std::uint64_t ple_hits{0};
 };
@@ -41,7 +43,9 @@ struct SsdStatsSnapshot {
   std::uint64_t ple_requests{0};
   std::uint64_t ple_hits{0};
   std::uint64_t ssd_bytes_read{0};
+  std::uint64_t ple_bytes_read{0};
   std::uint64_t ssd_read_nanoseconds{0};
+  std::uint64_t ple_read_nanoseconds{0};
   std::uint64_t session_bytes_written{0};
   std::uint64_t elapsed_nanoseconds{0};
   SsdPhaseStatsSnapshot prefill;
@@ -73,6 +77,10 @@ public:
   void RecordStorageElapsed(std::chrono::nanoseconds elapsed,
                             bool prefill = false,
                             bool prefetch = false) noexcept;
+  void RecordPleStorageBytes(std::uint64_t bytes,
+                             bool prefill = false) noexcept;
+  void RecordPleStorageElapsed(std::chrono::nanoseconds elapsed,
+                               bool prefill = false) noexcept;
   void RecordStorageRead(std::uint64_t bytes, std::chrono::nanoseconds elapsed,
                          bool prefill = false, bool prefetch = false) noexcept;
   void RecordSessionWrite(std::uint64_t bytes) noexcept;
@@ -90,8 +98,10 @@ private:
     std::atomic<std::uint64_t> hard_stall_nanoseconds{0};
     std::atomic<std::uint64_t> demand_bytes_read{0};
     std::atomic<std::uint64_t> prefetch_bytes_read{0};
+    std::atomic<std::uint64_t> ple_bytes_read{0};
     std::atomic<std::uint64_t> demand_read_nanoseconds{0};
     std::atomic<std::uint64_t> prefetch_read_nanoseconds{0};
+    std::atomic<std::uint64_t> ple_read_nanoseconds{0};
     std::atomic<std::uint64_t> ple_requests{0};
     std::atomic<std::uint64_t> ple_hits{0};
   };
@@ -119,7 +129,9 @@ private:
   std::atomic<std::uint64_t> ple_requests_{0};
   std::atomic<std::uint64_t> ple_hits_{0};
   std::atomic<std::uint64_t> ssd_bytes_read_{0};
+  std::atomic<std::uint64_t> ple_bytes_read_{0};
   std::atomic<std::uint64_t> ssd_read_nanoseconds_{0};
+  std::atomic<std::uint64_t> ple_read_nanoseconds_{0};
   std::atomic<std::uint64_t> session_bytes_written_{0};
   std::array<PhaseCounters, 2> phase_counters_{};
 };

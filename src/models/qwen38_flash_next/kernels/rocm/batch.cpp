@@ -121,7 +121,7 @@ void Executor::UseScratch(const Scratch& scratch) const {
   q8t_src_ = nullptr;
   half_src_ = nullptr;
   xn_half_ = false;
-  moe_pending_ = false;
+  moe_pending_.Reset();
 }
 
 bool Executor::AllocateBatch(std::string* error) const {
@@ -683,9 +683,10 @@ bool Executor::MoeBatch(const DeviceLayer& l, const float* x, float* out,
     return false;
   RouterTopK(base.router, c.num_experts + 1, base.ids, base.weights, rows,
              c.num_experts, c.num_experts_used, stream_);
-  if (!LookaheadPrefetch(
+  std::vector<LookaheadPrediction> lookahead;
+  if (!PredictLookahead(
           l, lookahead_residual != nullptr ? lookahead_residual : base.res,
-          rows, error))
+          rows, &lookahead, error))
     return false;
   const auto cancel_future_prefetch = [&] {
     if (expert_cache_ == nullptr)
@@ -705,7 +706,8 @@ bool Executor::MoeBatch(const DeviceLayer& l, const float* x, float* out,
   // below indexes weights with global router IDs. StreamedMoeRows resolves a
   // larger unique-expert window, then executes the original eight-row groups.
   if (l.experts_streamed) {
-    const bool ok = StreamedMoeRows(l, x, out, rows, error, kDecodeRows);
+    const bool ok =
+        StreamedMoeRows(l, x, out, rows, error, kDecodeRows, lookahead);
     if (expert_cache_ != nullptr)
       expert_cache_->FinishPrefetch(l.layer_index);
     if (!ok)

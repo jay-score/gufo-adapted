@@ -21,6 +21,7 @@ class SsdStats;
 class ExpertCacheManager {
 public:
   static constexpr std::size_t kSharedScratchBufferCount = 32;
+  static constexpr std::size_t kSpeculativeTransactionCap = 2;
 
   enum class VictimPolicy : std::uint8_t {
     kLru,
@@ -62,17 +63,20 @@ public:
 
   /// Starts a bounded asynchronous prefetch without evicting any slot it
   /// reserves. A second prefetch for the same layer is ignored while its
-  /// current prediction batch still owns slots.
+  /// current prediction batch still owns slots. Speculative transactions are
+  /// globally capped; non-speculative Room reads use their higher-priority
+  /// background lane and are not counted against that cap.
   [[nodiscard]] bool Prefetch(std::uint32_t layer,
                               std::span<const std::int32_t> expert_ids,
                               std::size_t max_slots,
                               std::string* error_msg = nullptr,
-                              bool prefill = false);
+                              bool prefill = false, bool speculative = false);
   [[nodiscard]] bool PrefetchTokenPriors(std::uint32_t layer,
                                          std::span<const std::int32_t> tokens,
                                          std::size_t max_slots,
                                          std::string* error_msg = nullptr,
-                                         bool prefill = false);
+                                         bool prefill = false,
+                                         bool speculative = true);
   void RecordTokenRouting(std::uint32_t layer,
                           std::span<const std::int32_t> tokens,
                           std::span<const std::int32_t> expert_ids);

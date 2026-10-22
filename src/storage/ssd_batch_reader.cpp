@@ -5,9 +5,11 @@
 #include <cstring>
 #include <deque>
 #include <future>
+#include <iostream>
 #include <limits>
 #include <mutex>
 #include <new>
+#include <set>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -130,6 +132,18 @@ std::vector<std::size_t> SortedRequestIndices(
   return order;
 }
 
+#ifndef _WIN32
+void WarnBufferedFallback(const std::filesystem::path& path, int error) {
+  static std::mutex warning_mutex;
+  static std::set<std::filesystem::path> warned_paths;
+  const std::lock_guard<std::mutex> lock(warning_mutex);
+  if (warned_paths.insert(path).second) {
+    std::clog << "ssd_reader_buffered_fallback path=" << path.string()
+              << " direct_open_errno=" << error << '\n';
+  }
+}
+#endif
+
 }  // namespace
 
 struct SsdScratchPool::Impl {
@@ -142,7 +156,8 @@ struct SsdScratchPool::Impl {
   std::deque<std::size_t> free;
   std::size_t buffer_bytes{0};
   std::size_t demand_waiters{0};
-  std::size_t prefetch_waiters{0};
+  std::size_t room_waiters{0};
+  std::size_t speculative_waiters{0};
   mutable std::mutex mutex;
   std::condition_variable available;
 };
@@ -187,14 +202,23 @@ std::size_t SsdScratchPool::allocated_bytes() const noexcept {
   return buffer_count() * buffer_bytes();
 }
 
-std::size_t SsdScratchPool::Acquire(bool demand) {
+std::size_t SsdScratchPool::Acquire(SsdReadPriority priority) {
   if (impl_ == nullptr)
     throw std::logic_error("SSD shared scratch pool is unavailable");
   std::unique_lock<std::mutex> lock(impl_->mutex);
-  auto& waiters = demand ? impl_->demand_waiters : impl_->prefetch_waiters;
+  std::size_t& waiters =
+      priority == SsdReadPriority::kDemand
+          ? impl_->demand_waiters
+          : (priority == SsdReadPriority::kRoom ? impl_->room_waiters
+                                                : impl_->speculative_waiters);
   ++waiters;
   impl_->available.wait(lock, [&] {
-    return !impl_->free.empty() && (demand || impl_->demand_waiters == 0);
+    return !impl_->free.empty() &&
+           (priority == SsdReadPriority::kDemand ||
+            (priority == SsdReadPriority::kRoom &&
+             impl_->demand_waiters == 0) ||
+            (priority == SsdReadPriority::kSpeculative &&
+             impl_->demand_waiters == 0 && impl_->room_waiters == 0));
   });
   --waiters;
   const std::size_t lease = impl_->free.front();
@@ -231,7 +255,7 @@ std::size_t SsdScratchPool::EstimateBufferBytes(
 struct SsdBatchReader::Impl {
   struct BatchJob {
     SsdBatchReader::BatchId id{0};
-    bool prefetch{false};
+    SsdReadPriority priority{SsdReadPriority::kDemand};
     std::vector<SsdReadRequest> requests;
     std::promise<SsdReadBatchResult> completion;
   };
@@ -312,9 +336,20 @@ struct SsdBatchReader::Impl {
     }
 #else
     fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_DIRECT);
-    if (fd < 0)
-      throw std::runtime_error("open(O_DIRECT) failed for SSD reader: " +
-                               std::to_string(errno));
+    if (fd < 0) {
+      const int direct_error = errno;
+      if (direct_error != EINVAL && direct_error != EOPNOTSUPP) {
+        throw std::runtime_error("open(O_DIRECT) failed for SSD reader: " +
+                                 std::to_string(direct_error));
+      }
+      fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+      if (fd < 0) {
+        throw std::runtime_error(
+            "open(O_DIRECT) and buffered fallback failed for SSD reader: " +
+            std::to_string(errno));
+      }
+      WarnBufferedFallback(path, direct_error);
+    }
     try {
       if (scratch_pool == nullptr)
         AllocateScratch(options.io_threads);
@@ -414,7 +449,8 @@ struct SsdBatchReader::Impl {
     if (bytes_read != nullptr)
       *bytes_read = 0;
     std::vector<SsdReadRequest> owned(requests.begin(), requests.end());
-    auto future = EnqueueBatch(std::move(owned), false, nullptr);
+    auto future =
+        EnqueueBatch(std::move(owned), SsdReadPriority::kDemand, nullptr);
     SsdReadBatchResult result = future.get();
     if (result.requests.size() == requests.size())
       std::copy(result.requests.begin(), result.requests.end(),
@@ -427,10 +463,10 @@ struct SsdBatchReader::Impl {
   }
 
   std::future<SsdReadBatchResult> EnqueueBatch(
-      std::vector<SsdReadRequest> requests, bool prefetch,
+      std::vector<SsdReadRequest> requests, SsdReadPriority priority,
       SsdBatchReader::BatchId* batch_id) {
     auto job = std::make_shared<BatchJob>();
-    job->prefetch = prefetch;
+    job->priority = priority;
     job->requests = std::move(requests);
     auto future = job->completion.get_future();
     if (job->requests.empty()) {
@@ -455,7 +491,17 @@ struct SsdBatchReader::Impl {
         return future;
       }
       job->id = ++next_batch_id;
-      (prefetch ? prefetch_batches : demand_batches).push_back(job);
+      switch (priority) {
+        case SsdReadPriority::kDemand:
+          demand_batches.push_back(job);
+          break;
+        case SsdReadPriority::kRoom:
+          room_batches.push_back(job);
+          break;
+        case SsdReadPriority::kSpeculative:
+          speculative_batches.push_back(job);
+          break;
+      }
     }
     if (batch_id != nullptr)
       *batch_id = job->id;
@@ -465,13 +511,20 @@ struct SsdBatchReader::Impl {
 
   bool PromotePrefetch(SsdBatchReader::BatchId batch_id) {
     const std::lock_guard<std::mutex> lock(batch_mutex);
-    const auto found =
-        std::find_if(prefetch_batches.begin(), prefetch_batches.end(),
-                     [&](const auto& job) { return job->id == batch_id; });
-    if (found == prefetch_batches.end())
+    const auto promote = [&](auto& queue) {
+      const auto found =
+          std::find_if(queue.begin(), queue.end(),
+                       [&](const auto& job) { return job->id == batch_id; });
+      if (found == queue.end())
+        return false;
+      auto job = std::move(*found);
+      queue.erase(found);
+      job->priority = SsdReadPriority::kDemand;
+      demand_batches.push_back(std::move(job));
+      return true;
+    };
+    if (!promote(room_batches) && !promote(speculative_batches))
       return false;
-    demand_batches.push_back(std::move(*found));
-    prefetch_batches.erase(found);
     batch_ready.notify_one();
     return true;
   }
@@ -480,13 +533,18 @@ struct SsdBatchReader::Impl {
     std::shared_ptr<BatchJob> cancelled;
     {
       const std::lock_guard<std::mutex> lock(batch_mutex);
-      const auto found =
-          std::find_if(prefetch_batches.begin(), prefetch_batches.end(),
-                       [&](const auto& job) { return job->id == batch_id; });
-      if (found == prefetch_batches.end())
+      const auto cancel = [&](auto& queue) {
+        const auto found =
+            std::find_if(queue.begin(), queue.end(),
+                         [&](const auto& job) { return job->id == batch_id; });
+        if (found == queue.end())
+          return false;
+        cancelled = std::move(*found);
+        queue.erase(found);
+        return true;
+      };
+      if (!cancel(room_batches) && !cancel(speculative_batches))
         return false;
-      cancelled = std::move(*found);
-      prefetch_batches.erase(found);
     }
     SsdReadBatchResult result;
     result.requests = std::move(cancelled->requests);
@@ -513,13 +571,16 @@ struct SsdBatchReader::Impl {
       {
         std::unique_lock<std::mutex> lock(batch_mutex);
         batch_ready.wait(lock, [&] {
-          return stopping || !demand_batches.empty() ||
-                 !prefetch_batches.empty();
+          return stopping || !demand_batches.empty() || !room_batches.empty() ||
+                 !speculative_batches.empty();
         });
-        if (demand_batches.empty() && prefetch_batches.empty() && stopping)
+        if (demand_batches.empty() && room_batches.empty() &&
+            speculative_batches.empty() && stopping)
           return;
         auto& queue =
-            demand_batches.empty() ? prefetch_batches : demand_batches;
+            !demand_batches.empty()
+                ? demand_batches
+                : (!room_batches.empty() ? room_batches : speculative_batches);
         job = queue.front();
         queue.pop_front();
       }
@@ -528,7 +589,7 @@ struct SsdBatchReader::Impl {
       const auto start = std::chrono::steady_clock::now();
       try {
         result.success = ReadBatchInline(result.requests, &result.error,
-                                         &result.bytes_read, !job->prefetch);
+                                         &result.bytes_read, job->priority);
       } catch (const std::exception& error) {
         result.error = error.what();
         result.success = false;
@@ -545,7 +606,7 @@ struct SsdBatchReader::Impl {
 
   bool ReadBatchInline(std::span<SsdReadRequest> requests,
                        std::string* error_msg, std::uint64_t* bytes_read,
-                       bool demand) {
+                       SsdReadPriority priority) {
     if (error_msg != nullptr)
       error_msg->clear();
     if (bytes_read != nullptr)
@@ -563,9 +624,9 @@ struct SsdBatchReader::Impl {
       return true;
     batch_bytes_read = 0;
 #ifdef _WIN32
-    const bool success = ReadBatchWindows(requests, error_msg, demand);
+    const bool success = ReadBatchWindows(requests, error_msg, priority);
 #else
-    const bool success = ReadBatchPosix(requests, error_msg, demand);
+    const bool success = ReadBatchPosix(requests, error_msg, priority);
 #endif
     if (bytes_read != nullptr)
       *bytes_read = batch_bytes_read;
@@ -655,7 +716,7 @@ struct SsdBatchReader::Impl {
   }
 
   bool ReadBatchWindows(std::span<SsdReadRequest> requests,
-                        std::string* error_msg, bool demand) {
+                        std::string* error_msg, SsdReadPriority priority) {
     const auto order = SortedRequestIndices(requests);
     std::vector<ReadGroup> groups;
     groups.reserve(order.size());
@@ -713,7 +774,7 @@ struct SsdBatchReader::Impl {
             requests[group.segments.front().request_index].used_scratch;
         void* scratch = nullptr;
         if (scratch_pool != nullptr) {
-          operation.scratch_lease = scratch_pool->Acquire(demand);
+          operation.scratch_lease = scratch_pool->Acquire(priority);
           scratch = scratch_pool->Buffer(operation.scratch_lease);
         } else {
           scratch = scratch_buffers[lane];
@@ -756,8 +817,22 @@ struct SsdBatchReader::Impl {
     return true;
   }
 #else
+  struct ReadSegment {
+    std::size_t request_index{0};
+    std::size_t buffer_offset{0};
+  };
+
+  struct ReadGroup {
+    std::uint64_t file_offset{0};
+    std::size_t bytes{0};
+    std::vector<ReadSegment> segments;
+  };
+
   struct Job {
-    SsdReadRequest* request{nullptr};
+    std::span<SsdReadRequest> requests;
+    std::vector<ReadSegment> segments;
+    std::uint64_t file_offset{0};
+    std::size_t bytes{0};
     void* io_buffer{nullptr};
     bool uses_scratch{false};
     std::size_t scratch_lease{std::numeric_limits<std::size_t>::max()};
@@ -773,20 +848,24 @@ struct SsdBatchReader::Impl {
         });
         if (worker_stopping && worker_queues[worker_index].empty())
           return;
-        job = worker_queues[worker_index].front();
+        job = std::move(worker_queues[worker_index].front());
         worker_queues[worker_index].pop_front();
       }
-      auto& request = *job.request;
       auto* destination = static_cast<std::uint8_t*>(job.io_buffer);
-      const std::uint64_t begin =
-          request.file_offset - request.file_subpage_offset;
-      const std::size_t required = request.file_subpage_offset + request.bytes;
+      std::size_t required = 0;
+      for (const auto& segment : job.segments) {
+        const auto& request = job.requests[segment.request_index];
+        required =
+            std::max(required, segment.buffer_offset +
+                                   request.file_subpage_offset + request.bytes);
+      }
       std::size_t done = 0;
       std::uint32_t error = 0;
-      while (done < request.aligned_bytes) {
+      while (done < job.bytes) {
+        const std::size_t remaining = job.bytes - done;
         const ssize_t count =
-            ::pread(fd, destination + done, request.aligned_bytes - done,
-                    static_cast<off_t>(begin + done));
+            ::pread(fd, destination + done, remaining,
+                    static_cast<off_t>(job.file_offset + done));
         if (count < 0) {
           if (errno == EINTR)
             continue;
@@ -799,25 +878,42 @@ struct SsdBatchReader::Impl {
           break;
         }
         done += static_cast<std::size_t>(count);
-        if (done >= required)
+        if (done >= job.bytes)
           break;
-        if (done < request.aligned_bytes &&
-            (done % kAlignment != 0 || (begin + done) % kAlignment != 0)) {
+        if (done >= required && static_cast<std::size_t>(count) < remaining)
+          break;
+        if (done < job.bytes && (done % kAlignment != 0 ||
+                                 (job.file_offset + done) % kAlignment != 0)) {
           error = static_cast<std::uint32_t>(EINVAL);
           break;
         }
       }
-      request.system_error = error;
-      request.completed = error == 0 && done >= required;
-      request.transferred_bytes = done;
-      if (request.completed && job.uses_scratch) {
-        std::memcpy(request.destination,
-                    destination + request.file_subpage_offset, request.bytes);
-        request.payload_offset = 0;
-        request.used_scratch = true;
-      } else if (request.completed) {
-        request.payload_offset = request.file_subpage_offset;
-        request.used_scratch = false;
+      for (const auto& segment : job.segments) {
+        auto& request = job.requests[segment.request_index];
+        const std::size_t request_end =
+            segment.buffer_offset + request.file_subpage_offset + request.bytes;
+        request.completed = done >= request_end;
+        request.system_error = request.completed ? 0 : error;
+        request.transferred_bytes =
+            done > segment.buffer_offset
+                ? std::min(request.aligned_bytes, done - segment.buffer_offset)
+                : 0;
+        if (!request.completed) {
+          if (request.system_error == 0)
+            request.system_error = static_cast<std::uint32_t>(EIO);
+          continue;
+        }
+        if (job.uses_scratch) {
+          std::memcpy(
+              request.destination,
+              destination + segment.buffer_offset + request.file_subpage_offset,
+              request.bytes);
+          request.payload_offset = 0;
+          request.used_scratch = true;
+        } else {
+          request.payload_offset = request.file_subpage_offset;
+          request.used_scratch = false;
+        }
       }
       if (scratch_pool != nullptr &&
           job.scratch_lease != std::numeric_limits<std::size_t>::max())
@@ -825,57 +921,95 @@ struct SsdBatchReader::Impl {
       {
         const std::lock_guard<std::mutex> lock(queue_mutex);
         ++completed;
+        batch_bytes_read += done;
       }
       completion_ready.notify_one();
     }
   }
 
   bool ReadBatchPosix(std::span<SsdReadRequest> requests,
-                      std::string* error_msg, bool demand) {
+                      std::string* error_msg, SsdReadPriority priority) {
     const auto order = SortedRequestIndices(requests);
+    std::vector<ReadGroup> groups;
+    groups.reserve(order.size());
+    for (const std::size_t request_index : order) {
+      const auto& request = requests[request_index];
+      const std::uint64_t begin =
+          request.file_offset - request.file_subpage_offset;
+      const std::uint64_t end = begin + request.aligned_bytes;
+      bool merged = false;
+      if (!groups.empty()) {
+        auto& previous = groups.back();
+        const std::uint64_t previous_end =
+            previous.file_offset + previous.bytes;
+        const std::uint64_t combined_end = std::max(previous_end, end);
+        if (begin <= previous_end &&
+            combined_end - previous.file_offset <= scratch_capacity) {
+          previous.segments.push_back(
+              {request_index,
+               static_cast<std::size_t>(begin - previous.file_offset)});
+          previous.bytes =
+              static_cast<std::size_t>(combined_end - previous.file_offset);
+          merged = true;
+        }
+      }
+      if (!merged) {
+        ReadGroup group;
+        group.file_offset = begin;
+        group.bytes = request.aligned_bytes;
+        group.segments.push_back({request_index, 0});
+        groups.push_back(std::move(group));
+      }
+    }
     const std::size_t wave_size =
         scratch_pool != nullptr ? std::min({max_inflight_reads, workers.size(),
                                             scratch_pool->buffer_count()})
                                 : workers.size();
-    for (std::size_t base = 0; base < order.size(); base += wave_size) {
-      const std::size_t count = std::min(wave_size, order.size() - base);
+    for (std::size_t base = 0; base < groups.size(); base += wave_size) {
+      const std::size_t count = std::min(wave_size, groups.size() - base);
       {
         const std::lock_guard<std::mutex> lock(queue_mutex);
         completed = 0;
       }
       for (std::size_t lane = 0; lane < count; ++lane) {
-        auto& request = requests[order[base + lane]];
+        const auto& group = groups[base + lane];
         std::size_t lease = std::numeric_limits<std::size_t>::max();
         void* scratch = nullptr;
         if (scratch_pool != nullptr) {
-          lease = scratch_pool->Acquire(demand);
+          lease = scratch_pool->Acquire(priority);
           scratch = scratch_pool->Buffer(lease);
         } else {
           scratch = scratch_buffers[lane];
         }
-        void* io_buffer = request.used_scratch ? scratch : request.destination;
+        const bool uses_scratch =
+            group.segments.size() != 1 ||
+            requests[group.segments.front().request_index].used_scratch;
+        const auto& first_request =
+            requests[group.segments.front().request_index];
+        Job job{requests,
+                std::move(groups[base + lane].segments),
+                group.file_offset,
+                group.bytes,
+                uses_scratch ? scratch : first_request.destination,
+                uses_scratch,
+                lease};
         {
           const std::lock_guard<std::mutex> lock(queue_mutex);
-          worker_queues[lane].push_back(
-              {&request, io_buffer, request.used_scratch, lease});
+          worker_queues[lane].push_back(std::move(job));
         }
         work_ready.notify_one();
       }
       {
         std::unique_lock<std::mutex> lock(queue_mutex);
         completion_ready.wait(lock, [&] { return completed == count; });
-        for (std::size_t lane = 0; lane < count; ++lane)
-          batch_bytes_read += requests[order[base + lane]].transferred_bytes;
       }
-      for (std::size_t lane = 0; lane < count; ++lane) {
-        const auto& request = requests[order[base + lane]];
-        if (!request.completed) {
-          if (error_msg != nullptr) {
-            *error_msg = "direct SSD read failed (errno " +
-                         std::to_string(request.system_error) + ")";
-          }
-          return false;
-        }
+    }
+    for (const auto& request : requests) {
+      if (!request.completed) {
+        if (error_msg != nullptr)
+          *error_msg = "direct SSD read failed (errno " +
+                       std::to_string(request.system_error) + ")";
+        return false;
       }
     }
     return true;
@@ -885,7 +1019,8 @@ struct SsdBatchReader::Impl {
   std::mutex batch_mutex;
   std::condition_variable batch_ready;
   std::deque<std::shared_ptr<BatchJob>> demand_batches;
-  std::deque<std::shared_ptr<BatchJob>> prefetch_batches;
+  std::deque<std::shared_ptr<BatchJob>> room_batches;
+  std::deque<std::shared_ptr<BatchJob>> speculative_batches;
   std::thread batch_worker;
   SsdBatchReader::BatchId next_batch_id{0};
   bool stopping{false};
@@ -927,7 +1062,7 @@ bool SsdBatchReader::ReadBatch(std::span<SsdReadRequest> requests,
 }
 
 std::future<SsdReadBatchResult> SsdBatchReader::SubmitBatchAsync(
-    std::vector<SsdReadRequest> requests, BatchId* batch_id) {
+    std::vector<SsdReadRequest> requests, BatchId* batch_id, bool speculative) {
   if (impl_ == nullptr) {
     std::promise<SsdReadBatchResult> promise;
     auto future = promise.get_future();
@@ -938,7 +1073,10 @@ std::future<SsdReadBatchResult> SsdBatchReader::SubmitBatchAsync(
       *batch_id = 0;
     return future;
   }
-  return impl_->EnqueueBatch(std::move(requests), true, batch_id);
+  return impl_->EnqueueBatch(
+      std::move(requests),
+      speculative ? SsdReadPriority::kSpeculative : SsdReadPriority::kRoom,
+      batch_id);
 }
 
 std::future<SsdReadBatchResult> SsdBatchReader::SubmitBatchDemand(
@@ -951,7 +1089,8 @@ std::future<SsdReadBatchResult> SsdBatchReader::SubmitBatchDemand(
     promise.set_value(std::move(result));
     return future;
   }
-  return impl_->EnqueueBatch(std::move(requests), false, nullptr);
+  return impl_->EnqueueBatch(std::move(requests), SsdReadPriority::kDemand,
+                             nullptr);
 }
 
 bool SsdBatchReader::PromotePrefetch(BatchId batch_id) {

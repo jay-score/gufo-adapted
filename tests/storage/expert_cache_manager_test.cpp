@@ -340,6 +340,44 @@ void Run() {
   async_manager->Release(0);
   async_manager->FinishPrefetch(0);
 
+  std::array<DeviceLayer, 3> speculative_layers{layer, layer, layer};
+  for (std::uint32_t i = 0; i < speculative_layers.size(); ++i)
+    speculative_layers[i].layer_index = i;
+  std::array<std::int32_t, 3 * kExperts> speculative_indirection{};
+  speculative_indirection.fill(-1);
+  constexpr std::size_t three_layer_budget = 256 * 1024;
+  auto speculative_manager = gufo::storage::ExpertCacheManager::Create(
+      speculative_layers, three_layer_budget, kExpertsUsed, kExperts,
+      speculative_indirection, &error);
+  if (!speculative_manager)
+    throw std::runtime_error("speculative cache creation failed: " + error);
+  const std::array<std::int32_t, 1> speculative_prediction{2};
+  for (std::uint32_t i = 0;
+       i < gufo::storage::ExpertCacheManager::kSpeculativeTransactionCap; ++i) {
+    if (!speculative_manager->Prefetch(i, speculative_prediction, 1, &error,
+                                       false, true)) {
+      throw std::runtime_error("speculative prefetch submission failed: " +
+                               error);
+    }
+  }
+  const std::size_t third_layer_map = 2 * kExperts + 2;
+  if (!speculative_manager->Prefetch(2, speculative_prediction, 1, &error,
+                                     false, true) ||
+      speculative_indirection[third_layer_map] != -1) {
+    throw std::runtime_error(
+        "speculative prefetch exceeded its model-wide transaction cap");
+  }
+  speculative_manager->FinishPrefetch(0);
+  speculative_manager->FinishPrefetch(1);
+  if (!speculative_manager->Prefetch(2, speculative_prediction, 1, &error,
+                                     false, true) ||
+      speculative_indirection[third_layer_map] < 0) {
+    throw std::runtime_error(
+        "speculative transaction credit was not released by FinishPrefetch: " +
+        error);
+  }
+  speculative_manager->FinishPrefetch(2);
+
   // A prediction that is already resident submits no I/O batch. Resolve must
   // consume the READY pin without waiting for a nonexistent completion.
   if (!async_manager->Prefetch(
@@ -354,8 +392,8 @@ void Run() {
 
   std::cout
       << "expert_cache_manager_test: packed GTT arenas, asynchronous and empty "
-         "prefetch batches, scratch reads, pin release, and LRU indirection "
-         "passed\n";
+         "prefetch batches, speculative cap, scratch reads, pin release, and "
+         "LRU indirection passed\n";
 }
 
 }  // namespace

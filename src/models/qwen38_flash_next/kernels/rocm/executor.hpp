@@ -23,6 +23,7 @@
 #include "src/models/qwen38_flash_next/kernels/rocm/blaslt.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/device_model.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
+#include "src/models/qwen38_flash_next/kernels/rocm/moe_pending_state.hpp"
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
 #include "src/models/qwen38_flash_next/ngram.hpp"
 
@@ -390,6 +391,12 @@ private:
     std::vector<std::int32_t> experts;
   };
 
+  struct LookaheadPrediction {
+    std::uint32_t layer{0};
+    std::size_t max_slots{0};
+    std::vector<std::int32_t> expert_ids;
+  };
+
   [[nodiscard]] bool RestoreSnapshotImpl(Session& session,
                                          std::span<const std::uint8_t> payload,
                                          const HostSnapshot* snapshot,
@@ -488,7 +495,8 @@ private:
   bool MoeExperts(const DeviceLayer& l, const float* x, float* out,
                   std::uint32_t n_tokens, std::string* error_msg,
                   bool defer_epilogue = false,
-                  bool recompute_route_counts = false) const;
+                  bool recompute_route_counts = false,
+                  std::span<const LookaheadPrediction> lookahead = {}) const;
   bool MoeEpilogueRows(const DeviceLayer& l, float* out, std::uint32_t n_tokens,
                        std::string* error_msg) const;
   bool MoeBatch(const DeviceLayer& l, const float* x, float* out,
@@ -508,16 +516,18 @@ private:
       std::string* error_msg) const;
   [[nodiscard]] bool StreamedMoeRows(
       const DeviceLayer& layer, const float* x, float* out, std::uint32_t rows,
-      std::string* error_msg, std::uint32_t compute_group_rows = 0) const;
-  [[nodiscard]] bool StreamedMoeRowsDeskRoom(const DeviceLayer& layer,
-                                             const float* x, float* out,
-                                             std::uint32_t rows,
-                                             std::uint32_t compute_group_rows,
-                                             std::string* error_msg) const;
-  [[nodiscard]] bool LookaheadPrefetch(const DeviceLayer& layer,
-                                       const float* residual,
-                                       std::uint32_t rows,
-                                       std::string* error_msg) const;
+      std::string* error_msg, std::uint32_t compute_group_rows = 0,
+      std::span<const LookaheadPrediction> lookahead = {}) const;
+  [[nodiscard]] bool StreamedMoeRowsDeskRoom(
+      const DeviceLayer& layer, const float* x, float* out, std::uint32_t rows,
+      std::uint32_t compute_group_rows, std::string* error_msg,
+      std::span<const LookaheadPrediction> lookahead) const;
+  [[nodiscard]] bool PredictLookahead(
+      const DeviceLayer& layer, const float* residual, std::uint32_t rows,
+      std::vector<LookaheadPrediction>* predictions,
+      std::string* error_msg) const;
+  void SubmitLookaheadPrefetch(std::span<const LookaheadPrediction> predictions,
+                               bool prefill) const;
   /// Selects the greedy token or compact candidates from the MTP logits of
   /// the full head, or of the small head when `subset`.
   bool MtpHead(const DeviceMixer& head, const float* res, bool token,
@@ -723,7 +733,7 @@ private:
   /// The model geometry allows the wide mixer route (see Combine).
   bool wide_mixer_{false};
   /// Set by Moe when its epilogue is left for the combine that follows.
-  mutable bool moe_pending_{false};
+  mutable MoePendingState moe_pending_;
   /// Set by GatedDense when s_.shexp_half holds the SwiGLU rows its F16
   /// down projection reads.
   mutable bool shexp_half_ready_{false};

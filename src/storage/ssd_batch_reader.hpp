@@ -13,6 +13,12 @@
 
 namespace gufo::storage {
 
+enum class SsdReadPriority : std::uint8_t {
+  kDemand,
+  kRoom,
+  kSpeculative,
+};
+
 /// One unaligned file range read into a caller-owned, 4096-byte-aligned slot.
 /// On success, Payload() addresses the first requested byte inside that slot.
 struct SsdReadRequest {
@@ -59,9 +65,8 @@ public:
   [[nodiscard]] std::size_t buffer_bytes() const noexcept;
   [[nodiscard]] std::size_t allocated_bytes() const noexcept;
 
-  /// Blocking lease acquisition is priority-aware; queued demand leases are
-  /// granted before prefetch leases.
-  [[nodiscard]] std::size_t Acquire(bool demand);
+  /// Blocking lease acquisition preserves demand > Room > speculative order.
+  [[nodiscard]] std::size_t Acquire(SsdReadPriority priority);
   [[nodiscard]] void* Buffer(std::size_t lease) const noexcept;
   void Release(std::size_t lease) noexcept;
 
@@ -103,19 +108,22 @@ public:
                                std::string* error_msg = nullptr,
                                std::uint64_t* bytes_read = nullptr);
 
-  /// Starts a batch on a background thread. The reader must outlive the
-  /// returned future; destination storage must remain valid until it is ready.
+  /// Queues a background prefetch; Room work outranks speculative work, and
+  /// both yield to demand. The reader must outlive the returned future and the
+  /// destinations must remain valid until it is ready. `speculative=true`
+  /// selects the lowest-priority lane; otherwise the batch is Room work.
   [[nodiscard]] std::future<SsdReadBatchResult> SubmitBatchAsync(
-      std::vector<SsdReadRequest> requests, BatchId* batch_id = nullptr);
+      std::vector<SsdReadRequest> requests, BatchId* batch_id = nullptr,
+      bool speculative = false);
 
   /// Queues a demand batch on the high-priority lane and returns immediately.
   /// This allows independent shard files to read concurrently while retaining
-  /// priority over queued speculative prefetches on each reader.
+  /// priority over queued Room and speculative prefetches on each reader.
   [[nodiscard]] std::future<SsdReadBatchResult> SubmitBatchDemand(
       std::vector<SsdReadRequest> requests);
 
-  /// Moves an unsubmitted speculative batch to the demand lane. Returns false
-  /// if the batch is already in flight or has completed.
+  /// Moves an unsubmitted Room or speculative batch to the demand lane.
+  /// Returns false if the batch is already in flight or has completed.
   [[nodiscard]] bool PromotePrefetch(BatchId batch_id);
 
   /// Cancels an unsubmitted speculative batch. In-flight I/O is allowed to

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -27,6 +28,7 @@
 #include "src/core/platform/tuning.hpp"
 #include "src/models/qwen38_flash_next/draft_vocab.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
+#include "src/models/qwen38_flash_next/kernels/rocm/streamed_moe_policy.hpp"
 #include "src/storage/expert_cache_manager.hpp"
 
 namespace gufo::models::qwen38_flash_next::rocm {
@@ -104,12 +106,9 @@ bool ExpertMatrixRows(std::uint32_t rows) {
 bool UsesRoutedF16Experts(const DeviceLayer& layer, const Config& config,
                           std::uint32_t rows) {
   return ExpertMatrixRows(rows) &&
-         (layer.ffn_gate_exps.type == GgmlType::kQ4_K ||
-          layer.ffn_gate_exps.type == GgmlType::kQ5_K) &&
-         layer.ffn_up_exps.type == layer.ffn_gate_exps.type &&
-         (layer.ffn_down_exps.type == GgmlType::kQ5_1 ||
-          layer.ffn_down_exps.type == GgmlType::kQ8_0) &&
-         config.hidden_size % 256 == 0 && config.expert_ff % 64 == 0;
+         UsesRoutedF16ExpertFormats(
+             layer.ffn_gate_exps.type, layer.ffn_up_exps.type,
+             layer.ffn_down_exps.type, config.hidden_size, config.expert_ff);
 }
 
 /// Key-tile splits per row of a narrow attention batch (decode at depth).
@@ -900,10 +899,10 @@ bool Executor::WriteRouteTrace(std::uint32_t layer, bool prefill,
   return true;
 }
 
-bool Executor::StreamedMoeRows(const DeviceLayer& layer, const float* x,
-                               float* out, std::uint32_t rows,
-                               std::string* error_msg,
-                               std::uint32_t compute_group_rows) const {
+bool Executor::StreamedMoeRows(
+    const DeviceLayer& layer, const float* x, float* out, std::uint32_t rows,
+    std::string* error_msg, std::uint32_t compute_group_rows,
+    std::span<const LookaheadPrediction> lookahead) const {
   if (expert_cache_ == nullptr) {
     AssignError(error_msg, "streamed experts have no enabled cache");
     return false;
@@ -940,9 +939,9 @@ bool Executor::StreamedMoeRows(const DeviceLayer& layer, const float* x,
         std::span<const std::int32_t>(expert_ids_host_, id_count));
   }
   if (prefill_phase && rows > 64 &&
-      expert_cache_->slots_per_layer() > 2 * used) {
+      DeskRoomHasSlotHeadroom(expert_cache_->slots_per_layer(), used)) {
     return StreamedMoeRowsDeskRoom(layer, x, out, rows, rows_per_compute_group,
-                                   error_msg);
+                                   error_msg, lookahead);
   }
 
   std::vector<std::uint32_t> route_windows;
@@ -1045,16 +1044,14 @@ bool Executor::StreamedMoeRows(const DeviceLayer& layer, const float* x,
                resident_layer,
                x + static_cast<std::size_t>(first + offset) * c.hidden_size,
                out + static_cast<std::size_t>(first + offset) * c.hidden_size,
-               count, error_msg, true, true) &&
-           MoeEpilogueRows(
-               resident_layer,
-               out + static_cast<std::size_t>(first + offset) * c.hidden_size,
-               count, error_msg);
+               count, error_msg, true, true);
       if (!ok)
         break;
       offset += count;
     }
     UseScratch(base);
+    if (first + rows_per_window == rows)
+      SubmitLookaheadPrefetch(lookahead, prefill_phase);
 
     const hipError_t recorded = hipEventRecord(expert_ids_ready_, stream_);
     const bool drain_ok =
@@ -1070,27 +1067,38 @@ bool Executor::StreamedMoeRows(const DeviceLayer& layer, const float* x,
     }
     first += rows_per_window;
   }
-  return WriteRouteTrace(
-      layer.layer_index, prefill_phase, rows, used,
-      std::span<const std::int32_t>(expert_ids_host_, id_count), route_windows,
-      {}, {}, {}, error_msg);
+  UseScratch(base);
+  if (!MoeEpilogueRows(resident_layer, out, rows, error_msg)) {
+    UseScratch(base);
+    return false;
+  }
+  if (!WriteRouteTrace(
+          layer.layer_index, prefill_phase, rows, used,
+          std::span<const std::int32_t>(expert_ids_host_, id_count),
+          route_windows, {}, {}, {}, error_msg)) {
+    UseScratch(base);
+    return false;
+  }
+  return true;
 }
 
-bool Executor::StreamedMoeRowsDeskRoom(const DeviceLayer& layer, const float* x,
-                                       float* out, std::uint32_t rows,
-                                       std::uint32_t compute_group_rows,
-                                       std::string* error_msg) const {
+bool Executor::StreamedMoeRowsDeskRoom(
+    const DeviceLayer& layer, const float* x, float* out, std::uint32_t rows,
+    std::uint32_t compute_group_rows, std::string* error_msg,
+    std::span<const LookaheadPrediction> lookahead) const {
   const Config& c = config();
   const std::uint32_t used = c.num_experts_used;
   const std::uint32_t slots = expert_cache_->slots_per_layer();
   DeviceLayer resident_layer = Layer(layer.layer_index);
   resident_layer.experts_streamed = false;
-  if (used == 0 || slots <= 2 * used || rows <= 64 ||
+  if (used == 0 || !DeskRoomHasSlotHeadroom(slots, used) || rows <= 64 ||
       expert_ids_host_ == nullptr || expert_slot_ids_host_ == nullptr ||
       expert_id_to_slot_host_ == nullptr) {
+    moe_pending_.Reset();
     AssignError(error_msg, "Desk/Room execution has invalid dimensions");
     return false;
   }
+  assert(slots >= 2 * used + 1);
   const Scratch base = s_;
   expert_cache_->FinishPrefetch(layer.layer_index);
   const std::uint32_t group_rows =
@@ -1110,6 +1118,7 @@ bool Executor::StreamedMoeRowsDeskRoom(const DeviceLayer& layer, const float* x,
             expert_ids_host_[static_cast<std::size_t>(first + row) * used +
                              route];
         if (expert < 0 || static_cast<std::uint32_t>(expert) >= c.num_experts) {
+          UseScratch(base);
           AssignError(error_msg, "router selected an out-of-range expert ID");
           return false;
         }
@@ -1152,6 +1161,8 @@ bool Executor::StreamedMoeRowsDeskRoom(const DeviceLayer& layer, const float* x,
   room_group.reserve(ranked.size());
   for (const auto& [frequency, expert] : ranked) {
     (void)frequency;
+    // Desk/Room reads this pinned host map directly. The executor's streamed
+    // path is driven by one scheduler thread, so it cannot race cache updates.
     if (expert_id_to_slot_host_[static_cast<std::size_t>(layer.layer_index) *
                                     c.num_experts +
                                 static_cast<std::uint32_t>(expert)] >= 0) {
@@ -1199,7 +1210,8 @@ bool Executor::StreamedMoeRowsDeskRoom(const DeviceLayer& layer, const float* x,
   UseScratch(base);
   const auto run_pass = [&](std::span<const std::int32_t> pass_experts,
                             std::span<const std::int32_t> pass_routes,
-                            std::span<const std::int32_t> prefetch_routes) {
+                            std::span<const std::int32_t> prefetch_routes,
+                            bool final_pass) {
     if (pass_routes.empty())
       return true;
     std::vector<std::int32_t> resolved_slots(pass_routes.size());
@@ -1252,12 +1264,15 @@ bool Executor::StreamedMoeRowsDeskRoom(const DeviceLayer& layer, const float* x,
     if (ok && prefetch_slots != 0 && !prefetch_routes.empty()) {
       std::string prefetch_error;
       if (!expert_cache_->Prefetch(layer.layer_index, prefetch_routes,
-                                   prefetch_slots, &prefetch_error, true)) {
+                                   prefetch_slots, &prefetch_error, true,
+                                   false)) {
         std::clog << "expert_room_prefetch_skipped layer=" << layer.layer_index
                   << " reason=" << prefetch_error << '\n';
         expert_cache_->FinishPrefetch(layer.layer_index);
       }
     }
+    if (ok && final_pass)
+      SubmitLookaheadPrefetch(lookahead, true);
     const hipError_t record = hipEventRecord(expert_ids_ready_, stream_);
     const bool drained =
         record == hipSuccess
@@ -1327,7 +1342,8 @@ bool Executor::StreamedMoeRowsDeskRoom(const DeviceLayer& layer, const float* x,
         room_routes.empty()
             ? std::span<const std::int32_t>{}
             : std::span<const std::int32_t>(room_routes.front());
-    if (!run_pass(resident_experts, resident_routes, prefetch_first_room)) {
+    if (!run_pass(resident_experts, resident_routes, prefetch_first_room,
+                  room_passes.empty())) {
       UseScratch(base);
       return false;
     }
@@ -1338,7 +1354,8 @@ bool Executor::StreamedMoeRowsDeskRoom(const DeviceLayer& layer, const float* x,
   if (resident_experts.empty() && prefetch_slots != 0 && !room_routes.empty()) {
     std::string prefetch_error;
     if (!expert_cache_->Prefetch(layer.layer_index, room_routes.front(),
-                                 prefetch_slots, &prefetch_error, true)) {
+                                 prefetch_slots, &prefetch_error, true,
+                                 false)) {
       std::clog << "expert_room_prefetch_skipped layer=" << layer.layer_index
                 << " reason=" << prefetch_error << '\n';
       expert_cache_->FinishPrefetch(layer.layer_index);
@@ -1351,7 +1368,7 @@ bool Executor::StreamedMoeRowsDeskRoom(const DeviceLayer& layer, const float* x,
             ? std::span<const std::int32_t>{}
             : std::span<const std::int32_t>(room_routes[room_index + 1]);
     if (!run_pass(room_passes[room_index], room_routes[room_index],
-                  prefetch_next)) {
+                  prefetch_next, room_index + 1 == room_passes.size())) {
       UseScratch(base);
       return false;
     }
@@ -1360,19 +1377,30 @@ bool Executor::StreamedMoeRowsDeskRoom(const DeviceLayer& layer, const float* x,
     UseScratch(base);
     return false;
   }
-  UseScratch(base);
-  return WriteRouteTrace(
-      layer.layer_index, true, rows, used,
-      std::span<const std::int32_t>(expert_ids_host_,
-                                    static_cast<std::size_t>(rows) * used),
-      route_windows, route_passes, desk_keep, resident_experts, error_msg);
+  if (!WriteRouteTrace(
+          layer.layer_index, true, rows, used,
+          std::span<const std::int32_t>(expert_ids_host_,
+                                        static_cast<std::size_t>(rows) * used),
+          route_windows, route_passes, desk_keep, resident_experts,
+          error_msg)) {
+    UseScratch(base);
+    return false;
+  }
+  return true;
 }
 
-bool Executor::LookaheadPrefetch(const DeviceLayer& layer,
-                                 const float* residual, std::uint32_t rows,
-                                 std::string* error_msg) const {
+bool Executor::PredictLookahead(const DeviceLayer& layer, const float* residual,
+                                std::uint32_t rows,
+                                std::vector<LookaheadPrediction>* predictions,
+                                std::string* error_msg) const {
   if (expert_cache_ == nullptr || !layer.experts_streamed || rows == 0)
     return true;
+  if (predictions == nullptr) {
+    AssignError(error_msg, "lookahead prediction output is null");
+    return false;
+  }
+  predictions->clear();
+  predictions->reserve(2);
   const Config& c = config();
   const std::uint32_t first = layer.layer_index + 1;
   if (first >= c.num_layers)
@@ -1391,11 +1419,7 @@ bool Executor::LookaheadPrefetch(const DeviceLayer& layer,
 
   const Scratch base = s_;
   const std::uint32_t base_inject_parts = inject_parts_;
-  const auto cancel_predictions = [&] {
-    for (std::uint32_t distance = 1; distance <= 2; ++distance) {
-      if (distance <= c.num_layers - first)
-        expert_cache_->FinishPrefetch(first + distance - 1);
-    }
+  const auto restore_scratch = [&] {
     UseScratch(base);
     inject_parts_ = base_inject_parts;
   };
@@ -1421,7 +1445,7 @@ bool Executor::LookaheadPrefetch(const DeviceLayer& layer,
               error_msg) &&
         Dense(target.router, s_.mixed, lookahead_router_, rows, error_msg);
     if (!prepared) {
-      cancel_predictions();
+      restore_scratch();
       return false;
     }
     RouterTopK(lookahead_router_, c.num_experts + 1, lookahead_ids_,
@@ -1429,22 +1453,33 @@ bool Executor::LookaheadPrefetch(const DeviceLayer& layer,
                stream_);
     if (!Check(hipGetLastError(), "lookahead router", error_msg) ||
         !CaptureExpertIds(lookahead_ids_, id_count, error_msg)) {
-      cancel_predictions();
+      restore_scratch();
       return false;
     }
+    LookaheadPrediction prediction;
+    prediction.layer = target_index;
+    prediction.max_slots = prefetch_limit;
+    prediction.expert_ids.assign(expert_ids_host_, expert_ids_host_ + id_count);
+    predictions->push_back(std::move(prediction));
+  }
+  restore_scratch();
+  return true;
+}
+
+void Executor::SubmitLookaheadPrefetch(
+    std::span<const LookaheadPrediction> predictions, bool prefill) const {
+  if (expert_cache_ == nullptr)
+    return;
+  for (const auto& prediction : predictions) {
     std::string prefetch_error;
-    if (!expert_cache_->Prefetch(
-            target_index,
-            std::span<const std::int32_t>(expert_ids_host_, id_count),
-            prefetch_limit, &prefetch_error, prefill_phase)) {
-      std::clog << "expert_prefetch_skipped layer=" << target_index
+    if (!expert_cache_->Prefetch(prediction.layer, prediction.expert_ids,
+                                 prediction.max_slots, &prefetch_error, prefill,
+                                 true)) {
+      std::clog << "expert_prefetch_skipped layer=" << prediction.layer
                 << " reason=" << prefetch_error << '\n';
-      expert_cache_->FinishPrefetch(target_index);
+      expert_cache_->FinishPrefetch(prediction.layer);
     }
   }
-  UseScratch(base);
-  inject_parts_ = base_inject_parts;
-  return true;
 }
 
 std::unique_ptr<Session> Executor::CreateSession(core::SessionMode mode,
@@ -2067,9 +2102,8 @@ void Executor::Combine(float* res, const float* gamma,
   // projection: half the bytes for the combine and the epilogue, and no
   // separate activation pass for the projection.
   xn_half_ = wide_mixer_ && MatrixRows(n_tokens) && gamma != nullptr;
-  if (moe_pending_) {
+  if (moe_pending_.Consume()) {
     // The MoE epilogue was deferred to this combine (see Moe).
-    moe_pending_ = false;
     const auto* down = reinterpret_cast<const __half*>(s_.down_e);
     if (xn_half_ &&
         HcCombineMoeF16(res, down, s_.weights, s_.shexp_out,
@@ -2601,9 +2635,10 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
   }
   RouterTopK(s_.router, c.num_experts + 1, s_.ids, s_.weights, n_tokens,
              c.num_experts, used, stream_);
-  if (!LookaheadPrefetch(
+  std::vector<LookaheadPrediction> lookahead;
+  if (!PredictLookahead(
           l, lookahead_residual != nullptr ? lookahead_residual : s_.res,
-          n_tokens, error_msg))
+          n_tokens, &lookahead, error_msg))
     return false;
   const auto cancel_future_prefetch = [&] {
     if (expert_cache_ == nullptr)
@@ -2660,7 +2695,8 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
     try {
       const std::size_t offset =
           static_cast<std::size_t>(n_tokens - 1) * c.hidden_size;
-      const bool ok = MoeExperts(l, x + offset, out + offset, 1, error_msg);
+      const bool ok = MoeExperts(l, x + offset, out + offset, 1, error_msg,
+                                 false, false, lookahead);
       UseScratch(base);
       return ok;
     } catch (...) {
@@ -2668,7 +2704,8 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
       throw;
     }
   }
-  const bool ok = MoeExperts(l, x, out, n_tokens, error_msg);
+  const bool ok =
+      MoeExperts(l, x, out, n_tokens, error_msg, false, false, lookahead);
   if (expert_cache_ != nullptr) {
     expert_cache_->FinishPrefetch(l.layer_index);
     if (!ok)
@@ -2677,12 +2714,19 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
   return ok;
 }
 
-bool Executor::MoeExperts(const DeviceLayer& l, const float* x, float* out,
-                          std::uint32_t n_tokens, std::string* error_msg,
-                          bool defer_epilogue,
-                          bool recompute_route_counts) const {
-  if (l.experts_streamed)
-    return StreamedMoeRows(l, x, out, n_tokens, error_msg);
+bool Executor::MoeExperts(
+    const DeviceLayer& l, const float* x, float* out, std::uint32_t n_tokens,
+    std::string* error_msg, bool defer_epilogue, bool recompute_route_counts,
+    std::span<const LookaheadPrediction> lookahead) const {
+  if (l.experts_streamed) {
+    if (defer_epilogue || recompute_route_counts) {
+      AssignError(error_msg,
+                  "streamed experts do not support deferred epilogues or "
+                  "route-count recomputation");
+      return false;
+    }
+    return StreamedMoeRows(l, x, out, n_tokens, error_msg, 0, lookahead);
+  }
   const Config& c = config();
   const std::uint32_t used = c.num_experts_used;
   const std::uint32_t slots = n_tokens * used;
@@ -2798,8 +2842,8 @@ bool Executor::MoeEpilogueRows(const DeviceLayer& l, float* out,
   if (UsesRoutedF16Experts(l, c, n_tokens)) {
     // The combine that follows folds this epilogue into its own pass when
     // it takes the F16 route (Combine); otherwise it runs here.
-    moe_pending_ = out == s_.block_out;
-    if (!moe_pending_) {
+    moe_pending_.SetForOutput(out, s_.block_out);
+    if (!moe_pending_.pending()) {
       MoeEpilogueVec4F16(reinterpret_cast<const __half*>(s_.down_e), s_.weights,
                          s_.shexp_out, s_.router + c.num_experts,
                          c.num_experts + 1, out, n_tokens, used, c.hidden_size,
