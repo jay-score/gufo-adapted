@@ -157,6 +157,19 @@ repeats or a focused control, and save failed observations as well as
 successes. For these artifacts, expect 11,036 prompt tokens, zero reused
 tokens and `ACK`.
 
+On this host, the first GPU submission after the device idles for about 5 s
+stalls for 0.3–0.9 s in the driver. This happens in AR and MTP, with any
+binary, and also mid-process after an idle gap. A fresh arm's first request
+hits it at random (7 of 16 short MTP arms, October 22, 2026), inside slot
+reassignment. A settle delay makes it certain rather than removing it, and a
+warm-up request would defeat the control. The comparison therefore derives
+each request's `slot_wait_ms` from the server's cumulative
+`component_cache.global_spill.residual_wait_ms`, subtracts it from the wall,
+queue and TTFT phases that contain it, and reports `slot_wait_ms` without
+gating on it. A slot wait that is slower in every repeat gets a note: check the
+server logs before calling it noise. Evidence that lacks the field is compared
+unadjusted.
+
 The retained request body, for reference:
 
 ```python

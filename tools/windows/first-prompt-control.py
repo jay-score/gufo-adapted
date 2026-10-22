@@ -340,6 +340,8 @@ def main():
     print(compare.table(result))
     for problem in result["correctness"]:
         print(f"correctness: {problem}")
+    for note in result["notes"]:
+        print(f"note: {note}")
     print(f"{result['status']}{' (unchanged-binary control)' if result['unchanged_binary_control'] else ''}: "
           f"{args.output}")
     return {"passed": 0, "failed": 1, "inconclusive": 2}[result["status"]]
