@@ -907,6 +907,9 @@ bool Executor::StreamedMoeRows(
     AssignError(error_msg, "streamed experts have no enabled cache");
     return false;
   }
+  // Retire the just-consumed layer's lookahead credit before this path
+  // submits its own L+2 prediction. Otherwise L and L+1 can fill the cap.
+  expert_cache_->FinishPrefetch(layer.layer_index);
   const auto& c = config();
   const std::uint32_t used = c.num_experts_used;
   const std::uint32_t default_group_rows =
@@ -1067,8 +1070,9 @@ bool Executor::StreamedMoeRows(
     }
     first += rows_per_window;
   }
-  UseScratch(base);
-  if (!MoeEpilogueRows(resident_layer, out, rows, error_msg)) {
+  if (!RestoreBaseScratchThenRun(base, [&] {
+        return MoeEpilogueRows(resident_layer, out, rows, error_msg);
+      })) {
     UseScratch(base);
     return false;
   }
@@ -1100,7 +1104,6 @@ bool Executor::StreamedMoeRowsDeskRoom(
   }
   assert(slots >= 2 * used + 1);
   const Scratch base = s_;
-  expert_cache_->FinishPrefetch(layer.layer_index);
   const std::uint32_t group_rows =
       std::max<std::uint32_t>(1, compute_group_rows);
   const std::size_t groups = (rows + group_rows - 1) / group_rows;
@@ -1373,7 +1376,9 @@ bool Executor::StreamedMoeRowsDeskRoom(
       return false;
     }
   }
-  if (!MoeEpilogueRows(resident_layer, out, rows, error_msg)) {
+  if (!RestoreBaseScratchThenRun(base, [&] {
+        return MoeEpilogueRows(resident_layer, out, rows, error_msg);
+      })) {
     UseScratch(base);
     return false;
   }
