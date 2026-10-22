@@ -145,7 +145,24 @@ std::string RopePositionPolicy(const RopeScaling& scaling) {
       << ";original=" << scaling.original_context
       << ";beta_fast=" << scaling.beta_fast
       << ";beta_slow=" << scaling.beta_slow;
-  return out.str();
+  auto policy = out.str();
+#ifdef _WIN32
+  // WINDOWS: MSVC pads hexfloat fractions; retain upstream's cache identity.
+  for (auto start = policy.find("0x"); start != std::string::npos;
+       start = policy.find("0x", start + 2)) {
+    const auto exponent = policy.find('p', start);
+    const auto point = policy.find('.', start);
+    if (point < exponent) {
+      auto end = exponent;
+      while (end > point + 1 && policy[end - 1] == '0')
+        --end;
+      if (end == point + 1)
+        --end;
+      policy.erase(end, exponent - end);
+    }
+  }
+#endif
+  return policy;
 }
 
 }  // namespace gufo::models::qwen38_flash_next
