@@ -11,6 +11,18 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
+# Host-specific defaults live in ignored tools/windows/local.json (see
+# local.example.json). Explicit arguments always win; only defaults are
+# replaced so a shared checkout never bakes in one machine's paths.
+$localFile = Join-Path $PSScriptRoot "local.json"
+if (Test-Path -LiteralPath $localFile) {
+  try {
+    $local = Get-Content -LiteralPath $localFile -Raw | ConvertFrom-Json
+    if ($Rocm -eq "C:\TheRock\build" -and $local.Rocm) { $Rocm = $local.Rocm }
+    if ($Vcpkg -eq "C:\vcpkg" -and $local.Vcpkg) { $Vcpkg = $local.Vcpkg }
+    if ($Ninja -eq "ninja" -and $local.Ninja) { $Ninja = $local.Ninja }
+  } catch { Write-Warning "Ignoring ${localFile}: $($_.Exception.Message)" }
+}
 if (-not $CompilerBin) { $CompilerBin = "$Rocm/lib/llvm/bin" }
 # HIP presets build the gfx1151 backend against TheRock; the rest are CPU-only.
 $hip = $Preset -notin @("windows-cpu", "cpu-test", "cpu-sanitizer")

@@ -14,13 +14,15 @@ it when files move or contracts change rather than copying it into this skill.
 
 ## Establish the checkout and remote roles
 
-The maintained checkout is currently `C:\P2027\windows-main`. Discover the actual
-root with `git rev-parse --show-toplevel`; use that root for commands and logs.
-It is a linked worktree with shared Git storage under `C:\P2027\gufo\.git`,
-not an independent clone. Inspect `git worktree list` before switching branches
+The canonical checkout is `C:\P2027\gufo-windows` on branch `windows-main`.
+Always discover the actual root with `git rev-parse --show-toplevel`; use that
+root for commands and logs instead of hardcoding the path.
+Inspect `git worktree list` before switching branches
 or creating another checkout. Preserve unrelated worktrees and their metadata.
-The former temporary checkout path is a compatibility junction still used by
-some build caches; do not remove it as part of a sync.
+A stale, git-detached copy exists at `C:\P2027\windows-main` (its `.git` file
+points at a deleted `C:/P2027/gufo/.git` worktree, and its file set has
+diverged from `windows-main`); do not use it as a checkout, and do not remove
+it as part of a sync until its owner confirms it holds no unique work.
 
 Verify `git remote -v`, the current branch, tracking configuration and worktree
 status. Expected roles, subject to explicit user changes:
@@ -32,8 +34,9 @@ status. Expected roles, subject to explicit user changes:
 | `upstream` → `https://github.com/pixmaate/gufo.git` | Different fork; not the official update source. |
 | `windows-main` tracks `origin/windows-main` | Keep this tracking relationship; do not change it to `official/main`. |
 
-If `official` is absent, adding it with the official URL is part of setting up
-this workflow. If it exists at a different URL, investigate before changing it.
+Verify `official` points at the URL above before fetching. If it is absent,
+add it with `git remote add official https://github.com/gufo-org/gufo.git`.
+If it exists at a different URL, investigate before changing it.
 Do not repoint `upstream` or change the user's other remote configuration.
 Prefer `jj` if available and usable for this checkout, otherwise Git; the
 examples below use Git. Check `gh auth status` before GitHub operations.
@@ -123,13 +126,16 @@ validated, or pending with its reason; a clean merge is not validation.
   hardware/models or skipped tests remain pending, not passed. Fix confirmed
   regressions before publishing a qualified sync.
 
-Local hints, not portable defaults: the previous Windows validation used
-TheRock 10.0.0 at `C:\TheRock\build`, with vcpkg at
-`C:\Users\pegas\Documents\Projects-2026\Strix-halo-optimizations\vcpkg`.
-The build helper defaults to `C:\vcpkg`, which was absent on this host.
-Flash-Next model shards and the shared-Q8 MTP sidecar were under
+Host-specific paths live in ignored `tools/windows/local.json` (see
+`tools/windows/local.example.json`); `tools/windows/build.ps1` uses it for
+any `-Rocm`/`-Vcpkg`/`-Ninja` option left at its default. Previously observed
+values were TheRock 10.0.0 at `C:\TheRock\build`, vcpkg at
+`C:\Users\pegas\Documents\Projects-2026\Strix-halo-optimizations\vcpkg`
+(the build helper default `C:\vcpkg` was absent on that host), and Flash-Next
+model shards plus the shared-Q8 MTP sidecar under
 `C:\Users\pegas\Documents\Llama\LLama-GUI\models\Qwenflash-next-4kxl`.
-Verify paths and versions before reuse. Ignored `build/` investigation scripts
+Verify paths and versions before reuse; never bake host paths into tracked
+scripts. Ignored `build/` investigation scripts
 and old binaries may be missing in another checkout; use maintained test tools
 or retain a reproducible workload with the new sync evidence.
 

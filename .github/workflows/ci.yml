@@ -1,6 +1,9 @@
 name: CI
 
 on:
+  # Fork-only: windows-main also runs the Linux contracts, so each sync
+  # candidate gets the Linux gate from hosted CI. Keep on rebase-proof
+  # trigger lines only; do not add Windows jobs to this workflow.
   push:
     branches: [ main, windows-main ]
   pull_request:

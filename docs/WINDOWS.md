@@ -188,10 +188,12 @@ model or require a GPU.
 ## Windows CPU CI
 
 The separate [Windows workflow](../.github/workflows/windows-cpu.yml) runs the
-bounded `windows-cpu` build and all 15 checks on `windows-2025`, on pull requests
-and pushes to `main` or `feat/windows-cpu-compat`, and through manual dispatch.
+bounded `windows-cpu` build and all 16 checks on `windows-2025`, on pull requests
+and pushes to `main`, `windows-main` or `feat/windows-cpu-compat`, and through manual dispatch.
 It retains build/configuration logs and CTest results; it does not publish
-executables. The existing Linux CI workflow is unchanged.
+executables. The Linux CI workflow also runs on `windows-main` (an intentional
+fork-only trigger addition in `.github/workflows/ci.yml`), so a sync candidate
+gets the Linux contract gate from hosted CI.
 
 [setup-ci.ps1](../tools/windows/setup-ci.ps1) downloads the official
 [LLVM 23.1.2 release](https://github.com/llvm/llvm-project/releases/tag/llvmorg-23.1.2)
