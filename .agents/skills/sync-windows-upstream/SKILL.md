@@ -53,10 +53,14 @@ examples below use Git. Check `gh auth status` before GitHub operations.
    deciding the integration base; do not pull blindly or discard unpublished
    Windows commits. If official is already an ancestor of the chosen Windows
    base, report it up to date rather than making an empty merge.
-3. Inspect the incoming commits/diff and the maintained Windows difference:
-   `git log windows-main..official/main --oneline`,
-   `git diff --stat windows-main...official/main` and
-   `git diff --stat official/main..windows-main`.
+3. Inventory the incoming commits and the maintained Windows difference:
+   `./tools/windows/sync-inventory.ps1 -WindowsBase $windowsBase
+   -OfficialHead $officialHead -OutFile build/sync-YYYY-MM-DD/inventory.md`.
+   It resolves every incoming PR, flags known Windows regressions
+   ([`known-regressions.json`](../../../tools/windows/known-regressions.json))
+   arriving with the sync or touched by upstream, lists files changed on both
+   sides, and emits the sync-log entry skeleton. Exit code 1 means a known
+   regression must be reverted on the candidate.
    Use CodeGraph first for code exploration when `.codegraph/` exists, per
    repository instructions. Include new callers of OS-sensitive operations,
    not just files with merge conflicts.
@@ -120,9 +124,14 @@ validated, or pending with its reason; a clean merge is not validation.
   regression as a pass. Keep baseline binaries with their required runtime DLLs;
   do not overwrite an executable used by a live GUI/server. Stop only test
   processes owned by the run.
+- Rerun the inventory with `-Candidate HEAD`; it fails if reverted code is
+  present. Run `./tools/windows/diff-guard.ps1`; a new shared-file edit must be
+  deliberate and listed in `tools/windows/shared-edits.json`.
 - Run `python tools/ci/check-docs.py`, `git diff --check` and required formatting
-  for changed C++. Run the bounded Linux checks through an available Linux/Nix
-  environment or hosted CI. Windows results do not qualify Linux, and missing
+  for changed C++. Run the bounded Linux checks through hosted CI: pushing the
+  candidate branch alone triggers nothing, so open a draft PR against
+  `windows-main` (when publication is authorized) and `gh run watch` the CI
+  and Windows CPU runs, or use an available Linux/Nix environment. Windows results do not qualify Linux, and missing
   hardware/models or skipped tests remain pending, not passed. Fix confirmed
   regressions before publishing a qualified sync.
 

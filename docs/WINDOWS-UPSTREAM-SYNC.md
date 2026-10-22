@@ -37,6 +37,10 @@ regression.
 
 ## Known upstream regressions
 
+[`known-regressions.json`](../tools/windows/known-regressions.json) mirrors
+these entries for the sync tools: PR, merge/revert SHAs, identifiers that must
+stay absent while reverted, and reintroduction checks. Update both together.
+
 ### PR #699: Windows first-request MTP decode regression
 
 **Avoid reapplying #699 unchanged on Windows.** Its code is reverted by
@@ -78,10 +82,12 @@ focused cold-start control plus affected correctness checks.
    Verify remote roles, worktree status and local versus remote `windows-main`
    before fetching. Preserve unpublished Windows work.
 2. Record the Windows base and fetched `official/main` SHA before merging.
-   List **all** incoming commits with `git log --reverse --oneline
-   WINDOWS_BASE..OFFICIAL_HEAD`; resolve PR numbers and merge SHAs with
-   `gh pr view NUMBER --repo gufo-org/gufo --json number,title,url,mergedAt,mergeCommit`.
-   Include release commits and dependencies in the entry.
+   Run `tools/windows/sync-inventory.ps1 -WindowsBase WINDOWS_BASE
+   -OfficialHead OFFICIAL_HEAD -OutFile build/sync-YYYY-MM-DD/inventory.md`.
+   It lists **all** incoming commits, resolves PR titles and merge SHAs with
+   `gh`, lists release commits separately, reports files changed on both sides
+   and upstream work on reverted regions, and emits an entry skeleton. Exit
+   code 1 means the sync imports a known regression.
 3. Apply the Windows acceptance policy and known-regression entries above.
    Merge that exact upstream SHA on an isolated candidate descended from the
    Windows base. An already isolated T3 task branch is a suitable candidate.
@@ -92,11 +98,16 @@ focused cold-start control plus affected correctness checks.
    gate, affected GPU/model checks, documentation/formatting checks and the
    available Linux gate. Preserve individual timing results and failures.
    Revert/defer confirmed Windows regressions and validate the resulting
-   combination before accepting the sync.
+   combination before accepting the sync. Rerun the inventory with
+   `-Candidate HEAD` (it fails if reverted code is present), run
+   `tools/windows/diff-guard.ps1`, and open a draft PR against `windows-main`:
+   pushing a `sync/official-*` branch alone triggers no hosted checks. Watch
+   the Linux and Windows CPU runs with `gh run watch`.
 5. Append an entry below with the PR table, base/head identities, resolutions,
    six contract outcomes, exact checks, evidence location and pending limits.
    List skipped/reverted/deferred PRs and their reintroduction requirements
-   explicitly; do not silently omit them from the inventory.
+   explicitly; do not silently omit them from the inventory. Record new
+   reverts in `known-regressions.json`.
    Verify each PR merge SHA and the recorded official head with
    `git merge-base --is-ancestor SHA HEAD`. Do not replace old entries.
 6. Integrate a qualified candidate into `windows-main` only after rechecking

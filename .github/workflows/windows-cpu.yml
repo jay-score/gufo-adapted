@@ -44,6 +44,26 @@ jobs:
       - name: Check launcher browser behavior
         run: node --experimental-vm-modules --test tests/tools/gui_dom_test.mjs tests/tools/gui_runtime_dom_test.mjs
 
+  sync-guards:
+    name: Upstream difference guard
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Fetch official Gufo
+        run: git fetch --no-tags https://github.com/gufo-org/gufo.git +main:refs/remotes/official/main
+
+      - name: Check the maintained difference
+        shell: pwsh
+        run: ./tools/windows/diff-guard.ps1
+
+      - name: Run sync tool tests
+        run: python -m unittest tests/tools/sync_tools_test.py -v
+
   installer:
     name: Installer checks
     runs-on: windows-2025
