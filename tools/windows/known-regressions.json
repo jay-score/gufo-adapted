@@ -1,0 +1,30 @@
+{
+  "_comment": "Machine-readable gate for docs/WINDOWS-UPSTREAM-SYNC.md#known-upstream-regressions. The Markdown entry keeps the evidence; tools/windows/sync-inventory.ps1 and diff-guard.ps1 read this file. status 'reverted' is enforced; 'resolved' is history only. Files changed by revertSha are the watched paths. absentIdentifiers must not appear in src/ or tests/ of a candidate while the regression is reverted.",
+  "regressions": [
+    {
+      "pr": 699,
+      "repository": "gufo-org/gufo",
+      "title": "perf(qwen): reduce Flash-Next sampled decoding overhead",
+      "mergeSha": "e060aeed923730b74ea3f4116c3c39de55741370",
+      "status": "reverted",
+      "importMergeSha": "54fb4b4e8570999881153bb9b61c6986bb03bb6f",
+      "revertSha": "161035d8d89dc235d2fcf3e29359eaad613e62af",
+      "log": "docs/WINDOWS-UPSTREAM-SYNC.md#pr-699-windows-first-request-mtp-decode-regression",
+      "symptom": "Windows/TheRock first-request MTP decode regresses (60.90/63.35 ms against 51.32-57.51 ms baseline controls).",
+      "absentIdentifiers": [
+        "CanCompactMtpVerification",
+        "DistributionFromCandidates",
+        "GatherVerificationCandidatesKernel",
+        "LogitCandidate",
+        "SampledMtpCandidates",
+        "VerificationCandidateTileKernel"
+      ],
+      "reintroductionChecks": [
+        "Review the upstream fix and cite the sync log entry.",
+        "Fresh-process varied 10-16K-token Windows AR/MTP first-prompt controls, then repeat with prompt reuse disabled, against the previous Windows binary.",
+        "Retain every phase, output and cache/draft count; apply the 5% and 3 ms request-phase gates.",
+        "Affected Flash-Next sampling/verification correctness checks."
+      ]
+    }
+  ]
+}
