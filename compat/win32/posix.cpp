@@ -702,6 +702,13 @@ int mkdirat(int dirfd, const char* path, mode_t mode) {
   return 0;
 }
 
+int gufo_open_cache_directory(const wchar_t* path) {
+  const auto directory = gufo::win32::OpenCacheDirectory(path);
+  if (directory == INVALID_HANDLE_VALUE)
+    return Fail(GetLastError());
+  return WrapHandle(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+}
+
 int gufo_rename_noreplace(int olddirfd, const char* oldpath, int newdirfd,
                           const char* newpath) {
   if (gufo::win32::Fault("rename"))

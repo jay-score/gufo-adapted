@@ -96,6 +96,7 @@ class FunctionalRunnerTest(unittest.TestCase):
         self.assertLessEqual({f"tests/functional/{name}" for name in functional.HARNESS_ROOTS},
                              hashed)
         self.assertLessEqual({"tests/functional/messages_tools.py",
+                              "tests/functional/windows_server.py",
                               "tools/gufo/control_tokens.py"}, hashed)
 
     def test_continuation_restore_reports_observed_equality(self):

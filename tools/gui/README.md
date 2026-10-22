@@ -160,11 +160,15 @@ launch; raising the budget above the automatic one needs a rebuilt engine
 the GUI passes `--cache-disk`, `--cache-disk-bytes`, and
 `--cache-disk-staging-bytes`. The suggested folder is `%LOCALAPPDATA%\Gufo\cache`
 on Windows (`~/.cache/gufo` otherwise); Gufo creates it when needed. The disk
-limit defaults to 8 GiB and the RAM staging limit to 0 (automatic, the smaller
-of one eighth of available RAM after loading and the disk limit).
-Large snapshots need larger limits: Flash-Next/MTP at 262K context needs 8 GiB
-staging if RAM permits. See [server cache behavior](../../docs/SERVER.md#hip-execution)
-for skip behavior and budget details. Stop/Exit do not drain pending writes.
+limit defaults to 8 GiB and the RAM staging limit to 0. Current Flash-Next and
+Qwen27B component caches ignore the staging setting and stream through an internal
+1 MiB buffer. On Windows, use a new folder on local NTFS; Gufo creates private
+user-only ACLs and rejects existing folders with broader or unprotected ACLs,
+reparse points and paths containing `..`. Completed checkpoints can be reused
+after an engine restart, but may be lost after power failure. See the
+[Windows cache contract](../../docs/WINDOWS.md#windows-component-disk-cache).
+The older continuation store remains unavailable on Windows. Stop/Exit do not
+drain pending writes.
 
 These controls are saved per preset. Existing presets receive the defaults in
 memory without rewriting the saved file. Use **Save preset** to persist changes;

@@ -15,7 +15,6 @@
 #include <cerrno>
 #include <filesystem>
 #include <iostream>
-#include <stdexcept>
 #include <string>
 
 #include "src/cache/disk.hpp"
@@ -40,16 +39,10 @@ int main(int argc, char** argv) {
   std::filesystem::create_directory(path);
   gufo::cache::ResourceLedger ledger(
       {1024 * 1024, 1024 * 1024, 1024 * 1024, 1024 * 1024});
-  bool rejected = false;
-  try {
-    gufo::cache::DiskStore store(ledger, path / "unsupported-cache",
-                                 1024 * 1024);
-  } catch (const std::runtime_error& error) {
-    rejected =
-        std::string(error.what()).find("Windows disk cache is unavailable") !=
-        std::string::npos;
+  {
+    gufo::cache::DiskStore store(ledger, path / "private-cache", 1024 * 1024);
+    assert(store.Entries().empty());
   }
-  assert(rejected && !std::filesystem::exists(path / "unsupported-cache"));
   const int root = open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
   assert(root >= 0);
   assert(mkdirat(root, "spaced directory", 0700) == 0);

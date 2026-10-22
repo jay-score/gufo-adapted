@@ -248,6 +248,13 @@ struct ComponentTextCache::Impl {
       // second server fails without claiming its RAM budget first.
       disk = std::make_unique<cache::DiskStore>(ledger, options->directory,
                                                 options->capacity_bytes);
+#ifdef _WIN32
+      Logger::Info(
+          "cache",
+          "schema=component-cache-v1 event=disk_cache_platform "
+          "platform=windows filesystem=ntfs "
+          "durability=rebuildable power_loss=checkpoint_loss_possible");
+#endif
     }
     for (std::size_t i = 0; i < count; ++i) {
       auto entry = std::make_unique<Entry>();

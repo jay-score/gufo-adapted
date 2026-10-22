@@ -2,6 +2,11 @@
 
 The runner starts an isolated local server and checks real responses with the
 OpenAI SDK. Use production binaries and local weights; no models are downloaded.
+On Windows, `run.py` and `cache_startup.py` use hidden private consoles and native
+console shutdown. Pass an absolute executable path and use Python's `-X utf8`
+option. The component disk cache requires a private local NTFS folder
+and uses the [Windows rebuildable-cache contract](../../docs/WINDOWS.md#windows-component-disk-cache).
+Linux-only preload/fork fault suites remain separate from the native store tests.
 
 Qwen 27B deep-history recovery uses separate, explicitly selected workloads:
 
@@ -104,7 +109,10 @@ nix develop -c python3 tests/functional/cache_startup.py \
 ```
 
 Run again with `--speculative off` for AR. `--case ram` or `--case disk` selects
-only that lifecycle. For Qwen 27B, add `--model-kind qwen27b` before `--`,
+only that lifecycle. `--case corrupt` additionally damages the runner-owned
+payload files without changing their sizes or manifests, requires exact uncached
+recomputation, then restarts again to verify a replacement disk checkpoint.
+For Qwen 27B, add `--model-kind qwen27b` before `--`,
 use its target weights, and select `--speculative off` or
 `--speculative dflash2 --dflash-model /path/to/draft.gguf` in the server command.
 Commands, startup times, request timings, responses and logs

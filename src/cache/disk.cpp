@@ -253,7 +253,15 @@ Fd DirectoryAt(int parent, const char* name) {
       openat(parent, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
   if (fd < 0)
     IoError(std::string("open cache directory ") + name);
-  return Fd(fd);
+  Fd directory(fd);
+#ifdef _WIN32
+  struct stat st{};
+  if (fstat(fd, &st) < 0 || !S_ISDIR(st.st_mode) || st.st_uid != geteuid() ||
+      (st.st_mode & 0777) != 0700)
+    throw std::runtime_error(std::string("cache directory must be private: ") +
+                             name);
+#endif
+  return directory;
 }
 template<typename F>
 void Scan(int fd, F visit) {
@@ -305,6 +313,10 @@ std::optional<DiskFileId> ParseName(const std::string& name) {
   return id;
 }
 bool Regular(const struct stat& st) {
+#ifdef _WIN32
+  if (st.st_uid != geteuid() || (st.st_mode & 0777) != 0600)
+    return false;
+#endif
   return S_ISREG(st.st_mode) && st.st_size >= 0 && st.st_nlink == 1;
 }
 bool Contains(const DiskManifest& manifest, bool private_file,
@@ -631,10 +643,13 @@ struct DiskStore::Impl {
         private_files(DirectoryAt(version.Get(), "private")),
         temporary(DirectoryAt(version.Get(), "tmp")),
         budget_bytes(budget) {
-    // Persist the layout, including a newly created root and ancestors, before
-    // any checkpoint can rely on these directory entries.
+    // Flush the layout before any checkpoint relies on its directory entries.
     for (int fd : {version.Get(), root.Get()})
       SyncFd(fd);
+    // Linux also persists a new root through all its ancestors. Windows
+    // checkpoints are rebuildable: no write access to profile/volume ancestors
+    // is required and namespace persistence across power loss is not promised.
+#ifndef _WIN32
     Fd ancestor(openat(root.Get(), "..", O_RDONLY | O_DIRECTORY | O_CLOEXEC));
     for (;;) {
       if (ancestor.Get() < 0)
@@ -650,6 +665,7 @@ struct DiskStore::Impl {
         break;
       ancestor.Swap(parent);
     }
+#endif
     CleanupLegacy();
     std::size_t manifest_count{};
     for (const int directory :
@@ -1380,11 +1396,6 @@ struct DiskStore::Impl {
     }
   }
   static Fd OpenRoot(const std::filesystem::path& path) {
-#ifdef _WIN32
-    throw std::runtime_error(
-        "Windows disk cache is unavailable pending durability and "
-        "access-control qualification");
-#endif
     // Do not collapse '..': an earlier component may be a symlink and the
     // kernel's configured-directory resolution must remain authoritative.
     auto root_path = path;
@@ -1393,11 +1404,19 @@ struct DiskStore::Impl {
       root_path = root_path.parent_path();
     if (root_path.empty())
       root_path = ".";
+#ifdef _WIN32
+    const int fd = gufo_open_cache_directory(root_path.c_str());
+    if (fd < 0)
+      IoError(
+          "open Windows cache directory (use a new private local NTFS "
+          "folder without '..' or reparse points)");
+#else
     std::filesystem::create_directories(root_path);
     const int fd = open(root_path.c_str(),
                         O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0)
       IoError("open cache directory " + path.string());
+#endif
     return Fd(fd);
   }
   static Fd OpenLock(int root, const std::filesystem::path& path) {

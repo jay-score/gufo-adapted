@@ -312,7 +312,28 @@ void TestReparsePoints() {
               O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW, 0600) < 0 &&
          errno == ELOOP);
   assert(!fs::exists(target / "outside"));
+  // Cache creation must preserve no-follow traversal through every ancestor.
+  assert(gufo_open_cache_directory(link.c_str()) < 0 && errno == ELOOP);
+  assert(gufo_open_cache_directory((link / "outside").c_str()) < 0 &&
+         errno == ELOOP);
+  assert(!fs::exists(target / "outside"));
   assert(RemoveDirectoryW(link.c_str()));
+}
+
+void TestCacheDirectory() {
+  Directory directory;
+  const auto path = directory.path / L"nested/cache-\u00e9";
+  const int root = gufo_open_cache_directory(path.c_str());
+  assert(root >= 0);
+  CheckPrivate(path, true);
+  CheckPrivate(path.parent_path(), true);
+  assert(fsync(root) == 0 && close(root) == 0);
+  const int reopened = gufo_open_cache_directory(path.c_str());
+  assert(reopened >= 0 && close(reopened) == 0);
+  assert(gufo_open_cache_directory((path / ".." / "outside").c_str()) < 0);
+  assert(!fs::exists(path.parent_path() / "outside"));
+  MakePublic(path);
+  assert(gufo_open_cache_directory(path.c_str()) < 0 && errno == EACCES);
 }
 }  // namespace
 
@@ -322,6 +343,7 @@ int main(int argc, char** argv) {
   TestPrivacy();
   TestHandleIdentity();
   TestReparsePoints();
+  TestCacheDirectory();
   TestProcessDeath(argv[0]);
   TestPublicationErrors();
   std::cout << "Windows filesystem guarantees passed\n";
