@@ -10,7 +10,7 @@ corrections, `tools/windows/local.json` defaults, `WINDOWS.md` CPU-CI counts,
 `ci.yml` intent comment). What remains is below, roughly ordered by
 leverage-per-effort. Check off with PR links as each lands.
 
-## 1. Upstream portable fixes to shrink the 48-file `src/` delta
+## 1. Upstream portable fixes to shrink the 48-file `src/` delta (defer this for now)
 
 Several Windows touches are pure-portable and could disappear from our diff
 entirely if accepted upstream. Propose each as an isolated upstream PR when
