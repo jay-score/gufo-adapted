@@ -41,26 +41,26 @@ The cold-prompt request body is already reproducible from
 `WINDOWS-UPSTREAM-SYNC.md`; what lives only in ignored `build/` evidence dirs
 is the server orchestration and the per-phase comparison.
 
-- [ ] `tools/windows/first-prompt-control.py`: the versioned cold-prompt
+- [x] `tools/windows/first-prompt-control.py`: the versioned cold-prompt
   generator (the `random.Random(813)` body in `WINDOWS-UPSTREAM-SYNC.md`) plus
   fresh-process server orchestration for AR/MTP, reuse-on then reuse-off. This
   check caught both the n-gram ~50% regression and #699; it must not live only
   in `build/` dirs that won't exist next quarter.
-- [ ] `tools/windows/compare-phases.py`: per-request/phase comparison with
+- [x] `tools/windows/compare-phases.py`: per-request/phase comparison with
   the repo's 5% and 3 ms gates, no averaging, unchanged-binary controls,
   automatic retention of binary SHA + colocated DLL set + `/props` +
   timings. Today's flow depends on tribal `build/sync-*/` evidence.
-- [ ] `tools/windows/local.json` follow-up: `local.example.json` already has a
+- [x] `tools/windows/local.json` follow-up: `local.example.json` already has a
   `Models` key but nothing reads it (`build.ps1` ignores it). Make the
   harnesses above consume it so model-shard locations stop living in prose.
 
 ## 3. Automate the manual sync procedure (~600 lines of copy-paste today)
 
-- [ ] `tools/windows/known-regressions.json`: machine-readable mirror of the
+- [x] `tools/windows/known-regressions.json`: machine-readable mirror of the
   sync log's known-regressions table (PR, merge SHA, revert SHA, affected
   paths, reintroduction checks). Markdown stays human-readable; JSON is the
   gate.
-- [ ] `tools/windows/sync-inventory.ps1 OFFICIAL_HEAD WINDOWS_BASE`: emit the
+- [x] `tools/windows/sync-inventory.ps1 OFFICIAL_HEAD WINDOWS_BASE`: emit the
   PR table (number/title/URL/merge SHA via `gh`), `diff --stat` both
   directions, and a fresh sync-log entry skeleton with
   `validated / reviewed-unchanged / pending (reason)` slots per contract.
@@ -71,11 +71,13 @@ is the server orchestration and the per-phase comparison.
   `executor.cpp` verification workspace), so a landed fix is noticed without
   rediscovery. Do not reapply without citing the sync log entry and passing
   the cold-start control. One tool, not a separate watcher script.
-- [ ] `tools/windows/diff-guard.ps1`: diff `official/main..HEAD`, fail if a
+- [x] `tools/windows/diff-guard.ps1`: diff `official/main..HEAD`, fail if a
   shared `src/`/`tests/` file outside an allowlist changed or a `// WINDOWS:`
   marker is missing. Keeps the "small difference" contract enforced, not
-  aspirational. (Single guard; §7's diff-lint is this tool.)
-- [ ] Hosted gates for sync candidates: both workflows run only on push to
+  aspirational. (Single guard; §7's diff-lint is this tool. Markers are
+  enforced per file with `"markers": true` in `shared-edits.json`; §7 turns
+  them on.)
+- [x] Hosted gates for sync candidates: both workflows run only on push to
   `main`/`windows-main` or on PRs targeting them, so pushing a
   `sync/official-*` branch alone triggers nothing (`ci.yml` has no
   `workflow_dispatch`). Replace the "use an available Linux/Nix environment"
