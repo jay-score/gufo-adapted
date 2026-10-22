@@ -68,9 +68,9 @@ measures 66.46 ms. Explicit startup function preparation also fails (67.02 ms).
 None of those experimental changes is retained. Profiling measurements are
 diagnostic and are not qualification timings.
 
-**Reintroduction requirement:** review the upstream fix, then run the same
-fresh-process varied 10-16K-token Windows AR/MTP controls, with reuse disabled
-on the second request, against the previous Windows binary. Retain every
+**Reintroduction requirement:** review the upstream fix, then run
+[the first-request control](#reproduce-the-first-request-control) against the
+previous Windows binary. Retain every
 phase, output and cache/draft count; a warmed benchmark alone is insufficient.
 A later merge will not automatically undo the revert because #699 is already
 an ancestor. Any deliberate reapplication must cite this entry and pass the
@@ -121,14 +121,40 @@ do not count missing models, excluded disk persistence or noisy timings as passe
 
 ### Reproduce the first-request control
 
-Finish builds first. For each binary/mode, start a fresh private server with
-`--context 32768 --sessions 2 --think off --port 38121 --served-model-name gufo
---cache-ram-bytes 8589934592`. Use the same target artifacts and runtime DLLs,
-`--speculative off` for AR or `--speculative mtp --mtp-model MTP_PATH` for MTP.
-Keep the executable path identical between arms; stop each owned server before
-replacing it. Save `/props`, the command and binary/model identities.
+Finish builds first and stop nothing you do not own. Run
+[`first-prompt-control.py`](../tools/windows/first-prompt-control.py):
 
-The retained request body is reproducible without the ignored local harness:
+```powershell
+python tools/windows/first-prompt-control.py --base-binary PREVIOUS\gufo.exe `
+  --head-binary CANDIDATE\gufo.exe --repeats 2 --output build/sync-DATE/first-prompt
+```
+
+For each mode (AR with `--speculative off`, MTP with the shared-Q8 sidecar),
+it alternates base/head in ABBA order. Each arm stages the executable, its DLLs
+and `hipblaslt/` at the same path, then starts a fresh private server with
+`--context 32768 --sessions 2 --think off --cache-ram-bytes 8589934592`. It
+POSTs the retained 11,000-word body below to `/v1/chat/completions`, first
+with `cache_prompt: true` and then with `cache_prompt: false`, and stops the
+server with a console break. Models default to `Models` in
+`tools/windows/local.json`. Omit `--head-binary` for an unchanged-binary
+control.
+
+The output directory must be new. It keeps `control.json` with settings,
+binary/DLL/model identities, commands, `/props`, complete responses and
+wall/phase timings. It also keeps one server log per arm and
+`comparison.json`. [`compare-phases.py`](../tools/windows/compare-phases.py)
+reproduces the comparison from `control.json`. Correctness problems fail the
+run: wrong prompt reuse, a wrong answer, an HTTP error or an unclean stop.
+Each phase is compared on its own with the repository's 5% and 3 ms rule; it
+counts only when every repeat moves the same way, and it is compared only when
+both arms did the same prompt/completion/draft work. Exit status 0 means
+passed, 1 failed and 2 inconclusive. An unchanged-binary control with any
+moved phase is inconclusive and measures noise. Investigate flags with more
+repeats or a focused control, and save failed observations as well as
+successes. For these artifacts, expect 11,036 prompt tokens, zero reused
+tokens and `ACK`.
+
+The retained request body, for reference:
 
 ```python
 import random
@@ -140,19 +166,13 @@ body = {
     "model": "gufo",
     "messages": [
         {"role": "system", "content": "Read the archive. Follow the final user instruction exactly."},
-        {"role": "user", "content": passage + "\nReply with exactly the word ACK."},
+        {"role": "user", "content": passage + "
+Reply with exactly the word ACK."},
     ],
     "max_tokens": 128, "temperature": 0, "seed": 42,
     "chat_template_kwargs": {"enable_thinking": False},
 }
 ```
-
-POST to `/v1/chat/completions` twice, first with `cache_prompt: true`, then
-`cache_prompt: false`. Retain both complete responses and wall/phase timings.
-For these artifacts, require 11,036 prompt tokens, zero reused tokens, `ACK`,
-and matching completion/draft/capture work. Compare phases individually with
-the repository's 5% and 3 ms limits, then investigate flags with focused
-alternating/unchanged controls. Save failed observations as well as successes.
 
 ## October 21, 2026
 
