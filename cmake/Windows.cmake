@@ -82,6 +82,22 @@ function(gufo_windows_device_memory)
 endfunction()
 cmake_language(DEFER CALL gufo_windows_device_memory)
 
+# Override upstream root targets after they exist, so their lines stay
+# unchanged. The cache fault library interposes libc through LD_PRELOAD and
+# has no Windows equivalent; check-pr, which depends on it, is Linux-only.
+# The upstream gufo-server symlink install step fails harmlessly here
+# (execute_process ignores the exit status); install a copy instead.
+function(gufo_windows_overrides)
+  if (TARGET cache_disk_faults)
+    set_target_properties(cache_disk_faults PROPERTIES EXCLUDE_FROM_ALL TRUE)
+  endif()
+  if (TEST cache_disk_faults_test)
+    set_tests_properties(cache_disk_faults_test PROPERTIES DISABLED TRUE)
+  endif()
+  install(PROGRAMS $<TARGET_FILE:gufo> DESTINATION bin RENAME gufo-server.exe)
+endfunction()
+cmake_language(DEFER CALL gufo_windows_overrides)
+
 if (BUILD_TESTING)
   target_compile_definitions(gufo_posix_compat PRIVATE GUFO_WIN32_TESTING=1)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)

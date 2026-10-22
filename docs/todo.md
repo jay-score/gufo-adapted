@@ -128,18 +128,17 @@ WebP selection, `gufo-server` copy-vs-symlink target, ROCTX optional, install
 `RENAME gufo-server.exe`, fault libraries, `cache_disk_faults_test`,
 `cmake/Checks.cmake`. Also `tests/cache/CMakeLists.txt` (boundary test args).
 
-- [ ] Fault libraries, `cache_disk_faults_test`, `Checks.cmake`: restore the
-  upstream lines; in a deferred function set `EXCLUDE_FROM_ALL` on
-  `device_loss_faults`/`cache_disk_faults` and `DISABLED` on
-  `cache_disk_faults_test`. Verify `Checks.cmake` configures on Windows when
-  `check-pr` is never built. Needs a Windows configure/build check.
-- [ ] WebP: test whether vcpkg's `libwebp.pc` plus `pkgconf` (set
-  `PKG_CONFIG_EXECUTABLE` in `Windows.cmake`) lets the upstream
-  `pkg_check_modules` line stand unchanged.
-- [ ] Install rename: check whether the upstream `install(CODE … create_symlink)`
-  is harmless on Windows (`execute_process` ignores failure by default); if
-  so, add the `RENAME gufo-server.exe` install from `Windows.cmake` and restore
-  the upstream line.
+- [x] Fault libraries, `cache_disk_faults_test`, `Checks.cmake`: upstream
+  lines restored. `gufo_windows_overrides` in `Windows.cmake` sets
+  `EXCLUDE_FROM_ALL` on `cache_disk_faults` (`device_loss_faults` already is)
+  and `DISABLED` on `cache_disk_faults_test`. `Checks.cmake` configures on
+  Windows; `check-pr` is never built there.
+- [x] WebP: the upstream `pkg_check_modules` line stands unchanged. vcpkg's
+  host `pkgconf` (in `vcpkg.json`) is on the toolchain's program path, so
+  `PKG_CONFIG_EXECUTABLE` needs no override, and `libwebp.pc` resolves.
+- [x] Install rename: the upstream `install(CODE … create_symlink)` line is
+  restored. Its failure is ignored, and `Windows.cmake` installs the
+  `gufo-server.exe` copy.
 - [ ] ROCTX optional and `gufo-server` copy-vs-symlink: better as upstream
   candidates (§1) than relocated; until then they stay as small edits.
 - [ ] `tests/cache/CMakeLists.txt`: see §7 (`boundary_test.py`).
