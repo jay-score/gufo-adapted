@@ -11,11 +11,45 @@
 #include <string>
 #include <vector>
 
+#include "src/models/qwen38_flash_next/kernels/rocm/executor.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/moe_pending_state.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/streamed_moe_policy.hpp"
+#include "src/storage/expert_cache_manager.hpp"
 
 namespace q = gufo::models::qwen38_flash_next::rocm;
+
+namespace gufo::models::qwen38_flash_next::rocm {
+struct ExecutorTestAccess {
+  // Exercise the production UseScratch-before-epilogue helper directly. If
+  // its order is reversed, UseScratch clears the pending flag just set below.
+  static bool FinalWindowRestorePreservesPending(float* output,
+                                                 float* block_output) {
+    Executor executor;
+    Executor::Scratch base{};
+    base.block_out = block_output;
+    return executor.RestoreBaseScratchThenRun(
+               base,
+               [&] {
+                 executor.moe_pending_.SetForOutput(output, block_output);
+                 return true;
+               }) &&
+           executor.moe_pending_.pending() && executor.moe_pending_.Consume() &&
+           !executor.moe_pending_.pending();
+  }
+
+  static bool ResetAfterEpilogueClearsPending(float* output,
+                                              float* block_output) {
+    Executor executor;
+    Executor::Scratch base{};
+    base.block_out = block_output;
+    executor.moe_pending_.SetForOutput(output, block_output);
+    executor.UseScratch(base);
+    return !executor.moe_pending_.pending();
+  }
+};
+}  // namespace gufo::models::qwen38_flash_next::rocm
+
 namespace {
 
 // The model's MoE combine geometry: top-10 slots over a 2,560-wide hidden
@@ -161,12 +195,12 @@ void RunDeferredWindowEpilogue() {
     throw std::runtime_error(
         "one full-chunk F16 epilogue differs from windowed epilogues");
 
-  gufo::models::qwen38_flash_next::rocm::MoePendingState pending;
-  pending.Reset();
-  pending.SetForOutput(d_single.get(), d_single.get());
-  if (!pending.pending() || !pending.Consume() || pending.pending())
+  if (!q::ExecutorTestAccess::FinalWindowRestorePreservesPending(
+          d_single.get(), d_single.get()) ||
+      !q::ExecutorTestAccess::ResetAfterEpilogueClearsPending(d_single.get(),
+                                                              d_single.get()))
     throw std::runtime_error(
-        "deferred MoE epilogue state was not preserved for Combine");
+        "windowed scratch/epilogue ordering did not preserve pending state");
 }
 
 void CheckDeskRoomSlotBoundary() {

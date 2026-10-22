@@ -367,15 +367,17 @@ void Run() {
     throw std::runtime_error(
         "speculative prefetch exceeded its model-wide transaction cap");
   }
+  // Keep k+1 outstanding while retiring k; the rolling horizon must admit k+2.
   speculative_manager->FinishPrefetch(0);
-  speculative_manager->FinishPrefetch(1);
   if (!speculative_manager->Prefetch(2, speculative_prediction, 1, &error,
                                      false, true) ||
       speculative_indirection[third_layer_map] < 0) {
     throw std::runtime_error(
-        "speculative transaction credit was not released by FinishPrefetch: " +
+        "rolling speculative credit did not admit layer k+2 after finishing "
+        "layer k: " +
         error);
   }
+  speculative_manager->FinishPrefetch(1);
   speculative_manager->FinishPrefetch(2);
 
   // A prediction that is already resident submits no I/O batch. Resolve must

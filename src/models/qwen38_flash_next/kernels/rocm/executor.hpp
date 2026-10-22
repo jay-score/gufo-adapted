@@ -383,6 +383,7 @@ public:
   [[nodiscard]] bool has_mtp() const noexcept { return model_->has_mtp(); }
 
 private:
+  friend struct ExecutorTestAccess;
   Executor() = default;
 
   struct RouteTracePass {
@@ -644,6 +645,12 @@ private:
   [[nodiscard]] Scratch RowScratch(const Scratch& base,
                                    std::uint32_t offset) const;
   void UseScratch(const Scratch& scratch) const;
+  template<typename RunEpilogue>
+  bool RestoreBaseScratchThenRun(const Scratch& base,
+                                 RunEpilogue run_epilogue) const {
+    UseScratch(base);
+    return run_epilogue();
+  }
   bool DenseBatch(const DeviceTensor& w, const float* x, float* out,
                   std::uint32_t rows, std::string* error_msg) const;
   bool GatedDenseBatch(const DeviceTensor& up, const DeviceTensor& gate,
