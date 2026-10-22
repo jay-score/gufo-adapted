@@ -53,6 +53,22 @@ is the server orchestration and the per-phase comparison.
 - [x] `tools/windows/local.json` follow-up: `local.example.json` already has a
   `Models` key but nothing reads it (`build.ps1` ignores it). Make the
   harnesses above consume it so model-shard locations stop living in prose.
+- [x] Idle-wake stall: the first GPU submission after about 5 s of device idle
+  stalls 0.3–0.9 s in the Windows driver. It lands inside slot reassignment,
+  so a fresh arm's first request hit it at random and flagged queue/wall/TTFT.
+  `compare-phases.py` now reports the per-request `slot_wait_ms` without
+  gating on it and subtracts it from the phases that contain it (see the
+  [sync procedure](WINDOWS-UPSTREAM-SYNC.md#reproduce-the-first-request-control)).
+- [ ] (Deferred) Engine fix for the same stall: it also costs real users about
+  0.4 s of TTFT on any request after ≥5 s idle, in AR and MTP. Candidates
+  include touching the GPU (e.g. starting the slot reset) when a request
+  arrives, overlapping it with HTTP parsing and tokenization, or keeping the
+  device awake while a server is loaded. Each edits shared engine/server files
+  (`src/cache/slot.cpp`, the Flash-Next `ContinuationAdapter::Invalidate` →
+  `Session::Reset` path), so propose it upstream (§1) rather than carry it.
+  First check whether Linux/amdgpu shows the same stall and whether a
+  Windows/AMD power setting avoids it. Repro: one server, requests after 0, 5,
+  15, 30 and 60 s idle; compare `residual_wait_ms` deltas.
 
 ## 3. Automate the manual sync procedure (~600 lines of copy-paste today)
 

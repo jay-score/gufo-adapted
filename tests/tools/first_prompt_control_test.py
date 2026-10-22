@@ -24,19 +24,29 @@ control = load("first-prompt-control.py", "first_prompt_control")
 compare = load("compare-phases.py", "compare_phases")
 
 
-def request(name, prefill=6000.0, decode=50.0, completion=2, text="ACK"):
-    return {"name": name, "prompt_tokens": 11036, "cached_tokens": 0,
-            "completion_tokens": completion, "draft_tokens": 0, "draft_tokens_accepted": 0,
-            "text_sha256": text,
-            "phases": {"wall_ms": prefill + decode + 20, "queue_ms": 0.1, "ttft_ms": prefill + 25,
-                       "prefill_ms": prefill, "decode_ms": decode, "cache_restore_ms": 0.0,
-                       "cache_snapshot_ms": 40.0, "max_inter_token_ms": decode}}
+def request(name, prefill=6000.0, decode=50.0, completion=2, text="ACK", wait=0.0, total=None):
+    observed = {"name": name, "prompt_tokens": 11036, "cached_tokens": 0,
+                "completion_tokens": completion, "draft_tokens": 0, "draft_tokens_accepted": 0,
+                "text_sha256": text,
+                "phases": {"wall_ms": prefill + decode + 20 + wait, "queue_ms": 0.1 + wait,
+                           "ttft_ms": prefill + 25 + wait, "prefill_ms": prefill,
+                           "decode_ms": decode, "cache_restore_ms": 0.0,
+                           "cache_snapshot_ms": 40.0, "max_inter_token_ms": decode}}
+    if total is not None:
+        spill = {"global_spill": {"residual_wait_ms": total}}
+        observed["response"] = {"usage": {"gufo": {"component_cache": spill}}}
+    return observed
 
 
-def arm(label, repeat, binary="same", **changes):
+def arm(label, repeat, binary="same", waits=None, **changes):
+    """`waits` gives each request's slot wait; responses carry the process total."""
+    if waits is None:
+        requests = [request("reuse", **changes), request("no-reuse", **changes)]
+    else:
+        requests = [request("reuse", wait=waits[0], total=waits[0], **changes),
+                    request("no-reuse", wait=waits[1], total=sum(waits), **changes)]
     return {"label": label, "mode": "ar", "repeat": repeat, "problems": [],
-            "binary": {"sha256": binary, "dll_set_sha256": "dlls"},
-            "requests": [request("reuse", **changes), request("no-reuse", **changes)]}
+            "binary": {"sha256": binary, "dll_set_sha256": "dlls"}, "requests": requests}
 
 
 def run(*arms):
@@ -113,6 +123,33 @@ class CompareTest(unittest.TestCase):
         result = run(arm("base", 0), head)
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["correctness"], ["head ar #0: reuse: reused 512 tokens"])
+
+    def test_idle_wake_is_reported_not_gated(self):
+        # The Windows idle wake lands in one arm's first slot reassignment.
+        result = run(arm("base", 0, waits=(8.0, 1.0)), arm("head", 0, waits=(900.0, 1.0)))
+        self.assertEqual(verdicts(result, "slot_wait_ms"), ["slower"])
+        for phase in ("wall_ms", "queue_ms", "ttft_ms"):
+            self.assertEqual(verdicts(result, phase), ["same"])
+            self.assertEqual(verdicts(result, phase, "no-reuse"), ["same"])
+        queue = [row for row in result["measurements"]
+                 if row["phase"] == "queue_ms" and row["request"] == "reuse"][0]
+        self.assertEqual(queue["excludes"], "slot_wait_ms")
+        self.assertAlmostEqual(queue["head"][0], 0.1)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(len(result["notes"]), 1)
+        self.assertTrue(result["notes"][0].startswith("ar reuse: slot_wait_ms"))
+        self.assertIn("| queue_ms - slot_wait_ms |", compare.table(result))
+
+    def test_per_request_slot_wait_from_process_totals(self):
+        waits = compare.slot_waits(arm("head", 0, waits=(900.0, 2.5)))
+        self.assertEqual(waits, [900.0, 2.5])
+
+    def test_evidence_without_slot_wait_is_compared_unadjusted(self):
+        result = run(arm("base", 0), arm("head", 0, "new", prefill=6600.0),
+                     arm("head", 1, "new", prefill=6700.0), arm("base", 1))
+        self.assertEqual(verdicts(result, "slot_wait_ms"), ["missing"])
+        self.assertEqual(verdicts(result, "ttft_ms"), ["slower"])
+        self.assertEqual(result["status"], "failed")
 
     def test_incomplete_pairs_are_rejected(self):
         with self.assertRaises(ValueError):
