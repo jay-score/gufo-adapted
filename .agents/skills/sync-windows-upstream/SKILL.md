@@ -25,17 +25,10 @@ diverged from `windows-main`); do not use it as a checkout, and do not remove
 it as part of a sync until its owner confirms it holds no unique work.
 
 Verify `git remote -v`, the current branch, tracking configuration and worktree
-status. Expected roles, subject to explicit user changes:
-
-| Remote/ref | Purpose |
-| --- | --- |
-| `official` → `https://github.com/gufo-org/gufo.git` | Official source of updates; merge `official/main`. |
-| `origin` → `https://github.com/thomas9120/gufo-windows.git` | User's fork; publish Windows work here when requested. |
-| `upstream` → `https://github.com/pixmaate/gufo.git` | Different fork; not the official update source. |
-| `windows-main` tracks `origin/windows-main` | Keep this tracking relationship; do not change it to `official/main`. |
-
-Verify `official` points at the URL above before fetching. If it is absent,
-add it with `git remote add official https://github.com/gufo-org/gufo.git`.
+status against the canonical
+[repository roles](../../../docs/WINDOWS-COMPATIBILITY.md#repository-roles).
+Verify `official` points at the official URL there before fetching. If it is
+absent, add it with `git remote add official https://github.com/gufo-org/gufo.git`.
 If it exists at a different URL, investigate before changing it.
 Do not repoint `upstream` or change the user's other remote configuration.
 Prefer `jj` if available and usable for this checkout, otherwise Git; the
@@ -93,9 +86,8 @@ Windows disk checkpoint stores merely to make a merge build.
 
 ## Review and validate
 
-Check off all six [compatibility contracts](../../../docs/WINDOWS-COMPATIBILITY.md):
-cached concurrent n-gram reads, WDDM budgets, pinned memory, sockets/shutdown,
-filesystem semantics and queue policy. Record each as unchanged/reviewed,
+Check off every [compatibility contract](../../../docs/WINDOWS-COMPATIBILITY.md)
+(the inventory's skeleton lists them). Record each as unchanged/reviewed,
 validated, or pending with its reason; a clean merge is not validation.
 
 - Build and run the bounded Windows CPU gate using the documented toolchain:
@@ -119,7 +111,7 @@ validated, or pending with its reason; a clean merge is not validation.
   [sync procedure](../../../docs/WINDOWS-UPSTREAM-SYNC.md#reproduce-the-first-request-control)
   describes. It retains identities, responses and per-phase verdicts. Compare
   with the checklist's
-  [control record](../../../docs/models/qwen3.8-flash-next/BENCHMARKS.md#windows-cold-prompt-control-october-20-2026).
+  [control record](../../../docs/models/qwen3.8-flash-next/WINDOWS.md#cold-prompt-control-october-20-2026).
 - Keep model, toolchain, launch settings, cache history and power conditions
   matched. Capture binary/revision identities, commands, individual request
   timings, output and actual cache/draft work. Apply repository timing limits
@@ -129,8 +121,10 @@ validated, or pending with its reason; a clean merge is not validation.
   do not overwrite an executable used by a live GUI/server. Stop only test
   processes owned by the run.
 - Rerun the inventory with `-Candidate HEAD`; it fails if reverted code is
-  present. Run `./tools/windows/diff-guard.ps1`; a new shared-file edit must be
-  deliberate and listed in `tools/windows/shared-edits.json`.
+  present. Run `./tools/windows/diff-guard.ps1` and keep the
+  [maintained difference](../../../docs/WINDOWS-COMPATIBILITY.md#maintained-difference)
+  rules: a new shared-file edit must be deliberate and listed, and Windows
+  model evidence goes in the model's `WINDOWS.md` sidecar.
 - Run `python tools/ci/check-docs.py`, `git diff --check` and required formatting
   for changed C++. Run the bounded Linux checks through hosted CI: pushing the
   candidate branch alone triggers nothing, so open a draft PR against
@@ -142,8 +136,9 @@ validated, or pending with its reason; a clean merge is not validation.
 Host-specific paths live in ignored `tools/windows/local.json` (see
 `tools/windows/local.example.json`). `tools/windows/build.ps1` uses it for
 any `-Rocm`/`-Vcpkg`/`-Ninja` option left at its default.
-`first-prompt-control.py` reads its `Models` directory. Previously observed
-values were TheRock 10.0.0 at `C:\TheRock\build`, vcpkg at
+`first-prompt-control.py` reads its `Models` directory. If `local.json` is
+missing, seed it from the previously observed values: TheRock 10.0.0 at
+`C:\TheRock\build`, vcpkg at
 `C:\Users\pegas\Documents\Projects-2026\Strix-halo-optimizations\vcpkg`
 (the build helper default `C:\vcpkg` was absent on that host), and Flash-Next
 model shards plus the shared-Q8 MTP sidecar under
@@ -171,8 +166,8 @@ commits, report the blocker rather than silently losing ancestry. Never force-
 push the maintained branch. Use a Conventional Commit title and register the
 PR with the current thread when the host provides PR-linking tools.
 
-Report both base SHAs and final candidate SHA, conflicts/resolutions, the six
-contract outcomes, exact checks/results, pending qualifications and any PR URL.
+Report both base SHAs and final candidate SHA, conflicts/resolutions, the
+per-contract outcomes, exact checks/results, pending qualifications and any PR URL.
 Verify the recorded official SHA is an ancestor of the final candidate with
 `git merge-base --is-ancestor`. Leave an unqualified candidate clearly marked
 as such. Do not create releases or manually bump versions/changelogs for a sync.

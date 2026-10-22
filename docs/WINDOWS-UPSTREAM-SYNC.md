@@ -56,7 +56,7 @@ removing #699 alone measures 53.55 ms. The rebuilt explicit revert measures
 work. Its 6,557.75/6,284.98 ms prefill also remains within the baseline gate.
 The focused import/base pair exceeds the unchanged 5% and 3 ms request-phase gate. Warm repeats are about 51-53 ms;
 outputs and prompt/cache/draft counts agree. See the model's
-[individual observations](models/qwen3.8-flash-next/BENCHMARKS.md#windows-sync-first-decode-control-october-21-2026).
+[individual observations](models/qwen3.8-flash-next/WINDOWS.md#sync-first-decode-control-october-21-2026).
 
 Temporary host-stage traces locate roughly 7-9 ms in the first neural
 predictor's Q8 MoE enqueue after KV-only prefill. The baseline pays this
@@ -79,8 +79,8 @@ focused cold-start control plus affected correctness checks.
 ## Repeatable procedure
 
 1. Follow the [sync skill](../.agents/skills/sync-windows-upstream/SKILL.md).
-   Verify remote roles, worktree status and local versus remote `windows-main`
-   before fetching. Preserve unpublished Windows work.
+   Verify [repository roles](WINDOWS-COMPATIBILITY.md#repository-roles),
+   worktree status and local versus remote `windows-main` before fetching. Preserve unpublished Windows work.
 2. Record the Windows base and fetched `official/main` SHA before merging.
    Run `tools/windows/sync-inventory.ps1 -WindowsBase WINDOWS_BASE
    -OfficialHead OFFICIAL_HEAD -OutFile build/sync-YYYY-MM-DD/inventory.md`.
@@ -93,27 +93,30 @@ focused cold-start control plus affected correctness checks.
    Windows base. An already isolated T3 task branch is a suitable candidate.
    Preserve official ancestry through a merge commit. Review cleanly merged
    Windows call sites as well as conflicts; retain both platforms' evidence.
-4. Review all six [compatibility contracts](WINDOWS-COMPATIBILITY.md).
+4. Review every [compatibility contract](WINDOWS-COMPATIBILITY.md).
    Audit new callers and moved implementations. Run the bounded Windows CPU
    gate, affected GPU/model checks, documentation/formatting checks and the
    available Linux gate. Preserve individual timing results and failures.
    Revert/defer confirmed Windows regressions and validate the resulting
    combination before accepting the sync. Rerun the inventory with
    `-Candidate HEAD` (it fails if reverted code is present), run
-   `tools/windows/diff-guard.ps1`, and open a draft PR against `windows-main`:
+   `tools/windows/diff-guard.ps1` (see the
+   [maintained difference](WINDOWS-COMPATIBILITY.md#maintained-difference)),
+   and open a draft PR against `windows-main`:
    pushing a `sync/official-*` branch alone triggers no hosted checks. Watch
    the Linux and Windows CPU runs with `gh run watch`.
 5. Append an entry below with the PR table, base/head identities, resolutions,
-   six contract outcomes, exact checks, evidence location and pending limits.
+   per-contract outcomes, exact checks, evidence location and pending limits.
+   Put model measurements in the model's `WINDOWS.md` sidecar, not in the
+   upstream model documents.
    List skipped/reverted/deferred PRs and their reintroduction requirements
    explicitly; do not silently omit them from the inventory. Record new
    reverts in `known-regressions.json`.
    Verify each PR merge SHA and the recorded official head with
    `git merge-base --is-ancestor SHA HEAD`. Do not replace old entries.
 6. Integrate a qualified candidate into `windows-main` only after rechecking
-   its base. Publication follows the requested endpoint; a sync PR must use
-   merge merging to retain ancestry. Never squash/rebase the upstream merge
-   or force-push the maintained branch.
+   its base. Publication follows the requested endpoint and the
+   [merge policy](WINDOWS-COMPATIBILITY.md#repository-roles).
 
 For the next sync, copy the shape of the latest entry and replace its evidence.
 Use **validated**, **reviewed/unchanged**, or **pending (reason)** per contract;
