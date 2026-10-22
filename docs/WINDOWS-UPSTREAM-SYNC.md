@@ -190,6 +190,74 @@ Reply with exactly the word ACK."},
 }
 ```
 
+## October 22, 2026: PR #350 candidate
+
+Status: **unqualified candidate; timing controls and extended-context/API checks are in progress**.
+
+- Windows base: `d10a852f0f094d926128ecf2e9dd112cae0c4a8e` (PR #74 merged).
+- Previous official ancestor: `53ebb51ed0c0b24dbe7c1e35dce6c97d82740bfe`.
+- Imported official commit: `2947624b9e65f52d4b4fdd96297f39e040a0ed24`.
+- Integration merge: `8170cfc855484da939df61cbcf4c31d125cde772`.
+- Scope: #350 only. The later #709, #688, #710, #677 and #711 commits will
+  follow in separately qualified sync PRs.
+- Evidence: `build/sync-350-2026-10-22/` in the task worktree.
+
+| PR | Upstream change | Merge SHA |
+| --- | --- | --- |
+| [#350](https://github.com/gufo-org/gufo/pull/350) | Opt-in Flash-Next YaRN context extension | `2947624b9e65f52d4b4fdd96297f39e040a0ed24` |
+
+### Merge review
+
+One conflict, in `projection_ops_test.cpp`: preserve the null vision descriptor
+from the #699 revert and pass the new YaRN argument. Clean merges of the
+executor, kernels, engine and serving options were also reviewed. #699 remains
+reverted; its six forbidden identifiers stay absent.
+
+Windows' MSVC library prints padded hexadecimal fractions in `std::hexfloat`,
+breaking upstream's pinned YaRN cache identity. The Windows-only normalization
+in `rope_scaling.cpp` removes that padding and passes the original test
+unchanged. Linux formatting is unchanged. The shared edit is marked and listed.
+
+The Windows-owned `win32_yarn_snapshot_test.cpp` covers checkpoint replay
+without the upstream snapshot test's Linux ELF fault hooks. It checks exact
+logits, tokens and actual MTP draft work, serialized replay, old executor-format
+rejection/reset/recovery, and rejection of a different scaling factor.
+Bitwise replay controls use matching prefill boundaries. The current executor
+format changes from `QFNSNAP5` to `QFNSNAP6`; the outer session version stays 18.
+
+### Compatibility and validation
+
+| Contract | Outcome |
+| --- | --- |
+| Cached concurrent n-gram reads | Windows reopening/read flags unchanged; native n-gram checks pass. Fresh-process inference timing remains inconclusive pending controls. |
+| WDDM admission budgets | Helper unchanged; scaled-context allocation/admission still needs the extended-context run. |
+| Pinned memory and transfer lifetime | Native snapshot-copy operator and AR/MTP 4K cross-slot component/continuation checks pass. Extended-context capture remains pending. |
+| Sockets and shutdown | Implementation unchanged; bounded native HTTP/WebSocket and real console-shutdown checks pass. |
+| Filesystem identity, privacy and failures | Native implementation checks pass; new model payload/factor compatibility passes. API disk restart remains pending. |
+| GPU queue policy | Boundary unchanged; bounded native startup policy checks pass. |
+
+Completed local checks and current limits:
+
+- Native Windows CPU gate: **16/16 pass** (`final-cpu-ctest.txt`).
+- Selected operators: eight pass initially; the original rope-policy test fails
+  on MSVC padding, then passes after the normalization (`head-operator-ctest.txt`,
+  `fixed-rope-ctest.txt`). No GPU kernel change was needed after those passes.
+- Full-model numerical/continuation evidence and per-request timing details are
+  recorded in the [Windows model sidecar](models/qwen3.8-flash-next/WINDOWS.md).
+- Final bounded YaRN fixture: AR/MTP exact replay and scaling-factor rejection
+  pass (`final-yarn-snapshot-3.log`). Earlier fixture assumptions and their
+  failed observations remain retained; the production restore/reset behavior
+  is byte-identical to the Windows base.
+- Shared formatting passes for 618 C++ files. Documentation, dependencies,
+  maintained-difference and reverted-identifier checks pass.
+- First-prompt control: correctness passes in all eight fresh processes;
+  snapshot timing and first MTP decode have noisy cells. Overall timing is
+  **inconclusive**, not passed (`cold-control-1/`). An unchanged-base MTP
+  control is in progress for the flagged histories.
+- Standard benchmark, extended-context execution, API continuation/cache checks
+  and hosted Linux/Windows checks remain pending. This candidate is not ready
+  to merge until the sync PR's qualification record is complete.
+
 ## October 22, 2026: PR #702
 
 Status: **candidate local checks pass; hosted qualification is recorded on the sync PR**.
