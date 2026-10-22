@@ -92,7 +92,14 @@ std::vector<std::uint8_t> CheckCheckpoint(
     executor[7] = '5';  // The executor format immediately before YaRN.
     Require(!session->RestoreSnapshot(bytes, &error),
             "pre-YaRN snapshot version was accepted");
-    Require(session->Position() == boundary, "rejection changed session state");
+    // Inner restore failures reset the slot; verify exact cold recovery.
+    Require(session->Position() == 0 && session->Tokens().empty(),
+            "incompatible executor payload did not reset the slot");
+    Require(session->Sync(prompt, &error), error);
+    Require(std::memcmp(final_logits.data(), session->Logits().data(),
+                        session->Logits().size_bytes()) == 0 &&
+                Decode(*session) == expected,
+            "recompute after an incompatible snapshot differs");
     executor[7] = '6';
     Require(session->RestoreSnapshot(bytes, &error), error);
     Require(session->Position() == boundary &&
