@@ -95,6 +95,10 @@ std::vector<std::uint8_t> CheckCheckpoint(
     // Inner restore failures reset the slot; verify exact cold recovery.
     Require(session->Position() == 0 && session->Tokens().empty(),
             "incompatible executor payload did not reset the slot");
+    // Match the original prefill boundaries for the bitwise recovery control.
+    Require(session->Sync(std::span(prompt).first(boundary - 11), &error),
+            error);
+    Require(session->Sync(std::span(prompt).first(boundary), &error), error);
     Require(session->Sync(prompt, &error), error);
     Require(std::memcmp(final_logits.data(), session->Logits().data(),
                         session->Logits().size_bytes()) == 0 &&
