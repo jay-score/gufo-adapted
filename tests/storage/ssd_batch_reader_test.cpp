@@ -213,6 +213,33 @@ void Run() {
     }
   }
 
+  std::array<gufo::storage::SsdReadRequest, 2> adjacent{};
+  const std::array<std::uint64_t, 2> adjacent_offsets{8192, 12288};
+  for (std::size_t i = 0; i < adjacent.size(); ++i) {
+    adjacent[i] = {
+        .file_offset = adjacent_offsets[i],
+        .bytes = 4096,
+        .destination = slots + (kExperts - 2 + i) * kSlotStride,
+        .destination_capacity = 4096,
+    };
+  }
+  std::uint64_t adjacent_bytes = 0;
+  if (!reader.ReadBatch(adjacent, &error, &adjacent_bytes) ||
+      adjacent_bytes != 2 * 4096) {
+    throw std::runtime_error("adjacent read ranges were not coalesced: " +
+                             error);
+  }
+  for (const auto& request : adjacent) {
+    if (!request.completed || !request.used_scratch ||
+        request.payload_offset != 0) {
+      throw std::runtime_error("adjacent payload has an invalid destination");
+    }
+    for (std::size_t byte = 0; byte < request.bytes; ++byte) {
+      if (request.Payload()[byte] != Pattern(request.file_offset + byte))
+        throw std::runtime_error("adjacent payload byte mismatch");
+    }
+  }
+
   CheckHip("hipHostMalloc direct slot",
            hipHostMalloc(&resources.direct_slot, 4096, hipHostMallocMapped));
   void* direct_device_slot = nullptr;

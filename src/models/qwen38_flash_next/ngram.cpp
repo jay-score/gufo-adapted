@@ -223,7 +223,7 @@ bool NgramTable::ReadOne(std::uint32_t row, float* dst,
     got += static_cast<std::size_t>(n);
   }
   if (stats_ != nullptr)
-    stats_->RecordStorageBytes(got, read_prefill_);
+    stats_->RecordPleStorageBytes(got, read_prefill_);
   // Cache only a complete row, still in its original quantized format.
   // A busy slot is skipped; readers never wait for another row's I/O.
   if (entry != nullptr &&
@@ -328,7 +328,7 @@ bool NgramTable::WaitRead() {
   done_.wait(lock, [&] { return pending_ == 0; });
   const auto read_elapsed = std::chrono::steady_clock::now() - read_started_;
   if (stats_ != nullptr && !jobs_.empty()) {
-    stats_->RecordStorageElapsed(
+    stats_->RecordPleStorageElapsed(
         std::chrono::duration_cast<std::chrono::nanoseconds>(read_elapsed),
         read_prefill_);
   }

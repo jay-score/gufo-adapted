@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <future>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <set>
@@ -51,6 +52,13 @@ struct Slot {
   bool desk_reserved{false};
 };
 
+struct SpeculativeTransaction {
+  std::size_t pending_jobs{0};
+  bool submission_finished{false};
+  bool credit_held{false};
+  bool released{false};
+};
+
 struct PrefetchJob {
   std::shared_future<SsdReadBatchResult> result;
   SsdBatchReader* reader{nullptr};
@@ -58,8 +66,9 @@ struct PrefetchJob {
   std::vector<std::uint32_t> slots;
   std::vector<std::uint64_t> generations;
   bool prefill{false};
-  bool speculative{true};
+  bool promoted{false};
   bool finalized{false};
+  std::shared_ptr<SpeculativeTransaction> transaction;
 };
 
 struct TokenPrior {
@@ -80,6 +89,7 @@ struct CacheLayer {
   std::vector<std::uint32_t> pinned_slots;
   std::vector<std::uint32_t> prefetch_slots;
   std::vector<std::shared_ptr<PrefetchJob>> prefetch_jobs;
+  std::shared_ptr<SpeculativeTransaction> speculative_transaction;
   std::unordered_map<std::int32_t, TokenPrior> token_priors;
   std::uint64_t prior_clock{0};
   std::uint64_t use_counter{0};
@@ -127,6 +137,7 @@ struct ExpertCacheManager::Impl {
   std::size_t allocated_bytes{0};
   std::size_t max_expert_bytes{0};
   std::size_t reader_count{1};
+  std::size_t pending_speculative_transactions{0};
   std::shared_ptr<SsdScratchPool> scratch_pool;
   std::map<std::filesystem::path, std::unique_ptr<SsdBatchReader>> readers;
   std::mutex mutex;
@@ -135,6 +146,35 @@ struct ExpertCacheManager::Impl {
   ExpertCacheManager::VictimPolicy victim_policy{
       ExpertCacheManager::VictimPolicy::kLru};
   std::uint32_t hotness_decay_tokens{1024};
+
+  void MaybeReleaseSpeculativeTransaction(
+      CacheLayer& cache,
+      const std::shared_ptr<SpeculativeTransaction>& transaction) noexcept {
+    if (transaction == nullptr || transaction->released ||
+        !transaction->submission_finished || transaction->pending_jobs != 0)
+      return;
+    if (transaction->credit_held) {
+      if (pending_speculative_transactions != 0)
+        --pending_speculative_transactions;
+      transaction->credit_held = false;
+    }
+    transaction->released = true;
+    if (cache.speculative_transaction == transaction)
+      cache.speculative_transaction.reset();
+  }
+
+  void RetireSpeculativeTransaction(CacheLayer& cache) noexcept {
+    const auto transaction = cache.speculative_transaction;
+    if (transaction == nullptr || transaction->released)
+      return;
+    if (transaction->credit_held) {
+      if (pending_speculative_transactions != 0)
+        --pending_speculative_transactions;
+      transaction->credit_held = false;
+    }
+    transaction->released = true;
+    cache.speculative_transaction.reset();
+  }
 
   [[nodiscard]] std::int32_t& Mapping(std::uint32_t layer,
                                       std::uint32_t expert) {
@@ -272,7 +312,7 @@ struct ExpertCacheManager::Impl {
       transferred = result.bytes_read;
       if (stats != nullptr)
         stats->RecordStorageRead(transferred, result.elapsed, job->prefill,
-                                 job->speculative);
+                                 !job->promoted);
     }
 
     for (std::size_t i = 0; i < job->slots.size(); ++i) {
@@ -310,6 +350,11 @@ struct ExpertCacheManager::Impl {
       }
     }
     job->finalized = true;
+    if (job->transaction != nullptr) {
+      if (job->transaction->pending_jobs != 0)
+        --job->transaction->pending_jobs;
+      MaybeReleaseSpeculativeTransaction(cache, job->transaction);
+    }
     return true;
   }
 
@@ -621,7 +666,7 @@ void ExpertCacheManager::FinishAllPrefetch() noexcept {
 bool ExpertCacheManager::Prefetch(std::uint32_t layer_id,
                                   std::span<const std::int32_t> expert_ids,
                                   std::size_t max_slots, std::string* error_msg,
-                                  bool prefill) {
+                                  bool prefill, bool speculative) {
   if (error_msg != nullptr)
     error_msg->clear();
   if (layer_id >= impl_->caches.size() || impl_->caches[layer_id] == nullptr) {
@@ -639,6 +684,14 @@ bool ExpertCacheManager::Prefetch(std::uint32_t layer_id,
                     return slot.state.load(std::memory_order_acquire) ==
                            SlotState::kInFlightPinned;
                   })) {
+    return true;
+  }
+  if (speculative &&
+      impl_->pending_speculative_transactions >= kSpeculativeTransactionCap) {
+#ifndef NDEBUG
+    std::clog << "expert_speculative_prefetch_skipped layer=" << layer_id
+              << " reason=transaction_cap\n";
+#endif
     return true;
   }
 
@@ -785,11 +838,34 @@ bool ExpertCacheManager::Prefetch(std::uint32_t layer_id,
 
   // An all-resident prefetch is already complete. No future or completion
   // signal is required; Resolve will consume these pinned READY slots.
+  std::shared_ptr<SpeculativeTransaction> transaction;
+  if (speculative && !groups.empty()) {
+    try {
+      transaction = std::make_shared<SpeculativeTransaction>();
+      cache.speculative_transaction = transaction;
+    } catch (const std::exception& error) {
+      SetError(error_msg, "allocating speculative transaction failed: " +
+                              std::string(error.what()));
+      for (auto& [path, group] : groups) {
+        (void)path;
+        for (std::size_t i = 0; i < group.slots.size(); ++i)
+          fail_prefetch_read(group.slots[i], group.generations[i]);
+      }
+      return false;
+    }
+  }
   for (auto& [path, group] : groups) {
     auto* reader = impl_->Reader(path, error_msg);
     if (reader == nullptr) {
-      for (std::size_t i = 0; i < group.slots.size(); ++i)
-        fail_prefetch_read(group.slots[i], group.generations[i]);
+      for (auto& [remaining_path, remaining] : groups) {
+        (void)remaining_path;
+        for (std::size_t i = 0; i < remaining.slots.size(); ++i)
+          fail_prefetch_read(remaining.slots[i], remaining.generations[i]);
+      }
+      if (transaction != nullptr) {
+        transaction->submission_finished = true;
+        impl_->MaybeReleaseSpeculativeTransaction(cache, transaction);
+      }
       return false;
     }
     auto job = std::make_shared<PrefetchJob>();
@@ -798,9 +874,18 @@ bool ExpertCacheManager::Prefetch(std::uint32_t layer_id,
     job->slots = std::move(group.slots);
     job->generations = std::move(group.generations);
     try {
-      job->result =
-          reader->SubmitBatchAsync(std::move(group.requests), &job->batch_id)
-              .share();
+      job->result = reader
+                        ->SubmitBatchAsync(std::move(group.requests),
+                                           &job->batch_id, speculative)
+                        .share();
+      if (transaction != nullptr && job->batch_id != 0) {
+        job->transaction = transaction;
+        ++transaction->pending_jobs;
+        if (!transaction->credit_held) {
+          ++impl_->pending_speculative_transactions;
+          transaction->credit_held = true;
+        }
+      }
       cache.prefetch_jobs.push_back(job);
     } catch (const std::exception& error) {
       SetError(error_msg, "submitting expert prefetch failed: " +
@@ -811,8 +896,21 @@ bool ExpertCacheManager::Prefetch(std::uint32_t layer_id,
       }
       for (std::size_t i = 0; i < job->slots.size(); ++i)
         fail_prefetch_read(job->slots[i], job->generations[i]);
+      for (auto& [remaining_path, remaining] : groups) {
+        (void)remaining_path;
+        for (std::size_t i = 0; i < remaining.slots.size(); ++i)
+          fail_prefetch_read(remaining.slots[i], remaining.generations[i]);
+      }
+      if (transaction != nullptr) {
+        transaction->submission_finished = true;
+        impl_->MaybeReleaseSpeculativeTransaction(cache, transaction);
+      }
       return false;
     }
+  }
+  if (transaction != nullptr) {
+    transaction->submission_finished = true;
+    impl_->MaybeReleaseSpeculativeTransaction(cache, transaction);
   }
   for (const std::uint32_t slot_id : cache.prefetch_slots) {
     Slot& slot = cache.slot_state[slot_id];
@@ -852,7 +950,8 @@ bool ExpertCacheManager::Prefetch(std::uint32_t layer_id,
 
 bool ExpertCacheManager::PrefetchTokenPriors(
     std::uint32_t layer_id, std::span<const std::int32_t> tokens,
-    std::size_t max_slots, std::string* error_msg, bool prefill) {
+    std::size_t max_slots, std::string* error_msg, bool prefill,
+    bool speculative) {
   std::vector<std::int32_t> predictions;
   {
     if (layer_id >= impl_->caches.size() || impl_->caches[layer_id] == nullptr)
@@ -868,7 +967,8 @@ bool ExpertCacheManager::PrefetchTokenPriors(
                          found->second.experts.end());
     }
   }
-  return Prefetch(layer_id, predictions, max_slots, error_msg, prefill);
+  return Prefetch(layer_id, predictions, max_slots, error_msg, prefill,
+                  speculative);
 }
 
 void ExpertCacheManager::RecordTokenRouting(
@@ -1076,7 +1176,7 @@ bool ExpertCacheManager::Resolve(
             found_job = true;
             if (job->reader != nullptr &&
                 job->reader->PromotePrefetch(job->batch_id)) {
-              job->speculative = false;
+              job->promoted = true;
             }
             (void)impl_->FinishPrefetchJob(cache, job, true);
           }
@@ -1326,6 +1426,7 @@ void ExpertCacheManager::FinishPrefetch(std::uint32_t layer_id) noexcept {
     }
   }
   cache.prefetch_slots.clear();
+  impl_->RetireSpeculativeTransaction(cache);
   impl_->ReapPrefetchJobs(cache);
 }
 

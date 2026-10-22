@@ -224,6 +224,27 @@ void SsdStats::RecordStorageElapsed(std::chrono::nanoseconds elapsed,
   }
 }
 
+void SsdStats::RecordPleStorageBytes(std::uint64_t bytes,
+                                     bool prefill) noexcept {
+  if (!enabled_.load(std::memory_order_relaxed))
+    return;
+  ssd_bytes_read_.fetch_add(bytes, std::memory_order_relaxed);
+  ple_bytes_read_.fetch_add(bytes, std::memory_order_relaxed);
+  phase_counters_[prefill ? 0 : 1].ple_bytes_read.fetch_add(
+      bytes, std::memory_order_relaxed);
+}
+
+void SsdStats::RecordPleStorageElapsed(std::chrono::nanoseconds elapsed,
+                                       bool prefill) noexcept {
+  if (!enabled_.load(std::memory_order_relaxed) || elapsed.count() <= 0)
+    return;
+  const auto ns = static_cast<std::uint64_t>(elapsed.count());
+  ssd_read_nanoseconds_.fetch_add(ns, std::memory_order_relaxed);
+  ple_read_nanoseconds_.fetch_add(ns, std::memory_order_relaxed);
+  phase_counters_[prefill ? 0 : 1].ple_read_nanoseconds.fetch_add(
+      ns, std::memory_order_relaxed);
+}
+
 SsdPhaseStatsSnapshot SsdStats::PhaseSnapshot(bool prefill) const noexcept {
   const auto& phase = phase_counters_[prefill ? 0 : 1];
   return {
@@ -240,10 +261,13 @@ SsdPhaseStatsSnapshot SsdStats::PhaseSnapshot(bool prefill) const noexcept {
           phase.demand_bytes_read.load(std::memory_order_relaxed),
       .prefetch_bytes_read =
           phase.prefetch_bytes_read.load(std::memory_order_relaxed),
+      .ple_bytes_read = phase.ple_bytes_read.load(std::memory_order_relaxed),
       .demand_read_nanoseconds =
           phase.demand_read_nanoseconds.load(std::memory_order_relaxed),
       .prefetch_read_nanoseconds =
           phase.prefetch_read_nanoseconds.load(std::memory_order_relaxed),
+      .ple_read_nanoseconds =
+          phase.ple_read_nanoseconds.load(std::memory_order_relaxed),
       .ple_requests = phase.ple_requests.load(std::memory_order_relaxed),
       .ple_hits = phase.ple_hits.load(std::memory_order_relaxed),
   };
@@ -287,8 +311,11 @@ SsdStatsSnapshot SsdStats::Snapshot() const noexcept {
       .ple_requests = ple_requests_.load(std::memory_order_relaxed),
       .ple_hits = ple_hits_.load(std::memory_order_relaxed),
       .ssd_bytes_read = ssd_bytes_read_.load(std::memory_order_relaxed),
+      .ple_bytes_read = ple_bytes_read_.load(std::memory_order_relaxed),
       .ssd_read_nanoseconds =
           ssd_read_nanoseconds_.load(std::memory_order_relaxed),
+      .ple_read_nanoseconds =
+          ple_read_nanoseconds_.load(std::memory_order_relaxed),
       .session_bytes_written =
           session_bytes_written_.load(std::memory_order_relaxed),
       .elapsed_nanoseconds = static_cast<std::uint64_t>(elapsed),
@@ -330,6 +357,9 @@ std::string SsdStats::Format() const {
       << "  hard_stall_ms:            "
       << static_cast<double>(stats.hard_stall_nanoseconds) / 1.0e6 << '\n'
       << "  ple_shelf_requests:       " << stats.ple_requests << '\n'
+      << "  ple_shelf_bytes_read:     " << stats.ple_bytes_read << '\n'
+      << "  ple_shelf_read_ms:        "
+      << static_cast<double>(stats.ple_read_nanoseconds) / 1.0e6 << '\n'
       << "  ple_shelf_hit_pct:        "
       << Percent(stats.ple_hits, stats.ple_requests) << '\n'
       << "  ssd_bytes_read:           " << stats.ssd_bytes_read << '\n'
@@ -351,10 +381,13 @@ std::string SsdStats::Format() const {
         << static_cast<double>(phase.hard_stall_nanoseconds) / 1.0e6 << '\n'
         << "    demand_bytes_read:      " << phase.demand_bytes_read << '\n'
         << "    prefetch_bytes_read:    " << phase.prefetch_bytes_read << '\n'
+        << "    ple_bytes_read:         " << phase.ple_bytes_read << '\n'
         << "    demand_read_ms:         "
         << static_cast<double>(phase.demand_read_nanoseconds) / 1.0e6 << '\n'
         << "    prefetch_read_ms:       "
         << static_cast<double>(phase.prefetch_read_nanoseconds) / 1.0e6 << '\n'
+        << "    ple_read_ms:            "
+        << static_cast<double>(phase.ple_read_nanoseconds) / 1.0e6 << '\n'
         << "    ple_shelf_requests:     " << phase.ple_requests << '\n'
         << "    ple_shelf_hit_pct:      "
         << Percent(phase.ple_hits, phase.ple_requests) << '\n';

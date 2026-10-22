@@ -18,7 +18,9 @@ SSM/attention, shared experts, PLE) and Q5_K/Q6_K attention are re-encoded to
 Q8_0 at upload, its IQ4_XS embedding likewise, and its F16 PLE convolution to
 F32. The reference oracle reads the source formats directly.
 
-[Benchmarks](BENCHMARKS.md) · [Quality](QUALITY.md) · [Experiments](EXPERIMENTS.md)
+[Benchmarks](BENCHMARKS.md) · [Quality](QUALITY.md) · [Experiments](EXPERIMENTS.md) ·
+[Out-of-core tutorial](OUT_OF_CORE_PREFILL_TUTORIAL.md) ·
+[Illustrated HTML guide](OUT_OF_CORE_PREFILL_GUIDE.html)
 
 ## Load and run
 

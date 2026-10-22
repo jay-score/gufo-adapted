@@ -1,15 +1,19 @@
+#include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
+#include "src/models/qwen38_flash_next/kernels/rocm/moe_pending_state.hpp"
+#include "src/models/qwen38_flash_next/kernels/rocm/streamed_moe_policy.hpp"
 
 namespace q = gufo::models::qwen38_flash_next::rocm;
 namespace {
@@ -91,10 +95,116 @@ std::vector<float> Download(HipBuffer<float>* source, std::size_t count) {
   return values;
 }
 
+std::vector<__half> MakeHalfValues(std::size_t count, std::uint32_t seed,
+                                   float scale) {
+  const auto values = MakeValues(count, seed, scale);
+  std::vector<__half> half(count);
+  std::transform(values.begin(), values.end(), half.begin(),
+                 [](float value) { return __float2half(value); });
+  return half;
+}
+
+void RunDeferredWindowEpilogue() {
+  constexpr std::uint32_t window_rows = 11;
+  constexpr std::size_t expert_count =
+      static_cast<std::size_t>(kTokens) * kSlots * kHidden;
+  constexpr std::size_t output_count =
+      static_cast<std::size_t>(kTokens) * kHidden;
+  const auto expert_out = MakeHalfValues(expert_count, 0x716A45U, 0.2F);
+  const auto weights = MakeValues(static_cast<std::size_t>(kTokens) * kSlots,
+                                  0x1BADC0DEU, 0.5F, 0.5F);
+  const auto shared = MakeValues(output_count, 0x2D17U, 0.3F);
+  const auto gate = MakeValues(static_cast<std::size_t>(kTokens) * kGateStride,
+                               0x329ABCU, 2.0F);
+
+  HipBuffer<__half> d_expert(expert_count);
+  HipBuffer<__half> d_accumulated(expert_count);
+  HipBuffer<float> d_weights(weights.size());
+  HipBuffer<float> d_shared(output_count);
+  HipBuffer<float> d_gate(gate.size());
+  HipBuffer<float> d_single(output_count);
+  HipBuffer<float> d_windowed(output_count);
+  CheckHip(hipMemcpy(d_expert.get(), expert_out.data(), d_expert.bytes(),
+                     hipMemcpyHostToDevice),
+           "upload F16 expert rows");
+  Upload(&d_weights, weights);
+  Upload(&d_shared, shared);
+  Upload(&d_gate, gate);
+
+  for (std::uint32_t first = 0; first < kTokens; first += window_rows) {
+    const std::uint32_t count = std::min(window_rows, kTokens - first);
+    const std::size_t expert_offset =
+        static_cast<std::size_t>(first) * kSlots * kHidden;
+    const std::size_t output_offset = static_cast<std::size_t>(first) * kHidden;
+    q::MoeEpilogueVec4F16(
+        d_expert.get() + expert_offset,
+        d_weights.get() + static_cast<std::size_t>(first) * kSlots,
+        d_shared.get() + output_offset,
+        d_gate.get() + static_cast<std::size_t>(first) * kGateStride,
+        kGateStride, d_windowed.get() + output_offset, count, kSlots, kHidden,
+        nullptr);
+    CheckHip(
+        hipMemcpy(
+            d_accumulated.get() + expert_offset, d_expert.get() + expert_offset,
+            static_cast<std::size_t>(count) * kSlots * kHidden * sizeof(__half),
+            hipMemcpyDeviceToDevice),
+        "accumulate streamed expert window");
+  }
+  q::MoeEpilogueVec4F16(d_accumulated.get(), d_weights.get(), d_shared.get(),
+                        d_gate.get(), kGateStride, d_single.get(), kTokens,
+                        kSlots, kHidden, nullptr);
+  CheckHip(hipDeviceSynchronize(), "deferred F16 epilogue synchronization");
+  const auto single = Download(&d_single, output_count);
+  const auto windowed = Download(&d_windowed, output_count);
+  if (std::memcmp(single.data(), windowed.data(),
+                  output_count * sizeof(float)) != 0)
+    throw std::runtime_error(
+        "one full-chunk F16 epilogue differs from windowed epilogues");
+
+  gufo::models::qwen38_flash_next::rocm::MoePendingState pending;
+  pending.Reset();
+  pending.SetForOutput(d_single.get(), d_single.get());
+  if (!pending.pending() || !pending.Consume() || pending.pending())
+    throw std::runtime_error(
+        "deferred MoE epilogue state was not preserved for Combine");
+}
+
+void CheckDeskRoomSlotBoundary() {
+  using gufo::models::qwen38_flash_next::rocm::DeskRoomHasSlotHeadroom;
+  constexpr std::uint32_t used = 10;
+  if (DeskRoomHasSlotHeadroom(used, used) ||
+      DeskRoomHasSlotHeadroom(2 * used, used) ||
+      !DeskRoomHasSlotHeadroom(2 * used + 1, used)) {
+    throw std::runtime_error("Desk/Room slot boundary changed");
+  }
+}
+
+void CheckRoutedF16FormatMatrix() {
+  using gufo::core::GgmlType;
+  using gufo::models::qwen38_flash_next::rocm::UsesRoutedF16ExpertFormats;
+  for (const auto gate : {GgmlType::kQ4_K, GgmlType::kQ5_K}) {
+    for (const auto down : {GgmlType::kQ5_1, GgmlType::kQ8_0}) {
+      if (!UsesRoutedF16ExpertFormats(gate, gate, down, 2560, 640))
+        throw std::runtime_error("supported routed-F16 format was rejected");
+    }
+  }
+  if (UsesRoutedF16ExpertFormats(GgmlType::kQ4_K, GgmlType::kQ5_K,
+                                 GgmlType::kQ5_1, 2560, 640) ||
+      UsesRoutedF16ExpertFormats(GgmlType::kQ4_K, GgmlType::kQ4_K,
+                                 GgmlType::kQ4_K, 2560, 640) ||
+      UsesRoutedF16ExpertFormats(GgmlType::kQ4_K, GgmlType::kQ4_K,
+                                 GgmlType::kQ5_1, 2559, 640)) {
+    throw std::runtime_error("unsupported routed-F16 format was accepted");
+  }
+}
+
 }  // namespace
 
 int main() {
   try {
+    CheckDeskRoomSlotBoundary();
+    CheckRoutedF16FormatMatrix();
+    RunDeferredWindowEpilogue();
     constexpr std::size_t kExpert =
         static_cast<std::size_t>(kTokens) * kSlots * kHidden;
     constexpr std::size_t kOut = static_cast<std::size_t>(kTokens) * kHidden;
