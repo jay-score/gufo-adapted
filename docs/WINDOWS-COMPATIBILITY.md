@@ -76,11 +76,12 @@ Record imported PRs, revision identities and outcomes in the
   Regression: [`win32_filesystem_test`](../tests/platform/win32_filesystem_test.cpp),
   [`win32_compat_test`](../tests/platform/win32_compat_test.cpp),
   [`gguf_identity_test`](../tests/core/gguf_identity_test.cpp) and the trace
-  cases in `http_server_test`, all in Windows CPU CI. Keep both checkpoint
-  stores guarded in [`disk.cpp`](../src/cache/disk.cpp) and
-  [`continuation_disk_store.cpp`](../src/cli/serve/continuation_disk_store.cpp)
-  until [durability and store recovery](WINDOWS.md#persistence-foundations-and-unresolved-cache-contract)
-  are qualified; operation-level process-death tests do not prove power-loss safety.
+  cases in `http_server_test`, all in Windows CPU CI. The component store in
+  [`disk.cpp`](../src/cache/disk.cpp) uses the explicit
+  [Windows rebuildable-cache contract](WINDOWS.md#windows-component-disk-cache),
+  covered by [`win32_disk_store_test`](../tests/platform/win32_disk_store_test.cpp).
+  Keep the older [`continuation_disk_store.cpp`](../src/cli/serve/continuation_disk_store.cpp)
+  guarded. Process-death tests do not prove power-loss namespace persistence.
 
 - [ ] **GPU queue policy.** Windows leaves `GPU_MAX_HW_QUEUES` untouched,
   preserving the operator setting or HIP runtime default. Missing Linux KFD

@@ -115,10 +115,8 @@ extern "C" {
 #define S_IWOTH 0002
 #define S_IXOTH 0001
 
-/* Windows has no owner/group/other bits. Files report 0600 and directories
- * 0700, owned by uid 0 == geteuid(), which is what Gufo's "private cache
- * file" checks expect of files this user created. These synthetic fields
- * do not prove ACL privacy; persistence must not rely on them. */
+/* Private protected token-user ACLs report 0600/0700. Unknown or broader ACLs
+ * report 0777; uid 0 == geteuid() denotes ownership by the token user SID. */
 struct stat {
   unsigned long long st_dev;
   unsigned long long st_ino;
@@ -267,6 +265,7 @@ int unlinkat(int dirfd, const char* path, int flags);
 int rmdir(const char* path);
 int mkdir(const char* path, mode_t mode);
 int mkdirat(int dirfd, const char* path, mode_t mode);
+int gufo_open_cache_directory(const wchar_t* path);
 int gufo_rename_noreplace(int olddirfd, const char* oldpath, int newdirfd, const char* newpath);
 int access(const char* path, int mode);
 int isatty(int fd);

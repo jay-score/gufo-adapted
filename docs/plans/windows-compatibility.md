@@ -1,7 +1,7 @@
 # Minimal native Windows integration
 
 Status: stage one and the transport/host increments of stage two implemented;
-persistence foundations qualified, checkpoint-store port deferred
+persistence foundations qualified, initial checkpoint-store port deferred
 on `feat/windows-cpu-compat`. The native Windows CPU CLI builds; the bounded
 preset includes host, HTTP, audio WebSocket, and console-shutdown checks. See
 [Windows status](../WINDOWS.md) for commands, provenance, validation, and
@@ -9,8 +9,10 @@ remaining limitations. Windows CPU CI is implemented and all 15 hosted checks
 pass after the bounded-test fixture correction. Stage three is
 in progress: native HIP, WDDM admission, pinned-memory
 checks and selected Flash-Next AR/MTP checks pass. Stage four remains pending;
-the optional browser launcher is integrated as a separate tool. Disk checkpoint
-persistence is outside the initial port's scope. Full GPU/model qualification
+the optional browser launcher is integrated as a separate tool. The later
+[component-cache implementation](../WINDOWS.md#windows-component-disk-cache)
+uses an explicit rebuildable-cache contract on local NTFS; the older store
+remains disabled. Full GPU/model qualification
 remains pending.
 
 ## Objective and baseline
@@ -131,10 +133,12 @@ The existing shim also synthesizes POSIX ownership/mode fields and makes
 that depend on those fields. Where they enforce privacy, Windows needs an
 equivalent access-control check or a documented, explicit limitation.
 
-The user selected deferral rather than weakening upstream durability. Both
-checkpoint-store Windows guards remain in place; enabling them is a separate
-follow-up, not a prerequisite for native HIP or the GUI. RAM continuation reuse,
-GGUF digest caching, and private tracing remain in scope.
+The initial integration deferred checkpoint persistence. The subsequent
+[component-cache implementation](../WINDOWS.md#windows-component-disk-cache)
+retains Linux durability and selects an explicit Windows rebuildable-cache
+contract, with native store recovery/privacy checks. The older continuation
+store remains guarded. RAM continuation reuse, GGUF digest caching and private
+tracing are independent of disk checkpoints.
 
 The cache is compiled into the engine even when runtime disk caching is off.
 Turning disk caching off does not remove this build dependency.

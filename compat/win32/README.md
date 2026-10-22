@@ -13,8 +13,9 @@ failed flushes no longer return success. The later persistence foundations add
 directory-handle operations for open, enumeration, stat, rename, and unlink.
 Other inherited path adapters still use names. Private `0600`/`0700` chmod is
 implemented; other modes are unsupported. UID zero maps to the real token user
-SID, not every Windows owner. Both checkpoint stores remain disabled pending
-durability/store qualification; private identity caching is now enabled.
+SID, not every Windows owner. The component checkpoint store uses private local
+NTFS roots and a rebuildable-cache contract; the older continuation store remains
+disabled. Private identity caching is enabled.
 
 The companion socket helper and root vcpkg manifest come from the same pinned
 fork revision. The new CMake module and build/check scripts adapt those ideas
@@ -32,5 +33,7 @@ Directory handles request write access for an actual `FlushFileBuffers` call.
 This works for owned NTFS directories, but access to volume/root ancestors is
 not available to this process. Do not infer whole-cache power-loss durability
 from those isolated successes. See the unresolved contract in the Windows
-status document. The CPU shim's reviewed security dependency is Advapi32;
+status document. The component cache therefore flushes its managed directories
+without flushing profile/volume ancestors, and does not promise checkpoint
+survival across power loss. The CPU shim's reviewed security dependency is Advapi32;
 HIP/DXGI remain outside it. Native I/O fault controls compile only for tests.

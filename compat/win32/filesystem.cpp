@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstring>
+#include <filesystem>
 #include <optional>
 #include <vector>
 
@@ -204,6 +205,84 @@ unsigned Permissions(HANDLE file, bool directory, unsigned* owner) {
   }
   LocalFree(descriptor);
   return private_acl && full_access ? (directory ? 0700 : 0600) : 0777;
+}
+
+HANDLE OpenCacheDirectory(const std::wstring& path) {
+  // absolute() uses Win32 normalization, which would erase '..' before the
+  // no-follow traversal can check the preceding component.
+  for (const auto& part : std::filesystem::path(path))
+    if (part == L"..") {
+      SetLastError(ERROR_BAD_PATHNAME);
+      return INVALID_HANDLE_VALUE;
+    }
+  const auto absolute = std::filesystem::absolute(path);
+  std::vector<std::wstring> components;
+  for (const auto& part : absolute.relative_path()) {
+    if (part != L".")
+      components.push_back(part.wstring());
+  }
+  if (components.empty()) {
+    SetLastError(ERROR_ACCESS_DENIED);
+    return INVALID_HANDLE_VALUE;
+  }
+  const auto drive = GetDriveTypeW(absolute.root_path().c_str());
+  if (drive != DRIVE_FIXED && drive != DRIVE_REMOVABLE) {
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return INVALID_HANDLE_VALUE;
+  }
+  constexpr DWORD traverse =
+      FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL;
+  constexpr DWORD options = 1 | 0x20 | 0x200000;
+  auto directory = OpenAt(nullptr, absolute.root_path().wstring(), traverse, 1,
+                          options, 0, true);
+  if (directory == INVALID_HANDLE_VALUE)
+    return directory;
+  for (std::size_t i = 0; i < components.size(); ++i) {
+    const bool last = i + 1 == components.size();
+    const auto access = last ? GENERIC_READ | GENERIC_WRITE : traverse;
+    auto child = OpenAt(directory, components[i], access, 1, options, 0, true);
+    if (child == INVALID_HANDLE_VALUE &&
+        (GetLastError() == ERROR_FILE_NOT_FOUND ||
+         GetLastError() == ERROR_PATH_NOT_FOUND))
+      child = OpenAt(directory, components[i], access, 3, options, 0700, true);
+    const auto error = GetLastError();
+    CloseHandle(directory);
+    if (child == INVALID_HANDLE_VALUE) {
+      SetLastError(error);
+      return child;
+    }
+    FILE_ATTRIBUTE_TAG_INFO tag{};
+    if (!GetFileInformationByHandleEx(child, FileAttributeTagInfo, &tag,
+                                      sizeof(tag))) {
+      const auto query_error = GetLastError();
+      CloseHandle(child);
+      SetLastError(query_error);
+      return INVALID_HANDLE_VALUE;
+    }
+    if (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+      CloseHandle(child);
+      SetLastError(ERROR_REPARSE_POINT_ENCOUNTERED);
+      return INVALID_HANDLE_VALUE;
+    }
+    directory = child;
+  }
+  unsigned owner{};
+  wchar_t filesystem[32]{};
+  DWORD flags{};
+  // SMB does not support this volume query. Only local NTFS is qualified.
+  if (Permissions(directory, true, &owner) != 0700 || owner != 0) {
+    CloseHandle(directory);
+    SetLastError(ERROR_ACCESS_DENIED);
+    return INVALID_HANDLE_VALUE;
+  }
+  if (!GetVolumeInformationByHandleW(directory, nullptr, 0, nullptr, nullptr,
+                                     &flags, filesystem, 32) ||
+      std::wstring(filesystem) != L"NTFS" || !(flags & FILE_PERSISTENT_ACLS)) {
+    CloseHandle(directory);
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return INVALID_HANDLE_VALUE;
+  }
+  return directory;
 }
 
 int Chmod(HANDLE file, unsigned mode) {

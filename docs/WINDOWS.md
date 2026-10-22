@@ -9,8 +9,10 @@ and selected Flash-Next live checks now pass. The Windows queue-policy boundary
 is implemented, and an optional local browser launcher is included. Wider
 runtime qualification remains pending.
 Windows CPU CI is implemented; hosted results and the bounded-fixture correction
-are recorded below. Disk checkpoint persistence is deferred from
-the initial port. GGUF digest caching and private content tracing are enabled.
+are recorded below. The component disk cache is enabled on private local NTFS
+directories with a [rebuildable-cache contract](#windows-component-disk-cache).
+The older continuation disk store remains disabled. GGUF digest caching and
+private content tracing are enabled.
 
 For every upstream merge, review the [Windows compatibility contracts](WINDOWS-COMPATIBILITY.md)
 and their implementation/regression checks.
@@ -165,8 +167,9 @@ in `%LOCALAPPDATA%\Gufo\launcher.json`; the API and launcher ports must differ.
 Stop and Exit terminate the owned Gufo process tree; closing the browser does
 not.
 
-The launcher's disk-cache controls pass the engine's `--cache-disk*` flags, but
-Windows checkpoint persistence remains deferred as described below. Options
+The launcher's disk-cache controls pass the engine's `--cache-disk*` flags;
+Flash-Next supports the [Windows cache contract](#windows-component-disk-cache).
+Options
 saved by the older Windows-fork launcher that this engine does not expose
 (`debug_tool_calls`, `mtp_draft_vocab`, and `prompt_lookup`) are ignored when an
 existing settings file is loaded.
@@ -401,6 +404,10 @@ Windows CI, HIP, and the GUI were pending at that increment.
 
 ## Persistence foundations and unresolved cache contract
 
+This section records the initial deferral. The component store now uses the
+[Windows contract below](#windows-component-disk-cache); the older store remains
+guarded.
+
 Validated on 2026-10-12 on local NTFS with the same native toolchain, building on
 host-integration commit `e20cc86a`. That increment's bounded preset contains
 **14 checks**, including `win32_filesystem_test`. All pass. This increment qualifies private
@@ -461,6 +468,99 @@ adding native restart/reclamation/corruption/failure tests. A weaker Windows
 power-loss contract has not been selected or implemented. No Linux build,
 live GPU/model cache behavior, numerical quality, or speed qualification is
 claimed by these CPU checks.
+
+## Windows component disk cache
+
+The current component store used by Flash-Next supports disk continuation
+caching on **local NTFS**, without administrator privileges. It retains the
+upstream v2 format, single-server ownership lock, immutable dependency sharing,
+bounded streaming, budget accounting and checksum validation. The older
+`ContinuationDiskStore` remains disabled on Windows.
+
+Select a new cache folder, for example `%LOCALAPPDATA%\Gufo\flash-next-cache`.
+Gufo creates missing directories with protected token-user-only ACLs. Existing
+roots, managed subdirectories and the ownership lock must already be private;
+broader or unprotected ACLs are rejected rather than silently rewritten.
+The path must not contain `..`, reparse points or directory junctions. FAT,
+exFAT, ReFS and network paths are outside this implementation's supported scope.
+Use a separate directory per running server. The staging size option remains
+ignored by component caches; a fixed 1 MiB buffer streams larger checkpoints.
+
+This is a **rebuildable cache**, not a power-loss durability guarantee. Payloads
+and manifests are flushed before publication, and managed directories are
+flushed after namespace changes. Windows does not flush profile/volume ancestors:
+ordinary users need not obtain write access to `C:\Users` or `C:\`. A power
+failure can lose checkpoints or layout entries. Startup validates manifest
+checksums, geometry and dependency sizes; restore verifies payload checksums
+and file identity before the destination becomes executable. Invalid entries
+are rejected and prompts are recomputed. Actual I/O failures remain errors;
+the shim does not pretend an unsuccessful flush succeeded.
+
+`win32_disk_store_test` exercises the store itself with native subprocesses:
+publication termination boundaries, restart/orphan recovery, exclusive ownership,
+streamed writes, shared chunks and pinned retirement, missing/truncated/corrupt
+dependencies, hard links, ACL rejection and injected write/flush/rename/unlink
+failures. The filesystem checks also exercise cache-root creation through real
+junctions and private Unicode paths. These tests do not simulate physical power
+loss. They are part of the bounded `windows-cpu` preset.
+
+### October 21 component-cache validation
+
+Local NTFS, Radeon 8060S (`gfx1151`), driver `32.0.32015.7029`, TheRock 10.0.0,
+AMD Clang 23, MSVC 14.51.36231 and Windows SDK 10.0.26100.0. The release candidate
+and an unchanged `git archive` of base `2dd7e5f7` use matching compiler/build
+settings and pinned dependencies. Source and binary hashes, commands, individual
+request measurements and every timing control remain in `build/qualification`.
+
+- All **16 bounded native CPU checks pass**, including the new store test's 36
+  publication subprocess scenarios (18 abrupt terminations), 24 injected
+  publication/retirement failure cases, private ACLs and independent ownership.
+  All 80 functional-runner unit checks pass with Python UTF-8 mode. The shared
+  C++ formatting and documentation checks pass.
+- The supplied four-shard `UD-Q4_K_XL` Flash-Next model passes AR and shared-Q8
+  MTP startup/restart checks. MTP also loads the BF16 vision projector. A cold
+  2,294-token prompt has zero reuse; a process restart restores 2,287 tokens
+  from disk and prefills the remaining seven, reproducing the exact reply.
+- Both modes pass the eight `cache` subcases: cancelled text, reasoning/tools,
+  legacy tool history and growing checkpoint spacing, followed by disk restores
+  after restart. Both publish at 2,447 and 6,278 tokens, skip 18 checkpoints below
+  the minimum step and restore a 3,043-token shared boundary. MTP actually
+  proposes 197 drafts and accepts 163 across these requests; AR proposes zero.
+- The opt-in `cache_startup.py --case corrupt` check damages **372 payload files**
+  while preserving their sizes and manifests. MTP rejects the damaged cache,
+  recomputes all 2,294 prompt tokens and returns the exact cold reply. It then
+  publishes a replacement, restarts, and restores 2,287 tokens from that replacement.
+- The existing 64-token GPU sequential/batched prefill numerical checks pass in
+  both modes: finite logits, reference winner rank 1, reported RMSE 0.53, cosine
+  0.99 and maximum error 2.75, within unchanged envelopes. Standard pp2048/tg128
+  spots retain one observation per point. Both binaries/modes return the same
+  128-token hash; MTP proposes/accepts 109/58 drafts in each binary.
+
+Long-context correctness passes at 32K configured context, two slots and an
+8 GiB RAM budget in both modes, including exact cached replay and cancellation.
+Per-request/phase timing remains **inconclusive and unqualified** at the unchanged
+5% and 3 ms limits. Focused alternating controls retain every observation;
+unchanged-main controls reproduce RAM snapshot and scheduling flags. For example,
+the first AR snapshot measures 47.56 ms on the initial base, 64.85 ms on the
+candidate and 63.64 ms on the unchanged base control. A 37.19-second MTP candidate
+startup outlier returns to 27.66 seconds in its control, against base observations
+of 27.24 and 27.45 seconds. These RAM-only histories do not enter the changed
+disk operations. No speedup or general timing qualification is claimed.
+
+Focused controls also stage both executables at the same path with identical
+runtime DLLs. The unchanged AR base's cached Responses replay varies from
+44.25 to 57.22 ms client TTFT, reproducing the original flag. MTP's same-path
+cached replay still flags: base/candidate client TTFT is 44.81/56.25 ms and
+42.70/64.44 ms in the two pairs; earlier full-history base observations are
+62.98 and 55.41 ms. This repeated latency flag remains unresolved and
+**unqualified**, with all individual results retained rather than averaged.
+
+Live qualification here covers Flash-Next AR/MTP on local NTFS. Qwen27B,
+other filesystems, physical power-loss behavior, full-model F32 quality and
+Linux build/GPU checks remain outside this local validation. The initial
+relative-executable test launch failed before engine startup; its failed report
+is retained under `build/qualification/startup-ar`, and the corrected absolute-path
+run is `startup-ar-2`.
 
 ## Initial native HIP live inference
 

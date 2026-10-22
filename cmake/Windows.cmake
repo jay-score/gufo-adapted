@@ -97,6 +97,12 @@ if (BUILD_TESTING)
   target_link_libraries(win32_filesystem_test PRIVATE gufo_posix_compat)
   add_test(NAME win32_filesystem_test COMMAND win32_filesystem_test)
   set_tests_properties(win32_filesystem_test PROPERTIES LABELS "cpu;windows;filesystem" TIMEOUT 30)
+  add_executable(win32_disk_store_test ${PROJECT_SOURCE_DIR}/tests/platform/win32_disk_store_test.cpp)
+  target_compile_options(win32_disk_store_test PRIVATE -UNDEBUG)
+  target_compile_definitions(win32_disk_store_test PRIVATE GUFO_WIN32_TESTING=1)
+  target_link_libraries(win32_disk_store_test PRIVATE gufo_cache)
+  add_test(NAME win32_disk_store_test COMMAND win32_disk_store_test)
+  set_tests_properties(win32_disk_store_test PROPERTIES LABELS "cpu;windows;cache" TIMEOUT 60)
   add_executable(win32_host_test
     ${PROJECT_SOURCE_DIR}/tests/platform/win32_host_test.cpp
     ${PROJECT_SOURCE_DIR}/src/cli/serve/continuation_cache.cpp

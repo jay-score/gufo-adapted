@@ -9,6 +9,9 @@ namespace gufo::win32 {
 // Native file operations preserve directory-handle identity across renames.
 HANDLE OpenAt(HANDLE parent, const std::wstring& path, DWORD access,
               DWORD disposition, DWORD options, unsigned mode, bool no_follow);
+// Private local NTFS cache root; traverses ancestors without write access.
+// Rejects reparse points, parent components and non-private existing roots.
+HANDLE OpenCacheDirectory(const std::wstring& path);
 int RenameAt(HANDLE parent, const std::wstring& source, HANDLE destination,
              const std::wstring& name, bool replace);
 int UnlinkAt(HANDLE parent, const std::wstring& name, bool directory);

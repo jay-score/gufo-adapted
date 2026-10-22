@@ -197,10 +197,17 @@ def server(command, log_path, startup_timeout, environment=None):
         process = None
         previous_handlers = {}
         try:
+            signals = [signal.SIGTERM]
+            if hasattr(signal, "SIGHUP"):
+                signals.append(signal.SIGHUP)
             previous_handlers = {signum: signal.signal(signum, interrupt)
-                                 for signum in (signal.SIGTERM, signal.SIGHUP)}
+                                 for signum in signals}
+            process_options = {}
+            if os.name == "nt":
+                import windows_server
+                process_options = windows_server.launch_options()
             process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
-                                       env=environment)
+                                       env=environment, **process_options)
             deadline = time.monotonic() + startup_timeout
             while time.monotonic() < deadline:
                 if process.poll() is not None:
@@ -221,12 +228,15 @@ def server(command, log_path, startup_timeout, environment=None):
             yield process
         finally:
             if process is not None and process.poll() is None:
-                process.send_signal(signal.SIGINT)
-                try:
-                    process.wait(timeout=30)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
+                if os.name == "nt":
+                    windows_server.stop(process, 30)
+                else:
+                    process.send_signal(signal.SIGINT)
+                    try:
+                        process.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)
 
