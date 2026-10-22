@@ -307,9 +307,9 @@ packaging is a separate follow-up if requested.
 ## Future official updates
 
 Keep this integration branch descended from official history. Update it through
-ordinary merges from `official/main`, whose URL is
-`https://github.com/gufo-org/gufo.git`; this repository's remote named `upstream`
-points to a different fork. Retain complete official ancestry. Apply the
+ordinary merges from `official/main` (see the canonical
+[repository roles](../WINDOWS-COMPATIBILITY.md#repository-roles); `upstream` is a
+different fork). Retain complete official ancestry. Apply the
 [Windows acceptance policy](../WINDOWS-UPSTREAM-SYNC.md#windows-acceptance-policy)
 to skip or explicitly revert PRs that introduce Windows regressions, and
 document their evidence and reintroduction requirements. Use an isolated
@@ -328,10 +328,8 @@ reverts until their reintroduction requirements pass. In particular, #699 is
 deferred for a Windows first-request MTP decode regression; its presence in
 upstream ancestry does not mean its code should be reapplied.
 
-Record the official base SHA, imported compatibility source SHAs, and the small
-set of modified upstream call sites. At each update, inspect
-`git diff --stat official/main..HEAD` and the actual changed shared files to
-keep the maintained difference visible. Resolve conflicts locally at the OS
+Keep the [maintained difference](../WINDOWS-COMPATIBILITY.md#maintained-difference)
+small; `diff-guard.ps1` and the sync inventory make it visible at each update. Resolve conflicts locally at the OS
 boundary. If a fix is portable and useful upstream, propose that isolated fix
 upstream when authorized so it can eventually disappear from the maintained
 difference.

@@ -101,14 +101,14 @@ Every upstream follow-up to #699 will conflict here.
 
 ## 5. De-conflict repeat-offender docs
 
-- [ ] Model docs (`EXPERIMENTS.md`/`QUALITY.md`/`BENCHMARKS.md`): the Oct-21
+- [x] Model docs (`EXPERIMENTS.md`/`QUALITY.md`/`BENCHMARKS.md`): the Oct-21
   sync conflicted because both branches insert at the top, and the #699
   revert removed upstream sections. Move Windows evidence into sidecars
   (e.g. `docs/models/<model>/WINDOWS.md`) and leave the upstream files
   untouched. Append-at-bottom still conflicts with revert deletions; do not
   use a `union` merge driver (it silently duplicates table rows and
   re-adds reverted content).
-- [ ] Single source of truth: the remote table/procedure is duplicated in the
+- [x] Single source of truth: the remote table/procedure is duplicated in the
   sync skill and plan §Future official updates (and summarized in
   `WINDOWS.md`'s intro). Make `WINDOWS-COMPATIBILITY.md` canonical; the skill
   and plan link to it instead of duplicating remote tables, paths, and check

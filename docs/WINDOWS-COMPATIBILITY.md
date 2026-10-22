@@ -17,13 +17,12 @@ Record imported PRs, revision identities and outcomes in the
   [`posix.cpp`](../compat/win32/posix.cpp).
   Regression: [`qwen38_flash_next.ngram`](../tests/models/qwen38_flash_next/ngram_test.cpp)
   checks row decoding, offsets, descriptor identity and counters. It does not
-  check throughput: also compare a varied 10–16K-token first HTTP prompt in a
-  fresh server process against the previous Windows binary, then repeat with
-  prompt reuse disabled. Check AR and MTP when their paths change, retain each
-  request's prefill timing and completion, and use matched model/settings/cache
-  history. A fresh process does not flush the filesystem cache. A warmed
+  check throughput: also run the
+  [first-request control](WINDOWS-UPSTREAM-SYNC.md#reproduce-the-first-request-control)
+  against the previous Windows binary (AR and MTP when their paths change). A
+  fresh process does not flush the filesystem cache. A warmed
   pp2048 benchmark alone missed this regression; see the
-  [measured control](models/qwen3.8-flash-next/BENCHMARKS.md#windows-cold-prompt-control-october-20-2026).
+  [measured control](models/qwen3.8-flash-next/WINDOWS.md#cold-prompt-control-october-20-2026).
 
 - [ ] **WDDM admission budgets.** Admission uses the active integrated HIP
   adapter's LUID/node and refreshed DXGI local plus nonlocal budgets, clamping
@@ -103,3 +102,42 @@ CPU CI. Use [functional checks](../tests/functional/README.md) and the existing
 per-request timing limits for affected runtime paths; retain failures and
 unchanged-binary controls when timings are noisy. Update this checklist's links
 and coverage whenever an upstream change moves or replaces an implementation.
+
+## Repository roles
+
+Expected remotes and branches, subject to explicit user changes:
+
+| Remote/ref | Purpose |
+| --- | --- |
+| `official` → `https://github.com/gufo-org/gufo.git` | Official source of updates; merge `official/main`. |
+| `origin` → `https://github.com/thomas9120/gufo-windows.git` | The Windows fork; publish Windows work here when requested. |
+| `upstream` → `https://github.com/pixmaate/gufo.git` | A different fork; not the official update source. |
+| `windows-main` tracks `origin/windows-main` | Keep this tracking relationship; do not change it to `official/main`. |
+
+`windows-main` stays descended from official history. Syncs are ordinary
+merges of a recorded `official/main` SHA, and sync PRs use merge commits so
+ancestry is kept. Never squash, rebase or force-push the maintained branch.
+Host-specific paths (ROCm, vcpkg, models) belong in ignored
+`tools/windows/local.json` (see
+[`local.example.json`](../tools/windows/local.example.json)), never in tracked
+files.
+
+## Maintained difference
+
+Keep the difference from official Gufo small and checked by tools:
+
+- Windows-only files (`compat/win32/`, `win32_*` tests, `tools/windows/`,
+  `WINDOWS*.md`) are fork-owned additions; the guard accepts them.
+- Every edited upstream file is listed with a reason in
+  [`shared-edits.json`](../tools/windows/shared-edits.json).
+  [`diff-guard.ps1`](../tools/windows/diff-guard.ps1) fails on unlisted edits;
+  CI runs it.
+- Windows model evidence goes in `docs/models/<model>/WINDOWS.md` sidecars,
+  for example [Flash-Next](models/qwen3.8-flash-next/WINDOWS.md). Leave the
+  upstream `BENCHMARKS.md`, `QUALITY.md` and `EXPERIMENTS.md` identical to
+  official, even for a reverted PR. The sidecar lists the upstream sections
+  that do not apply.
+- Reverted upstream PRs are recorded in
+  [`known-regressions.json`](../tools/windows/known-regressions.json) and the
+  [sync log](WINDOWS-UPSTREAM-SYNC.md#known-upstream-regressions).
+  [`sync-inventory.ps1`](../tools/windows/sync-inventory.ps1) gates on them.
