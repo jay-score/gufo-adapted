@@ -96,6 +96,7 @@ class FunctionalRunnerTest(unittest.TestCase):
         self.assertLessEqual({f"tests/functional/{name}" for name in functional.HARNESS_ROOTS},
                              hashed)
         self.assertLessEqual({"tests/functional/messages_tools.py",
+                              # WINDOWS: include the Windows server helper in baseline identity.
                               "tests/functional/windows_server.py",
                               "tools/gufo/control_tokens.py"}, hashed)
 

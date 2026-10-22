@@ -197,16 +197,19 @@ def server(command, log_path, startup_timeout, environment=None):
         process = None
         previous_handlers = {}
         try:
+            # WINDOWS: launch and stop native Windows servers.
             signals = [signal.SIGTERM]
             if hasattr(signal, "SIGHUP"):
                 signals.append(signal.SIGHUP)
             previous_handlers = {signum: signal.signal(signum, interrupt)
+                                 # WINDOWS: launch and stop native Windows servers.
                                  for signum in signals}
             process_options = {}
             if os.name == "nt":
                 import windows_server
                 process_options = windows_server.launch_options()
             process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
+                                       # WINDOWS: launch and stop native Windows servers.
                                        env=environment, **process_options)
             deadline = time.monotonic() + startup_timeout
             while time.monotonic() < deadline:
@@ -228,6 +231,7 @@ def server(command, log_path, startup_timeout, environment=None):
             yield process
         finally:
             if process is not None and process.poll() is None:
+                # WINDOWS: launch and stop native Windows servers.
                 if os.name == "nt":
                     windows_server.stop(process, 30)
                 else:

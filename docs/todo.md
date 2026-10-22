@@ -157,7 +157,9 @@ WebP selection, `gufo-server` copy-vs-symlink target, ROCTX optional, install
   `gufo-server.exe` copy.
 - [ ] ROCTX optional and `gufo-server` copy-vs-symlink: better as upstream
   candidates (§1) than relocated; until then they stay as small edits.
-- [ ] `tests/cache/CMakeLists.txt`: see §7 (`boundary_test.py`).
+- [x] `tests/cache/CMakeLists.txt`: retain the upstream command behind a
+  marked Windows dispatch to the adapter in §7. A small shared hook remains;
+  the upstream script has no configuration or platform hook.
 - [ ] Verify with `git diff --stat`: realistic floor is the platform check,
   the include hook, and whatever upstream has not yet accepted.
 
@@ -167,12 +169,16 @@ WebP selection, `gufo-server` copy-vs-symlink target, ROCTX optional, install
   schema version 4 (CMake 3.23); the file is version 3 with a 3.21 minimum,
   so moving presets out requires a shared version bump. Our additions are
   appended to each array and conflict only when upstream also appends.
-- [ ] `tests/cache/boundary_test.py` (+ `tests/cache/CMakeLists.txt`): refactor
-  to config (e.g. an extra allowed-deps list read by the unmodified script)
-  instead of forking it. Note `tools/ci/check-docs.py` and
-  `tools/ci/check-dependencies.py` have no diff from upstream — nothing to do
-  there.
-- [ ] Shared tests: prefer the existing pattern — new `win32_*` files, shared
+- [x] `tests/cache/boundary_test.py` is byte-identical to the last imported
+  official version. The Windows-only adapter
+  `tests/platform/win32_cache_boundary_test.py` checks the shim's real link
+  metadata against `win32_cache_dependencies.json`, then runs the unchanged
+  upstream script with only the reviewed shim and CMake scope markers removed.
+  Other cache dependencies remain visible to upstream's checks. A marked
+  dispatch in `tests/cache/CMakeLists.txt` selects the adapter on Windows;
+  the Linux command is unchanged. `tools/ci/check-docs.py` and
+  `tools/ci/check-dependencies.py` already match upstream.
+- [x] Shared tests: prefer the existing pattern — new `win32_*` files, shared
   files untouched. Triage of the current edits:
   - `sampling_test`, `session_test`, `verification_sampling_test`,
     `prompt_lookup_test`: #699 revert, not Windows edits — handled by §4, no
@@ -180,5 +186,6 @@ WebP selection, `gufo-server` copy-vs-symlink target, ROCTX optional, install
   - `gguf_identity_test` (`temp_directory_path` instead of `/tmp`): portable;
     tracked in the §1 upstream-candidate list.
   - `http_server_test`, `audio_websocket_test`, `run.py`, `test_runner.py`:
-    where a shared edit is unavoidable, wrap it in `// WINDOWS:` (or
-    `# WINDOWS:`) markers, enforced by `diff-guard.ps1` (§3).
+    carry `// WINDOWS:` (or `# WINDOWS:`) markers in every changed hunk,
+    enforced by `"markers": true` in `shared-edits.json` and
+    `diff-guard.ps1` (§3). Their executable code is unchanged by this cleanup.
