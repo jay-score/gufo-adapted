@@ -114,7 +114,11 @@ validated, or pending with its reason; a clean merge is not validation.
   and candidate with a varied 10–16K-token first HTTP prompt in fresh server
   processes and repeat with prompt reuse disabled. Include AR/MTP as affected.
   Warmed pp2048 alone previously missed a roughly 50% first-prompt regression
-  caused by losing cached overlapped n-gram reads. Follow the checklist's
+  caused by losing cached overlapped n-gram reads. Run
+  `tools/windows/first-prompt-control.py` as the
+  [sync procedure](../../../docs/WINDOWS-UPSTREAM-SYNC.md#reproduce-the-first-request-control)
+  describes. It retains identities, responses and per-phase verdicts. Compare
+  with the checklist's
   [control record](../../../docs/models/qwen3.8-flash-next/BENCHMARKS.md#windows-cold-prompt-control-october-20-2026).
 - Keep model, toolchain, launch settings, cache history and power conditions
   matched. Capture binary/revision identities, commands, individual request
@@ -136,8 +140,9 @@ validated, or pending with its reason; a clean merge is not validation.
   regressions before publishing a qualified sync.
 
 Host-specific paths live in ignored `tools/windows/local.json` (see
-`tools/windows/local.example.json`); `tools/windows/build.ps1` uses it for
-any `-Rocm`/`-Vcpkg`/`-Ninja` option left at its default. Previously observed
+`tools/windows/local.example.json`). `tools/windows/build.ps1` uses it for
+any `-Rocm`/`-Vcpkg`/`-Ninja` option left at its default.
+`first-prompt-control.py` reads its `Models` directory. Previously observed
 values were TheRock 10.0.0 at `C:\TheRock\build`, vcpkg at
 `C:\Users\pegas\Documents\Projects-2026\Strix-halo-optimizations\vcpkg`
 (the build helper default `C:\vcpkg` was absent on that host), and Flash-Next
