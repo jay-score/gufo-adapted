@@ -64,27 +64,15 @@ def violations(root: Path, project_root: Path | None = None) -> list[str]:
     return failures
 
 
-def link_violations(metadata: Path, windows_compat: Path | None = None) -> list[str]:
+def link_violations(metadata: Path) -> list[str]:
     if not metadata.is_file():
         return [f"{metadata}: cache link metadata is missing"]
     # Only this reviewed CPU platform dependency may be linked. Arbitrary relay
     # targets are rejected too, so they cannot hide a transitive model/HIP link.
     allowed = {"Threads::Threads"}
-    failures = []
-    if windows_compat is not None:
-        if not windows_compat.is_file():
-            return [f"{windows_compat}: Windows compatibility link metadata is missing"]
-        allowed.add("gufo_posix_compat")
-        failures.extend(f"gufo_posix_compat: unapproved dependency {library}"
-                        for line in windows_compat.read_text().splitlines()
-                        for library in line.split(";")
-                        if library and library not in {"ws2_32", "psapi", "advapi32"})
-    failures.extend(f"gufo_cache: unapproved dependency {library}"
+    return [f"gufo_cache: unapproved dependency {library}"
             for line in metadata.read_text().splitlines()
-            for library in line.split(";") if library and library not in allowed
-            # CMake marks cross-directory target references with scope IDs.
-            and not re.fullmatch(r"::@(?:\([0-9a-fA-F]+\))?", library))
-    return failures
+            for library in line.split(";") if library and library not in allowed]
 
 
 class BoundaryTests(unittest.TestCase):
@@ -148,23 +136,10 @@ class BoundaryTests(unittest.TestCase):
                     metadata.write_text(dependency + "\n")
                     self.assertEqual(len(link_violations(metadata)), 1)
 
-    def test_windows_compatibility_dependencies(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            metadata = Path(tmp) / "links.txt"
-            compat = Path(tmp) / "compat.txt"
-            metadata.write_text("Threads::Threads;::@(000012AB);gufo_posix_compat;::@\n")
-            self.assertTrue(link_violations(metadata))
-            self.assertTrue(link_violations(metadata, compat))
-            compat.write_text("ws2_32;psapi;advapi32\nws2_32;psapi;advapi32\n")
-            self.assertEqual(link_violations(metadata, compat), [])
-            for dependency in ("hip::host", "dxgi", "gufo_core", "gufo_model_relay"):
-                compat.write_text("ws2_32;psapi;" + dependency + "\n")
-                self.assertTrue(link_violations(metadata, compat))
-
 
 if __name__ == "__main__":
     failures = violations(Path(sys.argv[1]))
-    failures.extend(link_violations(Path(sys.argv[2]), Path(sys.argv[3]) if len(sys.argv) > 3 else None))
+    failures.extend(link_violations(Path(sys.argv[2])))
     if failures:
         sys.exit("\n".join(failures))
     tests = unittest.main(argv=[sys.argv[0]], exit=False)

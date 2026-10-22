@@ -40,16 +40,15 @@
     "src/models/minimax_h3/media.cpp": { "reason": "Portability one-liner; upstream candidate." },
     "src/models/qwen/hip/model_loader.cpp": { "reason": "Windows device weight upload." },
     "src/models/qwen38_flash_next/ngram.cpp": { "reason": "Cached concurrent n-gram reads (O_CONCURRENT_RANDOM)." },
-    "tests/cache/CMakeLists.txt": { "reason": "Pass Windows compat link metadata to the boundary test." },
-    "tests/cache/boundary_test.py": { "reason": "Allow the reviewed Windows compat dependency." },
-    "tests/cli/audio_websocket_test.cpp": { "reason": "Winsock transport coverage." },
-    "tests/cli/http_server_test.cpp": { "reason": "Winsock transport and shutdown coverage." },
+    "tests/cache/CMakeLists.txt": { "reason": "Dispatch to the Windows boundary adapter; upstream command remains unchanged.", "markers": true },
+    "tests/cli/audio_websocket_test.cpp": { "reason": "Winsock transport coverage.", "markers": true },
+    "tests/cli/http_server_test.cpp": { "reason": "Winsock transport and shutdown coverage.", "markers": true },
     "tests/cli/text_generation_scheduler_test.cpp": { "reason": "Live prefill metrics." },
     "tests/core/gguf_identity_test.cpp": { "reason": "Portable temp directory; upstream candidate." },
     "tests/core/gguf_reader_test.cpp": { "reason": "Portable temp directory and Windows mapped-file truncation." },
     "tests/core/json_constraint_test.cpp": { "reason": "Avoid auto(x) for clang/MSVC STL." },
     "tests/functional/cache_startup.py": { "reason": "Disk checkpoint corruption case." },
-    "tests/functional/run.py": { "reason": "Windows server launch and shutdown." },
-    "tests/functional/test_runner.py": { "reason": "Hash the Windows server helper." }
+    "tests/functional/run.py": { "reason": "Windows server launch and shutdown.", "markers": true },
+    "tests/functional/test_runner.py": { "reason": "Hash the Windows server helper.", "markers": true }
   }
 }

@@ -99,6 +99,15 @@ endfunction()
 cmake_language(DEFER CALL gufo_windows_overrides)
 
 if (BUILD_TESTING)
+  # Called from tests/cache so the test keeps its upstream name and directory.
+  function(gufo_windows_cache_boundary)
+    add_test(NAME cache_boundary_test
+      COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/platform/win32_cache_boundary_test.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/boundary_test.py
+        ${PROJECT_SOURCE_DIR}/src/cache
+        ${CMAKE_CURRENT_BINARY_DIR}/cache-links-$<CONFIG>.txt
+        ${CMAKE_BINARY_DIR}/win32-compat-links-$<CONFIG>.txt)
+  endfunction()
   target_compile_definitions(gufo_posix_compat PRIVATE GUFO_WIN32_TESTING=1)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_executable(win32_compat_test ${PROJECT_SOURCE_DIR}/tests/platform/win32_compat_test.cpp)

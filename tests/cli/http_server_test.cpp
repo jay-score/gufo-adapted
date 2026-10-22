@@ -8,11 +8,13 @@
 
 #include <atomic>
 #include <cassert>
+// WINDOWS: keep transport and shutdown coverage on Winsock.
 #include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
+// WINDOWS: keep transport and shutdown coverage on Winsock.
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -30,6 +32,7 @@
 
 #include "src/cli/serve/logging.hpp"
 #include "src/cli/serve/trace.hpp"
+// WINDOWS: keep transport and shutdown coverage on Winsock.
 #include "src/cli/serve/websocket.hpp"
 #include "src/core/platform/socket.hpp"
 
@@ -333,6 +336,7 @@ public:
     worker.join();
   }
 
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   gufo::platform::SocketHandle Connect(const std::string& peer = "127.0.0.1") {
     sockaddr_storage address{};
     socklen_t length = 0;
@@ -348,19 +352,21 @@ public:
       ipv6->sin6_port = htons(server.port());
       length = sizeof(*ipv6);
     }
+    // WINDOWS: keep transport and shutdown coverage on Winsock.
     const auto fd = ::socket(address.ss_family, SOCK_STREAM, 0);
     assert(fd != gufo::platform::kInvalidSocket);
     assert(gufo::platform::SetSocketTimeout(fd, SO_RCVTIMEO,
                                             std::chrono::seconds(3)) == 0);
     assert(::connect(fd, reinterpret_cast<const sockaddr*>(&address), length) ==
            0);
-
     return fd;
   }
   std::string Send(std::string_view request, bool half_close = false,
                    const std::string& peer = "127.0.0.1") {
+    // WINDOWS: keep transport and shutdown coverage on Winsock.
     const auto fd = Connect(peer);
     while (!request.empty()) {
+      // WINDOWS: keep transport and shutdown coverage on Winsock.
       const auto count = gufo::platform::SocketSend(
           fd, request.data(), request.size(), MSG_NOSIGNAL);
       assert(count > 0);
@@ -373,6 +379,7 @@ public:
     std::string response;
     char buffer[4096];
     for (;;) {
+      // WINDOWS: keep transport and shutdown coverage on Winsock.
       const auto count = gufo::platform::SocketRead(fd, buffer, sizeof(buffer));
       assert(count >= 0);
       if (count == 0) {
@@ -380,6 +387,7 @@ public:
       }
       response.append(buffer, static_cast<std::size_t>(count));
     }
+    // WINDOWS: keep transport and shutdown coverage on Winsock.
     gufo::platform::CloseSocket(fd);
     return response;
   }
@@ -545,7 +553,6 @@ std::string ChunkedBody(const std::string& response) {
 
 // `--trace` keeps what a text request carried in and out under the id the
 // logs name. Polls, other routes and unauthenticated requests stay out.
-
 void TestContentTrace() {
   namespace fs = std::filesystem;
   using gufo::server::Trace;
@@ -603,6 +610,7 @@ void TestContentTrace() {
   }
   Trace::Close();
 
+// WINDOWS: keep transport and shutdown coverage on Winsock.
 #ifdef _WIN32
   struct stat trace_status{};
   assert(stat(path.c_str(), &trace_status) == 0 &&
@@ -611,7 +619,7 @@ void TestContentTrace() {
 #else
   assert((fs::status(path).permissions() & fs::perms::all) ==
          (fs::perms::owner_read | fs::perms::owner_write));
-#endif
+#endif  // WINDOWS: platform coverage.
   std::vector<gufo::json::Value> records;
   {
     std::ifstream input(path);
@@ -658,6 +666,7 @@ void TestContentTrace() {
 
   assert(record("request", invalid_id).member_str("body") == "{");
   assert(record("response", invalid_id).member_size("status") == 400);
+// WINDOWS: keep transport and shutdown coverage on Winsock.
 #ifdef _WIN32
   // Existing files with inherited/unprotected ACLs are not silently secured.
   {
@@ -803,9 +812,11 @@ void TestExpectContinue() {
   RunningServer server({.max_request_body_bytes = 8192});
   for (const std::string expect :
        {"Expect: 100-continue", "expect: 100-Continue"}) {
+    // WINDOWS: keep transport and shutdown coverage on Winsock.
     const auto fd = server.Connect();
     const std::string head =
         "POST /echo HTTP/1.1\r\n" + expect + "\r\nContent-Length: 5\r\n\r\n";
+    // WINDOWS: keep transport and shutdown coverage on Winsock.
     assert(gufo::platform::SocketSend(fd, head.data(), head.size(),
                                       MSG_NOSIGNAL) ==
            static_cast<ssize_t>(head.size()));
@@ -814,21 +825,25 @@ void TestExpectContinue() {
     std::string response;
     char buffer[4096];
     while (response.size() < interim.size()) {
+      // WINDOWS: keep transport and shutdown coverage on Winsock.
       const auto count = gufo::platform::SocketRead(
           fd, buffer, interim.size() - response.size());
       assert(count > 0);
       response.append(buffer, static_cast<std::size_t>(count));
     }
     assert(response == interim);
+    // WINDOWS: keep transport and shutdown coverage on Winsock.
     assert(gufo::platform::SocketSend(fd, "hello", 5, MSG_NOSIGNAL) == 5);
     response.clear();
     for (;;) {
+      // WINDOWS: keep transport and shutdown coverage on Winsock.
       const auto count = gufo::platform::SocketRead(fd, buffer, sizeof(buffer));
       assert(count >= 0);
       if (count == 0)
         break;
       response.append(buffer, static_cast<std::size_t>(count));
     }
+    // WINDOWS: keep transport and shutdown coverage on Winsock.
     gufo::platform::CloseSocket(fd);
     ExpectStatus(response, 200);
     assert(response.substr(response.find("\r\n\r\n") + 4) == "hello");
@@ -853,12 +868,14 @@ void TestFallbackBackendMetrics() {
            Endpoint{"/v1/responses", R"({"input":"hi"})"},
        }) {
     for (const bool stream : {false, true}) {
+      // WINDOWS: check the fork's live prefill metrics.
       const auto prompt_before = metrics::TotalPromptMetrics().Snapshot();
       const auto generated_before = metrics::TotalGenTokens().load();
       const auto cached_before = metrics::TotalCachedPromptTokens().load();
       const auto rounds_before = metrics::TotalDraftRounds().load();
       const auto drafts_before = metrics::TotalDraftTokens().load();
       const auto accepted_before = metrics::TotalDraftAcceptedTokens().load();
+      // WINDOWS: check the fork's live prefill metrics.
       const auto gen_seconds_before = metrics::TotalGenSeconds().load();
       auto body = gufo::json::parse(endpoint.body);
       body["model"] = "test";
@@ -868,6 +885,7 @@ void TestFallbackBackendMetrics() {
       ExpectStatus(response, 200);
       // The backend reports 10 prompt tokens, of which 8 were cached.
       assert(response.find("llamacpp:prompt_tokens_total " +
+                           // WINDOWS: check the fork's live prefill metrics.
                            std::to_string(prompt_before.tokens + 2) + "\n") !=
              std::string::npos);
       assert(response.find("llamacpp:prompt_tokens_cached_total " +
@@ -882,6 +900,7 @@ void TestFallbackBackendMetrics() {
       assert(response.find("llamacpp:spec_decode_num_accepted_tokens_total " +
                            std::to_string(accepted_before + 4) + "\n") !=
              std::string::npos);
+      // WINDOWS: check the fork's live prefill metrics.
       assert(metrics::TotalPromptMetrics().Snapshot().seconds -
                      prompt_before.seconds >
                  0.0039 &&
@@ -905,6 +924,7 @@ void TestFallbackBackendMetrics() {
            Case{0, 0, true, 0},
            Case{3, 0, true, 3},
        }) {
+    // WINDOWS: check the fork's live prefill metrics.
     const auto prompt_before = metrics::TotalPromptMetrics().Snapshot().tokens;
     const auto generated_before = metrics::TotalGenTokens().load();
     TextGenerationBackend::Result result;
@@ -914,6 +934,7 @@ void TestFallbackBackendMetrics() {
     result.completion_tokens = 2;
     result.cancelled = test.cancelled;
     gufo::server::RecordServerMetrics(result);
+    // WINDOWS: check the fork's live prefill metrics.
     assert(metrics::TotalPromptMetrics().Snapshot().tokens ==
            prompt_before + test.expected_prompt);
     assert(metrics::TotalGenTokens().load() == generated_before + 2);
@@ -2387,11 +2408,14 @@ void TestDeviceLossWhileWriterBlocked() {
           write_finished = true;
         }};
   });
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   const auto fd = server.Connect();
   const int receive_buffer = 1024;
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   assert(gufo::platform::SetSocketOption(fd, SOL_SOCKET, SO_RCVBUF,
                                          receive_buffer) == 0);
   const std::string request = "POST /blocked HTTP/1.1\r\n\r\n";
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   assert(gufo::platform::SocketSend(fd, request.data(), request.size(),
                                     MSG_NOSIGNAL) ==
          static_cast<ssize_t>(request.size()));
@@ -2401,12 +2425,14 @@ void TestDeviceLossWhileWriterBlocked() {
   server.backend->lost = true;
   assert(hook_called.try_acquire_for(std::chrono::seconds(2)));
   assert(hook_calls == 1 && !write_finished);
-  // Local shutdown must interrupt the pending write without any peer action.
+  // WINDOWS: Local shutdown must interrupt the pending write without any peer
+  // action.
   const auto start = std::chrono::steady_clock::now();
   server.server.stop();
   assert(write_finished);
   assert(std::chrono::steady_clock::now() - start < std::chrono::seconds(2));
   ::shutdown(fd, SHUT_RDWR);
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   gufo::platform::CloseSocket(fd);
 }
 
@@ -2421,7 +2447,7 @@ void TestInvalidBindSettings() {
   std::string error;
   assert(!invalid.start(&error));
   assert(!error.empty());
-  // A second server cannot take an occupied port, even on Winsock.
+  // WINDOWS: A second server cannot take an occupied port, even on Winsock.
   RunningServer first;
   HttpServer duplicate("127.0.0.1", first.server.port(), nullptr);
   assert(!duplicate.start(&error));
@@ -2429,6 +2455,7 @@ void TestInvalidBindSettings() {
 
 // Some CI containers have no IPv6 loopback; listener checks skip there.
 bool HasIpv6Loopback() {
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   const auto fd = ::socket(AF_INET6, SOCK_STREAM, 0);
   if (fd == gufo::platform::kInvalidSocket)
     return false;
@@ -2437,14 +2464,17 @@ bool HasIpv6Loopback() {
   address.sin6_addr = in6addr_loopback;
   const bool bound = ::bind(fd, reinterpret_cast<const sockaddr*>(&address),
                             sizeof(address)) == 0;
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   gufo::platform::CloseSocket(fd);
   return bound;
 }
 
 void TestListenAddresses() {
   using gufo::server::IsListenAddress;
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   for (const char* host : {"127.0.0.1", "0.0.0.0", "::", "::1"})
     assert(IsListenAddress(host));
+// WINDOWS: keep transport and shutdown coverage on Winsock.
 #ifndef _WIN32
   // Winsock resolves a zone name only when it names an installed interface;
   // "lo" is a Linux interface name.
@@ -2454,6 +2484,7 @@ void TestListenAddresses() {
     if (IsListenAddress(host))
       std::cerr << "unexpected listen address: '" << host << "'\n";
     assert(!IsListenAddress(host));
+    // WINDOWS: keep transport and shutdown coverage on Winsock.
   }
   if (!HasIpv6Loopback()) {
     std::cout << "IPv6 loopback unavailable; skipping IPv6 listener checks.\n";
@@ -2489,16 +2520,19 @@ int FreePort(const std::string& host = "127.0.0.1") {
     ipv6->sin6_family = AF_INET6;
     length = sizeof(*ipv6);
   }
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   const auto fd = ::socket(address.ss_family, SOCK_STREAM, 0);
   assert(fd != gufo::platform::kInvalidSocket);
   assert(::bind(fd, reinterpret_cast<const sockaddr*>(&address), length) == 0);
   assert(::getsockname(fd, reinterpret_cast<sockaddr*>(&address), &length) ==
          0);
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   gufo::platform::CloseSocket(fd);
   return ntohs(address.ss_family == AF_INET6 ? ipv6->sin6_port
                                              : ipv4->sin_port);
 }
 
+// WINDOWS: keep transport and shutdown coverage on Winsock.
 gufo::platform::SocketHandle ConnectTo(const std::string& host, int port) {
   sockaddr_storage address{};
   socklen_t length = 0;
@@ -2514,11 +2548,13 @@ gufo::platform::SocketHandle ConnectTo(const std::string& host, int port) {
     ipv6->sin6_port = htons(static_cast<std::uint16_t>(port));
     length = sizeof(*ipv6);
   }
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   const auto fd = ::socket(address.ss_family, SOCK_STREAM, 0);
   assert(fd != gufo::platform::kInvalidSocket);
   assert(gufo::platform::SetSocketTimeout(fd, SO_RCVTIMEO,
                                           std::chrono::seconds(3)) == 0);
   if (::connect(fd, reinterpret_cast<const sockaddr*>(&address), length) != 0) {
+    // WINDOWS: keep transport and shutdown coverage on Winsock.
     gufo::platform::CloseSocket(fd);
     return gufo::platform::kInvalidSocket;
   }
@@ -2528,11 +2564,13 @@ gufo::platform::SocketHandle ConnectTo(const std::string& host, int port) {
 // Sends each part separately, pausing between them, and reads to EOF.
 std::string SendParts(const std::string& host, int port,
                       const std::vector<std::string>& parts) {
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   const auto fd = ConnectTo(host, port);
   assert(fd != gufo::platform::kInvalidSocket);
   for (std::size_t index = 0; index < parts.size(); ++index) {
     if (index > 0)
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // WINDOWS: keep transport and shutdown coverage on Winsock.
     assert(gufo::platform::SocketSend(fd, parts[index].data(),
                                       parts[index].size(), MSG_NOSIGNAL) ==
            static_cast<ssize_t>(parts[index].size()));
@@ -2540,12 +2578,14 @@ std::string SendParts(const std::string& host, int port,
   std::string response;
   char buffer[4096];
   for (;;) {
+    // WINDOWS: keep transport and shutdown coverage on Winsock.
     const auto count = gufo::platform::SocketRead(fd, buffer, sizeof(buffer));
     assert(count >= 0);
     if (count == 0)
       break;
     response.append(buffer, static_cast<std::size_t>(count));
   }
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   gufo::platform::CloseSocket(fd);
   return response;
 }
@@ -2592,17 +2632,20 @@ void TestLoadingResponder() {
 
   // A client that connects and sends nothing delays neither the next client
   // nor stop() beyond the bounded request wait.
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   const auto idle = ConnectTo("127.0.0.1", port);
   assert(idle != gufo::platform::kInvalidSocket);
   auto started = std::chrono::steady_clock::now();
   ExpectLoading(SendParts("127.0.0.1", port, {"GET /health HTTP/1.1\r\n\r\n"}));
   assert(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   const auto idle_during_stop = ConnectTo("127.0.0.1", port);
   assert(idle_during_stop != gufo::platform::kInvalidSocket);
   started = std::chrono::steady_clock::now();
   loading.stop();
   assert(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
   assert(!loading.listening());
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   gufo::platform::CloseSocket(idle);
   gufo::platform::CloseSocket(idle_during_stop);
 
@@ -2681,6 +2724,7 @@ void TestQueryParameters() {
 }
 
 void TestPeerDisconnect() {
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   for (const bool streaming : {false, true}) {
     for (const bool reset : {false, true}) {
       RunningServer server;
@@ -2714,6 +2758,7 @@ void TestPartialRequestAndStop() {
   // Accept() must leave request workers in blocking mode. Split both the
   // request head and body across writes, then stop separate incomplete ones.
   RunningServer server;
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   const auto fd = server.Connect();
   for (const auto part :
        {"POST /echo HTTP/1.1\r\nContent-Length: 5\r\n", "\r\nhe", "llo"}) {
@@ -2753,6 +2798,7 @@ void TestPartialRequestAndStop() {
   active.backend->wait_for_disconnect = true;
   const auto client = active.Connect();
   const std::string request =
+      // WINDOWS: keep transport and shutdown coverage on Winsock.
       "POST /v1/completions HTTP/1.1\r\nContent-Length: 15\r\n\r\n"
       R"({"prompt":"hi"})";
   assert(gufo::platform::SocketSend(client, request.data(), request.size(),
@@ -2763,6 +2809,7 @@ void TestPartialRequestAndStop() {
   gufo::platform::CloseSocket(client);
 }
 
+// WINDOWS: keep transport and shutdown coverage on Winsock.
 #ifdef _WIN32
 void TestWinsockErrors() {
   char byte;
@@ -3154,6 +3201,7 @@ void TestSseHeartbeatShutdown() {
   }
 }
 
+// WINDOWS: keep transport and shutdown coverage on Winsock.
 #ifndef _WIN32
 void TestSignalShutdown() {
   // Process signals must never terminate the test runner itself. Prove that
@@ -3176,6 +3224,7 @@ void TestSignalShutdown() {
             const std::string request =
                 "POST /v1/completions HTTP/1.1\r\nContent-Length: " +
                 std::to_string(body.size()) + "\r\n\r\n" + body;
+            // WINDOWS: keep transport and shutdown coverage on Winsock.
             assert(gufo::platform::SocketSend(fd, request.data(),
                                               request.size(), MSG_NOSIGNAL) ==
                    static_cast<ssize_t>(request.size()));
@@ -3186,6 +3235,7 @@ void TestSignalShutdown() {
           assert(server.run_finished.try_acquire_for(std::chrono::seconds(2)));
           if (active) {
             assert(server.backend->disconnected);
+            // WINDOWS: keep transport and shutdown coverage on Winsock.
             gufo::platform::CloseSocket(fd);
           }
         }
@@ -3198,7 +3248,7 @@ void TestSignalShutdown() {
   }
 }
 
-#endif
+#endif  // WINDOWS: platform coverage.
 
 }  // namespace
 
@@ -3266,6 +3316,7 @@ void TestRawCompletionPromptProgress() {
                400);
 }
 
+// WINDOWS: keep transport and shutdown coverage on Winsock.
 int main(int argc, char** argv) {
 #ifdef _WIN32
   if (argc == 3 && std::string_view(argv[1]) == "--windows-shutdown-child")
@@ -3308,6 +3359,7 @@ int main(int argc, char** argv) {
   TestResponseSamplingDefaults();
   TestCompatibilityUtf8();
   TestPeerDisconnect();
+  // WINDOWS: keep transport and shutdown coverage on Winsock.
   TestPartialRequestAndStop();
 #ifdef _WIN32
   TestWinsockErrors();
@@ -3317,8 +3369,9 @@ int main(int argc, char** argv) {
   TestSseHeartbeatShutdown();
   TestDeferredStreamHeaders();
   TestAdmittedStreamHeaders();
+// WINDOWS: keep transport and shutdown coverage on Winsock.
 #ifndef _WIN32
   TestSignalShutdown();
-#endif
+#endif  // WINDOWS: platform coverage.
   std::cout << "HTTP transport checks passed.\n";
 }
