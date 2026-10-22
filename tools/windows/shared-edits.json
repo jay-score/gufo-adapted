@@ -40,6 +40,7 @@
     "src/models/minimax_h3/media.cpp": { "reason": "Portability one-liner; upstream candidate." },
     "src/models/qwen/hip/model_loader.cpp": { "reason": "Windows device weight upload." },
     "src/models/qwen38_flash_next/ngram.cpp": { "reason": "Cached concurrent n-gram reads (O_CONCURRENT_RANDOM)." },
+    "src/models/qwen38_flash_next/rope_scaling.cpp": { "reason": "Normalize MSVC hexfloat padding to the upstream YaRN cache identity.", "markers": true },
     "tests/cache/CMakeLists.txt": { "reason": "Dispatch to the Windows boundary adapter; upstream command remains unchanged.", "markers": true },
     "tests/cli/audio_websocket_test.cpp": { "reason": "Winsock transport coverage.", "markers": true },
     "tests/cli/http_server_test.cpp": { "reason": "Winsock transport and shutdown coverage.", "markers": true },

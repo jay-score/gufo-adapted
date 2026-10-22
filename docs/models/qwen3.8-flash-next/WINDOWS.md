@@ -18,6 +18,22 @@ code the Windows build does not contain:
 
 ## Benchmarks
 
+### YaRN adoption control (October 22, 2026)
+
+Windows base `d10a852f`, candidate production code including `2354ba89`,
+TheRock 10.0.0, the same Q4_K_XL/shared-Q8 artifacts, 32K context, two sessions,
+8 GiB RAM cache and a three-second arm pause. Two alternating pairs per mode
+send the varied 11,036-token prompt with reuse enabled and then disabled.
+Every response is `ACK`, every request reports zero reuse, and all servers
+stop cleanly. Complete responses, identities, DLL hashes and per-request
+measurements are retained in `build/sync-350-2026-10-22/cold-control-1/`.
+
+Prefill, adjusted wall/queue/TTFT and AR decode remain within the existing
+paired gates. Snapshot cells and first MTP decode have noisy observations;
+the overall result is **inconclusive**. No speedup or complete performance
+qualification is claimed. The original observations are retained while an
+unchanged-base MTP control investigates the flagged histories.
+
 ### Sync first-decode control (October 21, 2026)
 
 Native TheRock 10.0.0; same four-shard Q4_K_XL/shared-Q8 MTP artifacts,
@@ -87,6 +103,29 @@ These focused Windows controls do not replace the Linux tables in
 [BENCHMARKS.md](BENCHMARKS.md).
 
 ## Quality
+
+### YaRN adoption, October 22, 2026
+
+- YaRN-off full-model matched-token decode: all 12 logit rows
+  (11,919,360 bytes) and token IDs are byte-identical to the exact Windows base.
+  Logit SHA-256: `62ac18232069b28ed69430997cbb7deb5b812ee985791f92e9f6a5d38a3d46a7`.
+- Native sampling and cache-replay checks pass, including greedy/default-sampled
+  RAM and serialized continuation, sampler state and actual MTP drafting.
+- AR/MTP 4K, two-slot component round trips pass, including restored device
+  components, next-step logits/tokens and actual draft work.
+- CPU HF-golden/scalar-oracle and GPU attention, projection, selection and
+  snapshot-copy checks pass. Upstream's cache-policy golden initially finds
+  the MSVC hexfloat-padding difference; a Windows-only canonicalization fixes
+  that failure without changing the golden or Linux output.
+- The Windows-owned YaRN snapshot fixture at factor 1.5625 passes AR/MTP
+  checkpoint and serialized replay. It rejects the pre-YaRN executor marker,
+  checks clean reset and exact recovery with matched prefill boundaries, and
+  rejects a snapshot at factor 2.5. MTP actually drafts 14 tokens in the bounded
+  continuation. Its `--extended` run and API/cache qualification remain pending.
+
+Evidence is retained under `build/sync-350-2026-10-22/`, including earlier
+failed observations. These checks do not yet qualify extended-context serving
+or the full timing matrix; completion is recorded in the sync PR.
 
 ### Sync, October 21, 2026
 
