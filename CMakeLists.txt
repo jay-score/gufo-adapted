@@ -145,6 +145,7 @@ endif()
 add_library(gufo_core STATIC
   src/core/platform/net.cpp
   src/core/platform/shutdown_signal.cpp
+  src/core/platform/mapped_file.cpp
   src/core/platform/publish.cpp
   src/core/platform/os_info.cpp
   src/core/image.cpp
@@ -877,6 +878,12 @@ if (BUILD_TESTING)
   target_link_libraries(platform_prefault_test PRIVATE Threads::Threads)
   add_test(NAME platform_prefault_test COMMAND platform_prefault_test)
   set_tests_properties(platform_prefault_test PROPERTIES LABELS "cpu;platform")
+
+  add_executable(platform_mapped_file_test
+    tests/core/platform_mapped_file_test.cpp src/core/platform/mapped_file.cpp)
+  add_test(NAME platform_mapped_file_test COMMAND platform_mapped_file_test)
+  set_tests_properties(platform_mapped_file_test PROPERTIES
+    LABELS "cpu;platform")
 
   add_executable(hipblaslt_plan_cache_test
     tests/core/hipblaslt_plan_cache_test.cpp)
