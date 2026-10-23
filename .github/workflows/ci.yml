@@ -5,6 +5,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -51,6 +52,16 @@ jobs:
           extra-conf: |
             extra-sandbox-paths = /tmp/gufo-ccache
 
+      # Pull on every run; push only from main so pull requests do not fill
+      # the cache. Fork pull requests receive no token and only pull.
+      - name: Enable Cachix
+        uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        with:
+          name: gufo
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          skipPush: ${{ github.event_name == 'pull_request' }}
+          pushFilter: '(-source$|\.tar\.gz$)'
+
       - name: Enable Magic Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
@@ -61,3 +72,29 @@ jobs:
         run: |
           nix build .#checks.x86_64-linux.pr --print-build-logs --cores 2 --max-jobs 2
           cat ./result/pr-summary.txt
+
+  cache-package:
+    name: Push nix build to Cachix
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          determinate: false
+
+      # Pushes what this job builds and cache.nixos.org lacks: the patched
+      # ROCr runtime and the gufo package.
+      - name: Enable Cachix
+        uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        with:
+          name: gufo
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          pushFilter: '(-source$|\.tar\.gz$)'
+
+      - name: Build production package
+        run: nix build .#default --print-build-logs --cores 4 --max-jobs 1

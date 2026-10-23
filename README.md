@@ -157,6 +157,16 @@ requirements. Optional benchmark baselines are selected separately with
 See [testing](docs/TESTING.md) for the small hosted CI suite and
 explicit local quality checks.
 
+Prebuilt store paths are published to the `gufo` Cachix cache. The flake
+declares it in `nixConfig`: users listed in `trusted-users` are asked to accept
+it, or pass `--accept-flake-config`. Nix ignores it for other users; add it
+system-wide with `cachix use gufo` or in `/etc/nix/nix.conf`:
+
+```
+extra-substituters = https://gufo.cachix.org
+extra-trusted-public-keys = gufo.cachix.org-1:rfZe3n4lHINgyoACKzs5EthIZmBNvEyCCtufUpth0PE=
+```
+
 The Nix package and development shell include a ROCr 7.2.3
 [queue-memory patch](.devops/nix/patches/rocr-fixed-cwsr.patch) for Strix Halo.
 It keeps queue save/restore buffers, launch/copy arenas and code-loading

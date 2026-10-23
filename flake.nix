@@ -15,6 +15,15 @@
     };
   };
 
+  # Prebuilt outputs that cache.nixos.org lacks (patched ROCr, gufo, the
+  # gfx1151 reference builds and the ROCm Python tools).
+  nixConfig = {
+    extra-substituters = [ "https://gufo.cachix.org" ];
+    extra-trusted-public-keys = [
+      "gufo.cachix.org-1:rfZe3n4lHINgyoACKzs5EthIZmBNvEyCCtufUpth0PE="
+    ];
+  };
+
   outputs =
     { self, nixpkgs, nixpkgs-rocm10, audio-cpp }:
     let
