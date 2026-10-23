@@ -9,6 +9,10 @@
 
 namespace gufo::platform {
 
+/// Access hint for a mapping. kSequential tells the OS the mapping is read
+/// front to back once; kNone leaves the access pattern to the OS.
+enum class MapHint { kNone, kSequential };
+
 /// Read-only demand-paged view of a whole file.
 ///
 /// Linux maps with PROT_READ/MAP_PRIVATE and a sequential-access hint;
@@ -67,13 +71,16 @@ struct RawMappedFile {
 #endif
 
   /// Maps `path`; on failure leaves the object untouched. Files of size zero
-  /// fail, matching the loaders' fstat contract.
-  bool Open(const std::filesystem::path& path) noexcept;
+  /// fail, matching the loaders' fstat contract. The hint describes the
+  /// expected access pattern.
+  bool Open(const std::filesystem::path& path, MapHint hint = MapHint::kNone,
+            std::string* error = nullptr) noexcept;
   /// Maps the byte range [offset, offset + length) of `path`. `data` points
   /// at the requested offset, which need not be page-aligned. Zero `length`
   /// fails; on failure the object is left untouched.
   bool OpenRange(const std::filesystem::path& path, std::uint64_t offset,
-                 std::size_t length) noexcept;
+                 std::size_t length, MapHint hint = MapHint::kNone,
+                 std::string* error = nullptr) noexcept;
   void Close() noexcept;
 };
 
@@ -87,8 +94,10 @@ using PlatformFile = void*;
 using PlatformFile = int;
 #endif
 
-/// Opens `path` read-only; check FileValid() before use.
-PlatformFile OpenReadFile(const std::filesystem::path& path) noexcept;
+/// Opens `path` read-only; check FileValid() before use. On failure,
+/// `error` (when given) receives the reason.
+PlatformFile OpenReadFile(const std::filesystem::path& path,
+                          std::string* error = nullptr) noexcept;
 bool FileValid(PlatformFile file) noexcept;
 void CloseFile(PlatformFile file) noexcept;
 /// Reads up to `bytes` at `offset`; returns bytes read, 0 on failure/EOF.

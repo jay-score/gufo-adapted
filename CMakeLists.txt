@@ -146,6 +146,7 @@ add_library(gufo_core STATIC
   src/core/platform/net.cpp
   src/core/platform/shutdown_signal.cpp
   src/core/platform/mapped_file.cpp
+  src/core/platform/mapped_file.cpp
   src/core/platform/publish.cpp
   src/core/platform/os_info.cpp
   src/core/image.cpp
@@ -161,7 +162,8 @@ add_library(gufo_core STATIC
   src/models/minimax_h3/dit.cpp
   src/models/minimax_h3/generation.cpp
   src/models/minimax_h3/json.cpp
-  src/models/minimax_h3/media.cpp
+  "$<$<PLATFORM_ID:Windows>:src/models/minimax_h3/media_windows.cpp>"
+  "$<$<NOT:$<PLATFORM_ID:Windows>>:src/models/minimax_h3/media_posix.cpp>"
   src/models/minimax_h3/prompt_encoder.cpp
   src/models/minimax_h3/runtime.cpp
   src/models/minimax_h3/sampling.cpp
