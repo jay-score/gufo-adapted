@@ -153,6 +153,24 @@ These focused Windows controls do not replace the Linux tables in
 
 ## Quality
 
+### OS info adoption (October 23, 2026)
+
+PR #709 changes the host-memory query to the shared native OS leaf, using the
+same Windows API/result and preserving the host reserve. Native CPU OS-oracle
+and budget checks pass. No model or inference arithmetic changes.
+
+The HIP executable at `be07d64b63ce` passes the bounded MTP RAM startup/retry
+fixture with the same Q4_K_XL/shared-Q8 artifacts, context 8,192, one session
+and an effective 1 GiB RAM cache. Cold generation consumes 2,294 prompt tokens;
+retry reuses all 2,294 with zero prefill and exactly matches the response.
+Each request proposes 19 and accepts 16 drafts. RAM-only startup leaves the
+durable model-identity cache empty, and the server stops cleanly.
+
+Commands, binary identity, responses and logs are in
+`build/sync-709-2026-10-23/ram-startup-job.json` and `ram-startup-mtp/`.
+This is a platform-budget smoke check; it does not refresh the existing
+numerical or performance qualification.
+
 ### YaRN adoption, October 22, 2026
 
 - YaRN-off full-model matched-token decode: all 12 logit rows
