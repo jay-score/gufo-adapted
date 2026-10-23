@@ -50,6 +50,10 @@ The supported modalities are LLM, image, video, and audio (TTS, ASR).
 - `--cache-prior-bias FLOAT` — non-negative weight for learned token-to-expert
   priors when ranking prefetch candidates and choosing retained cache entries.
   The default is `0`, which leaves the prior score out of those rankings.
+- `--cache-policy POLICY` — expert-cache victim selection for out-of-core
+  weights: `lru` evicts the least recently used expert, `hotness` retains
+  cumulative access counts, and `decayed` biases those counts toward recent
+  tokens. The default is `lru`.
 - `maxTokens` — maximum number of tokens a request may generate. In practice:
   stops a model that rambles forever.
 

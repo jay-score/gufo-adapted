@@ -713,10 +713,11 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
   return e;
 }
 
-bool Executor::EnableExpertCache(std::size_t budget_bytes,
-                                 gufo::storage::SsdStats* stats,
-                                 float cache_prior_bias,
-                                 std::string* error_msg) {
+bool Executor::EnableExpertCache(
+    std::size_t budget_bytes, gufo::storage::SsdStats* stats,
+    float cache_prior_bias,
+    gufo::storage::ExpertCacheManager::VictimPolicy victim_policy,
+    std::string* error_msg) {
   if (expert_cache_ != nullptr || budget_bytes == 0) {
     AssignError(error_msg, "expert cache is already enabled or has no budget");
     return false;
@@ -756,7 +757,7 @@ bool Executor::EnableExpertCache(std::size_t budget_bytes,
   expert_cache_ = gufo::storage::ExpertCacheManager::Create(
       layers, budget_bytes, config().num_experts_used, config().num_experts,
       std::span<std::int32_t>(expert_id_to_slot_host_, map_count), error_msg,
-      stats, cache_prior_bias);
+      stats, cache_prior_bias, victim_policy);
   if (expert_cache_ == nullptr)
     return false;
   gufo::storage::ExpertCacheManager::WarmupResult warmup;
@@ -1201,9 +1202,16 @@ bool Executor::StreamedMoeRowsDeskRoom(
     UseScratch(base);
     return false;
   }
-  const std::size_t prefetch_slots =
-      room_slots >= 2 * used ? std::min<std::size_t>(16, room_slots / 3) : 0;
-  const std::size_t room_compute_slots = room_slots - prefetch_slots;
+  const auto room_plan = PlanDeskRoomPrefetch(
+      room_slots, static_cast<std::uint32_t>(room_group.size()), used);
+  if (room_plan.compute_slots < used) {
+    AssignError(error_msg,
+                "Desk/Room prefetch leaves too few slots for one token");
+    UseScratch(base);
+    return false;
+  }
+  const std::size_t prefetch_slots = room_plan.prefetch_slots;
+  const std::size_t room_compute_slots = room_plan.compute_slots;
   std::vector<std::uint8_t> selected(c.num_experts, 0);
   std::vector<std::uint32_t> route_windows{rows};
   std::vector<RouteTracePass> route_passes;

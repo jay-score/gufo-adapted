@@ -40,6 +40,7 @@
 #include "src/cli/serve/video_jobs.hpp"
 #include "src/cli/video/video.hpp"
 #include "src/models/qwen3_tts/audio.hpp"
+#include "src/storage/expert_cache_manager.hpp"
 
 namespace gufo::cli {
 namespace {
@@ -452,6 +453,7 @@ void PrintServeHelp(std::string_view program_name,
     std::uint32_t max_context = 0;
     double memory_budget_gb = 0.0;
     float cache_prior_bias = 0.0F;
+    std::string cache_policy = "lru";
     bool ple_shelf = false;
     bool ssd_stats = false;
     std::int64_t max_tokens = -1;
@@ -517,6 +519,10 @@ void PrintServeHelp(std::string_view program_name,
         "", "--cache-prior-bias", "FLOAT",
         "Weight learned expert priors in cache retention (default: 0)",
         "Memory", &cache_prior_bias);
+    parser.AddOption(
+        "", "--cache-policy", "POLICY",
+        "Expert cache victim policy: lru, hotness, or decayed (default: lru)",
+        "Memory", &cache_policy);
 
     // Sampling Defaults
     parser.AddOption(
@@ -947,6 +953,7 @@ int RunServe(std::span<const char* const> args) {
     std::uint32_t max_context = 0;
     double memory_budget_gb = 0.0;
     float cache_prior_bias = 0.0F;
+    std::string cache_policy = "lru";
     bool ple_shelf = false;
     bool ssd_stats = false;
     std::int64_t max_tokens = -1;
@@ -1012,6 +1019,10 @@ int RunServe(std::span<const char* const> args) {
         "", "--cache-prior-bias", "FLOAT",
         "Weight learned expert priors in cache retention (default: 0)",
         "Memory", &cache_prior_bias);
+    llm_parser.AddOption(
+        "", "--cache-policy", "POLICY",
+        "Expert cache victim policy: lru, hotness, or decayed (default: lru)",
+        "Memory", &cache_policy);
     llm_parser.AddOption(
         "-n", "--max-tokens", "N",
         "Default new-token limit (default: -1 = until EOS or context full)",
@@ -1154,6 +1165,10 @@ int RunServe(std::span<const char* const> args) {
           << "Error: --cache-prior-bias must be finite and non-negative\n";
       return 2;
     }
+    if (!storage::ExpertCacheManager::ParseVictimPolicy(cache_policy)) {
+      std::cerr << "Error: --cache-policy must be lru, hotness, or decayed\n";
+      return 2;
+    }
     const auto reasoning_defaults = ResolveReasoningDefaults(
         reasoning_mode, reasoning_effort, preserve_thinking, &parse_err);
     if (!reasoning_defaults.has_value()) {
@@ -1218,6 +1233,7 @@ int RunServe(std::span<const char* const> args) {
     speculative_config.prompt_lookup = prompt_lookup;
     speculative_config.memory_budget_gb = memory_budget_gb;
     speculative_config.cache_prior_bias = cache_prior_bias;
+    speculative_config.cache_policy = cache_policy;
     speculative_config.ple_shelf = ple_shelf;
     speculative_config.ssd_stats = ssd_stats;
     print_ssd_stats = ssd_stats;

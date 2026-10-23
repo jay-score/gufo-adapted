@@ -6,8 +6,10 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "src/models/qwen38_flash_next/kernels/rocm/device_model.hpp"
@@ -28,6 +30,18 @@ public:
     kCumulativeHotness,
     kDecayedHotness,
   };
+
+  /// Canonical CLI spelling: lru, hotness, or decayed.
+  [[nodiscard]] static constexpr std::optional<VictimPolicy> ParseVictimPolicy(
+      std::string_view name) noexcept {
+    if (name == "lru")
+      return VictimPolicy::kLru;
+    if (name == "hotness")
+      return VictimPolicy::kCumulativeHotness;
+    if (name == "decayed")
+      return VictimPolicy::kDecayedHotness;
+    return std::nullopt;
+  }
 
   struct WarmupResult {
     std::uint64_t bytes_read{0};

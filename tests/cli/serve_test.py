@@ -59,6 +59,9 @@ def main():
     check(["serve", "help", "unknown"], 2, "unknown serve command")
     help_text = check(["serve", "llm", "--help"], 0, "model native context")
     assert "-1 = until EOS or context full" in help_text
+    assert "--cache-policy" in help_text
+    check(["serve", "llm", "--cache-policy", "unknown"], 2,
+          "--cache-policy must")
     assert "Path to GGUF model file (required)" in help_text
     assert "8589934592" in help_text
     assert "0 = auto, at most the disk budget and 1/8 available RAM" in help_text
