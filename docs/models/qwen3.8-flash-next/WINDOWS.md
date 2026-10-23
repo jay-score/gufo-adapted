@@ -32,7 +32,18 @@ Prefill, adjusted wall/queue/TTFT and AR decode remain within the existing
 paired gates. Snapshot cells and first MTP decode have noisy observations;
 the overall result is **inconclusive**. No speedup or complete performance
 qualification is claimed. The original observations are retained while an
-unchanged-base MTP control investigates the flagged histories.
+unchanged-base MTP control also reports moved snapshot cells on identical
+binaries. The matched API timing investigation is recorded in the
+[sync follow-up](../../WINDOWS-UPSTREAM-SYNC.md#october-23-2026-pr-350-qualification-follow-up).
+
+One retained pp2048/tg128 spot per mode uses the same target, MTP sidecar and
+toolchain. All four greedy output hashes match; both MTP runs propose 109
+and accept 58 drafts. These single spots do not qualify a speedup.
+
+| Mode | Base/head pp2048 (tok/s) | Base/head tg128 (tok/s) |
+| --- | ---: | ---: |
+| AR | 1806.60 / 1781.47 | 28.41 / 29.14 |
+| MTP | 1744.80 / 1748.52 | 39.98 / 38.99 |
 
 ### Sync first-decode control (October 21, 2026)
 
@@ -121,11 +132,26 @@ These focused Windows controls do not replace the Linux tables in
   checkpoint and serialized replay. It rejects the pre-YaRN executor marker,
   checks clean reset and exact recovery with matched prefill boundaries, and
   rejects a snapshot at factor 2.5. MTP actually drafts 14 tokens in the bounded
-  continuation. Its `--extended` run and API/cache qualification remain pending.
+  continuation. Its `--extended` run also passes AR/MTP at capacity 409,600,
+  with a checkpoint at token 262,145 and 13 actual MTP draft proposals. This
+  proves exact replay across the native boundary, not external long-context
+  answer quality.
+- Public MTP serving with `--enable-yarn --context 262145`, one session and
+  1 GiB RAM cache passes cold generation, RAM retry and durable disk restart
+  with exact response replay. Restart reuses 2,287 of 2,294 prompt tokens and
+  proposes 19/accepts 16 drafts. This API fixture checks scaled capacity and
+  disk identity; actual above-native inference is covered by the native test.
+  Above-native serving without opt-in and a no-op opt-in at 32K are rejected.
+- Selected long-context/cache API runs pass seeded outputs, interruption and
+  restart assertions in AR/MTP. The initial matched pairs preserve expected
+  cache work but fail timing gates. Later unequal-budget controls differ in
+  warm image-prefix work and cannot qualify the original profile. All failed
+  comparisons remain retained; the October 23 follow-up investigates them.
 
 Evidence is retained under `build/sync-350-2026-10-22/`, including earlier
-failed observations. These checks do not yet qualify extended-context serving
-or the full timing matrix; completion is recorded in the sync PR.
+failed observations. Correctness scope is recorded above; the full timing
+matrix remains unqualified. See the sync follow-up for current attribution
+controls and their effective cache budgets.
 
 ### Sync, October 21, 2026
 
