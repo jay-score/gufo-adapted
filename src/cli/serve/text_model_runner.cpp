@@ -1,7 +1,5 @@
 #include "src/cli/serve/text_model_runner.hpp"
 
-#include <unistd.h>
-
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -16,6 +14,7 @@
 #include "src/cli/serve/continuation_disk_store.hpp"
 #include "src/cli/serve/logging.hpp"
 #include "src/core/json.hpp"
+#include "src/core/platform/os_info.hpp"
 
 namespace gufo::server {
 
@@ -168,16 +167,12 @@ namespace {
 /// Host RAM still available, after cgroup limits. Unified-memory device
 /// allocations draw from the same RAM, so HIP's device capacity is not used.
 std::uint64_t HostAvailableBytes() {
+  std::uint64_t available = platform::AvailableMemoryBytes();
 #ifdef _WIN32
-  // No Linux CMA/cgroup accounting on Windows. This is host physical RAM,
+  // WINDOWS: Skip Linux CMA/cgroup accounting. This is host physical RAM,
   // not the WDDM device allocation budget (qualified separately).
-  return gufo_available_physical_bytes();
+  return available;
 #else
-  const long pages = sysconf(_SC_AVPHYS_PAGES);
-  const long page_size = sysconf(_SC_PAGESIZE);
-  if (pages <= 0 || page_size <= 0)
-    return 0;
-  std::uint64_t available = std::uint64_t(pages) * page_size;
   std::ifstream meminfo("/proc/meminfo");
   std::ostringstream meminfo_text;
   meminfo_text << meminfo.rdbuf();
