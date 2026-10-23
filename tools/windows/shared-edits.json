@@ -24,7 +24,7 @@
     "src/cli/serve/logging.hpp": { "reason": "Native host-memory status." },
     "src/cli/serve/serve.cpp": { "reason": "Windows signals and queue policy." },
     "src/cli/serve/text_generation_scheduler.cpp": { "reason": "Live prefill metrics." },
-    "src/cli/serve/text_model_runner.cpp": { "reason": "Windows disk-store guards." },
+    "src/cli/serve/text_model_runner.cpp": { "reason": "Windows host-RAM accounting boundary and disk-store guards." },
     "src/cli/serve/trace.cpp": { "reason": "Windows trace file creation." },
     "src/cli/serve/websocket.cpp": { "reason": "Winsock sockets and console shutdown." },
     "src/cli/serve/websocket.hpp": { "reason": "Winsock sockets and console shutdown." },

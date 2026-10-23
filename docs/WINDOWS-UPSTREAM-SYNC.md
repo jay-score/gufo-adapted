@@ -204,6 +204,62 @@ Reply with exactly the word ACK."},
 }
 ```
 
+## October 23, 2026: PR #709
+
+Status: **local Windows checks pass; hosted qualification is pending on the sync PR**.
+
+- Windows base: `4eb2aedd572be9b54125f4e49e8de04e216872a1` (PR #76 merged).
+- Previous official ancestor: `2947624b9e65f52d4b4fdd96297f39e040a0ed24`.
+- Imported official head: `3aa068b419e6272482298c1c6daccafb122764fa`.
+- Integration merge: `be07d64b63ce5ecb9eab0c2d16d80a9e48eec668`.
+- Scope: #709 only; the later upstream commits, including release changes,
+  are outside this layer.
+- Evidence: `build/sync-709-2026-10-23/` in the task worktree.
+
+| PR | Upstream change | Merge SHA |
+| --- | --- | --- |
+| [#709](https://github.com/gufo-org/gufo/pull/709) | Native OS page-size and available-memory leaf | `3aa068b419e6272482298c1c6daccafb122764fa` |
+
+### Merge review
+
+One conflict in `HostAvailableBytes()`: adopt the upstream
+`platform::AvailableMemoryBytes()` call while retaining the Windows early
+return before Linux CMA/cgroup refinements. Upstream drops `<unistd.h>`, so
+keeping the old fork helper call would also leave its declaration unavailable.
+The native leaf uses the same `GlobalMemoryStatusEx` API and result as the
+previous Windows helper. Host physical RAM remains separate from WDDM device
+headroom, and host reserve calculations are unchanged.
+
+The root CMake source-list addition merges cleanly and was reviewed. Both new
+`os_info` files remain byte-identical to official. The existing Windows-owned
+host test now checks the page size against `GetSystemInfo` and the new memory
+query against surrounding native observations, alongside its existing
+snapshot-budget and ceiling checks. No inference, n-gram or transfer code
+changes. PR #699 remains reverted and its forbidden identifiers stay absent.
+
+### Compatibility and validation
+
+| Contract | Outcome |
+| --- | --- |
+| Cached concurrent n-gram reads | Reviewed/unchanged: reopening/read flags and model paths are untouched. |
+| WDDM admission budgets | Device helper reviewed/unchanged. Host page/memory queries and reserve calculations pass native OS-oracle checks; public MTP serving honors the requested 1 GiB RAM cache. |
+| Pinned memory and transfer lifetime | Reviewed/unchanged; the bounded MTP RAM retry replays exactly with full prompt reuse. |
+| Sockets and shutdown | Native HTTP/WebSocket/console checks pass in the CPU gate; the live HIP smoke server exits cleanly. |
+| Filesystem identity, privacy and failures | Native CPU filesystem/store checks pass; legacy disk guards are retained. RAM-only startup does not populate the durable model-identity cache. |
+| GPU queue policy | Reviewed/unchanged; CPU startup-policy checks pass and native HIP serving starts successfully. |
+
+- Native Windows CPU configure/build and **16/16 CTests pass**.
+- Native HIP `gufo` builds at `be07d64b63ce`; its SHA-256 is
+  `b2df4482c6b1601f631b005841087af55115cdb255b8fb84cc2c8f9689901165`.
+- Bounded MTP RAM startup/retry passes with actual drafting and the requested
+  cache capacity; [model evidence](models/qwen3.8-flash-next/WINDOWS.md#os-info-adoption-october-23-2026).
+- Formatting checks all 620 C++ files. Documentation, dependency inventory,
+  maintained-difference and reverted-identifier checks pass; official ancestry
+  is preserved.
+- Linux/repository and hosted Windows checks remain pending until the sync
+  PR completes. This platform refactor does not refresh numerical sweeps or
+  inference benchmarks; the previous timing limits remain visible.
+
 ## October 23, 2026: PR #350 qualification follow-up
 
 Status: **no confirmed YaRN regression after matched controls; timing remains inconclusive**.

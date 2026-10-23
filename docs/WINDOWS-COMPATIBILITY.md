@@ -37,6 +37,15 @@ Record imported PRs, revision identities and outcomes in the
   exhausted budgets, partial/failing queries, overflow and null outputs.
   Requires Windows HIP hardware; actual multi-GPU switching remains unqualified.
 
+  Host snapshot budgets separately use
+  [`AvailableMemoryBytes`](../src/core/platform/os_info.cpp), which reports
+  native available physical RAM on Windows. Preserve the Windows boundary
+  that skips Linux CMA/cgroup refinements and the existing host reserve.
+  [`win32_host_test`](../tests/platform/win32_host_test.cpp) checks page size
+  against `GetSystemInfo`, available RAM against surrounding native queries,
+  and the snapshot budget/ceiling derived from those values. This does not
+  replace WDDM device-admission checks.
+
 - [ ] **Pinned memory and transfer lifetime.** Backing/staging allocations stay
   coherent, accounted and alive while pinned or used by asynchronous transfers.
   Drain transfers before releasing buffers or reusing stream leases; preserve

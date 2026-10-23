@@ -16,6 +16,7 @@
 #include "src/cli/serve/text_model_runner.hpp"
 #include "src/core/diagnostics/system_inventory.h"
 #include "src/core/platform/cache_directory.hpp"
+#include "src/core/platform/os_info.hpp"
 
 namespace {
 
@@ -27,6 +28,10 @@ void TestHostMemoryAndInventory() {
   assert(inventory.memory.total_bytes == memory.ullTotalPhys);
   assert(inventory.memory.available_bytes > 0);
   assert(inventory.memory.available_bytes <= inventory.memory.total_bytes);
+  SYSTEM_INFO system{};
+  GetSystemInfo(&system);
+  assert(system.dwPageSize > 0);
+  assert(gufo::platform::PageSizeBytes() == system.dwPageSize);
   assert(inventory.memory.free_bytes == 0);
   assert(inventory.memory.memory_type == "unknown");
   assert(!inventory.memory.is_unified);
@@ -68,6 +73,7 @@ void TestHostMemoryAndInventory() {
   // Compare live admission queries against surrounding OS observations.
   // Available RAM is volatile; allow 128 MiB of concurrent host activity.
   const auto before = gufo_available_physical_bytes();
+  const auto platform_available = gufo::platform::AvailableMemoryBytes();
   const auto budget = gufo::server::HostSnapshotBudgetBytes();
   const auto ceiling = gufo::server::HostSnapshotCeilingBytes();
   const auto after = gufo_available_physical_bytes();
@@ -76,6 +82,8 @@ void TestHostMemoryAndInventory() {
                          ? std::min(before, after) - tolerance
                          : 0;
   const auto upper = std::max(before, after) + tolerance;
+  assert(platform_available > 0 && platform_available <= memory.ullTotalPhys);
+  assert(platform_available >= lower && platform_available <= upper);
   assert(budget >= lower / 2 && budget <= upper / 2);
   constexpr auto headroom = gufo::server::kHostSnapshotHeadroomBytes;
   assert(ceiling >= (lower > headroom ? lower - headroom : 0));
