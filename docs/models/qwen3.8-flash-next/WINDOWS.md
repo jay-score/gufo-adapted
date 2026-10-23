@@ -18,6 +18,44 @@ code the Windows build does not contain:
 
 ## Benchmarks
 
+### YaRN matched follow-up (October 23, 2026)
+
+The retained base/candidate executables and all 143 runtime files still match
+the October 22 hashes. Fresh unchanged-baseline controls verify effective
+8 GiB RAM caches at startup and restart. AR restore observations become
+inconclusive; three MTP total-duration cells initially remain flagged despite
+matching decode time and token/draft work.
+
+A same-path ABBA control stages the original binaries at one executable path,
+retaining each arm's SHA-256. The repeated warm thinking/tool request has the
+same output, zero prefill tokens, eight completion tokens and seven/five
+proposed/accepted drafts:
+
+| Pair/order | Baseline wall (ms) | Candidate wall (ms) |
+| --- | ---: | ---: |
+| Base, then candidate | 192.83 | 170.33 |
+| Candidate, then base | 193.48 | 178.76 |
+
+The unchanged baseline thus reproduces the extra duration previously seen on
+the candidate. The standalone ABBA comparison still flags one legacy-tool
+snapshot phase: its baseline samples are 12.88/13.60 ms and candidate samples
+20.10/25.64 ms. The original, equally budgeted baseline records 12.30/30.30 ms
+for that same phase. Every observation is retained.
+
+`verified-builds.py` combines all five valid pairs through the upstream
+comparison/qualification functions after validating build hashes, runtime
+files, harness/settings and effective budgets. It reports 577 passed timing
+cells, 283 inconclusive, no confirmed slowdown and no output/work changes.
+Executable-path differences are recorded explicitly; raw reports are unchanged.
+Clamped and instrumented runs do not enter this assessment. Original failed
+results remain available alongside the controls. No speedup or full Windows
+performance pass is claimed, and no inference workaround is retained.
+
+Evidence: `build/sync-350-2026-10-23/`, especially `same-path-arms.json`,
+`same-path-comparison.json`, `verified-builds.py` and
+`verified-builds-comparison.json`. The next upstream layer may proceed while
+these timing limits remain visible.
+
 ### YaRN adoption control (October 22, 2026)
 
 Windows base `d10a852f`, candidate production code including `2354ba89`,
@@ -31,9 +69,9 @@ measurements are retained in `build/sync-350-2026-10-22/cold-control-1/`.
 Prefill, adjusted wall/queue/TTFT and AR decode remain within the existing
 paired gates. Snapshot cells and first MTP decode have noisy observations;
 the overall result is **inconclusive**. No speedup or complete performance
-qualification is claimed. The original observations are retained while an
-unchanged-base MTP control also reports moved snapshot cells on identical
-binaries. The matched API timing investigation is recorded in the
+qualification is claimed. An unchanged-base MTP control also reports moved
+snapshot cells on identical binaries; every observation is retained.
+The matched API timing investigation is recorded in the
 [sync follow-up](../../WINDOWS-UPSTREAM-SYNC.md#october-23-2026-pr-350-qualification-follow-up).
 
 One retained pp2048/tg128 spot per mode uses the same target, MTP sidecar and

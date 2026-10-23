@@ -206,7 +206,7 @@ Reply with exactly the word ACK."},
 
 ## October 23, 2026: PR #350 qualification follow-up
 
-Status: **Windows timing remains unqualified; focused investigation continues**.
+Status: **no confirmed YaRN regression after matched controls; timing remains inconclusive**.
 PR #75 merged as `a63f2b4e597a2ece22f817ec6164ff96149abdfe` while local
 qualification was still running. The final October 22 record is retained in
 `build/sync-350-2026-10-22/FINAL-VALIDATION.md`; follow-up commands, hashes and
@@ -225,8 +225,24 @@ inconclusive, while three MTP total-duration cells remain outside the gate.
 Decode time and actual token/draft work agree. An instrumented completion probe
 and a byte-identical candidate under a different filename vary in latency;
 these are diagnostic controls, not qualified fixes. A same-path baseline/head
-ABBA control is in progress. No inference change or relaxed tolerance is
-retained. PR #699 remains reverted.
+ABBA control also reproduces the extra duration on the unchanged baseline.
+Its standalone comparison flags one snapshot phase; the retained baseline
+already varies from 12.30 to 30.30 ms in that exact history.
+
+The final assessment retains all five valid matched MTP pairs, verifies their
+build roles by SHA-256 across executable paths, and verifies all 143 runtime
+files against the original control. It uses the unchanged upstream
+`compare_runs` and `qualify` functions: **577 timing cells pass, 283 remain
+inconclusive, none is confirmed slower; output and work changes are zero**.
+Clamped and instrumented runs are excluded from qualification and retained
+separately. Raw reports are unmodified. Original failed comparisons remain
+failed observations; the assessment adds the verified controls instead of
+discarding them or averaging requests. See the
+[model measurements](models/qwen3.8-flash-next/WINDOWS.md#yarn-matched-follow-up-october-23-2026).
+
+There is no confirmed #350 blocker requiring deferral, and no inference change
+or relaxed tolerance is retained. A complete Windows performance pass remains
+unclaimed. PR #699 remains reverted.
 
 The Windows functional comparison wrapper now rejects clamped requests and
 different effective cache budgets before invoking the upstream comparator.
