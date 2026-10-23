@@ -3022,6 +3022,7 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
             .memory_budget_gb = speculative_config.memory_budget_gb,
             .ssd_stats = speculative_config.ssd_stats,
             .cache_prior_bias = speculative_config.cache_prior_bias,
+            .cache_policy = speculative_config.cache_policy,
             .ple_shelf = speculative_config.ple_shelf,
             .mtp_model_path =
                 speculative_config.backend == TextSpeculativeBackend::kMtp

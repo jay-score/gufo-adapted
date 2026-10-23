@@ -26,6 +26,7 @@
 #include "src/models/qwen38_flash_next/kernels/rocm/moe_pending_state.hpp"
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
 #include "src/models/qwen38_flash_next/ngram.hpp"
+#include "src/storage/expert_cache_manager.hpp"
 
 namespace gufo::storage {
 class ExpertCacheManager;
@@ -213,10 +214,11 @@ public:
   [[nodiscard]] static std::unique_ptr<Executor> Create(
       const DeviceModel& model, NgramTable* ngram, Options options,
       std::string* error_msg = nullptr);
-  [[nodiscard]] bool EnableExpertCache(std::size_t budget_bytes,
-                                       gufo::storage::SsdStats* stats,
-                                       float cache_prior_bias,
-                                       std::string* error_msg);
+  [[nodiscard]] bool EnableExpertCache(
+      std::size_t budget_bytes, gufo::storage::SsdStats* stats,
+      float cache_prior_bias,
+      gufo::storage::ExpertCacheManager::VictimPolicy victim_policy,
+      std::string* error_msg);
   [[nodiscard]] bool PrefetchCandidates(
       std::span<const std::int32_t> candidate_tokens,
       std::string* error_msg) const;

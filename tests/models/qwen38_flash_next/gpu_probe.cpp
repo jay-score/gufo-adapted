@@ -270,7 +270,9 @@ int main(int argc, char** argv) {
     return 1;
   }
   if (expert_cache_bytes != 0 &&
-      !executor->EnableExpertCache(expert_cache_bytes, nullptr, 0.0F, &error)) {
+      !executor->EnableExpertCache(
+          expert_cache_bytes, nullptr, 0.0F,
+          gufo::storage::ExpertCacheManager::VictimPolicy::kLru, &error)) {
     std::fprintf(stderr, "expert cache enable failed: %s\n", error.c_str());
     return 1;
   }

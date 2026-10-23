@@ -21,6 +21,7 @@ void TestDefaultOptions() {
   assert(!opt->verbose);
   assert(opt->draft_tokens == 7);
   assert(opt->min_draft_tokens == 1);
+  assert(opt->cache_policy == "lru");
 }
 
 void TestExplicitFlags() {
@@ -47,6 +48,21 @@ void TestFlashMtpFlags() {
   assert(opt->speculative_backend == "mtp");
   assert(opt->draft_tokens == 3);
   assert(opt->sampling.temperature == 0.7F && opt->sampling.seed == 1);
+}
+
+void TestCachePolicyFlag() {
+  for (const char* policy : {"lru", "hotness", "decayed"}) {
+    const std::array<const char*, 3> args = {"--cache-policy", policy,
+                                             "Prompt"};
+    const auto opt = gufo::cli::ParsePromptOptions(args);
+    assert(opt.has_value());
+    assert(opt->cache_policy == policy);
+  }
+  std::string err;
+  const std::array<const char*, 3> invalid = {"--cache-policy", "unknown",
+                                              "Prompt"};
+  assert(!gufo::cli::ParsePromptOptions(invalid, &err).has_value());
+  assert(err.find("--cache-policy") != std::string::npos);
 }
 
 void TestImageFlags() {
@@ -171,6 +187,7 @@ int main() {
   TestExplicitFlags();
   TestSamplingAndReasoningFlags();
   TestFlashMtpFlags();
+  TestCachePolicyFlag();
   TestImageFlags();
   TestInvalidFlags();
   std::cout << "All prompt CLI tests passed.\n";

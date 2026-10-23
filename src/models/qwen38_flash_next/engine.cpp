@@ -90,6 +90,12 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     AssignError(error_msg, "cache prior bias must be finite and non-negative");
     return nullptr;
   }
+  const auto cache_policy =
+      storage::ExpertCacheManager::ParseVictimPolicy(options.cache_policy);
+  if (!cache_policy.has_value()) {
+    AssignError(error_msg, "cache policy must be lru, hotness, or decayed");
+    return nullptr;
+  }
   if (options.max_draft_tokens == 0) {
     AssignError(error_msg, "draft token limit must be positive");
     return nullptr;
@@ -270,9 +276,9 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     }
     m->memory_budget_ = plan;
     std::clog << "memory_budget_plan\n" << plan.Format();
-    if (!m->executor_->EnableExpertCache(plan.expert_cache_bytes,
-                                         m->ssd_stats_.get(),
-                                         options.cache_prior_bias, error_msg))
+    if (!m->executor_->EnableExpertCache(
+            plan.expert_cache_bytes, m->ssd_stats_.get(),
+            options.cache_prior_bias, *cache_policy, error_msg))
       return nullptr;
   }
   if (m->ssd_stats_ != nullptr) {

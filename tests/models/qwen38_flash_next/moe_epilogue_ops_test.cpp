@@ -213,6 +213,33 @@ void CheckDeskRoomSlotBoundary() {
   }
 }
 
+void CheckDeskRoomPrefetchPlan() {
+  using gufo::models::qwen38_flash_next::rocm::PlanDeskRoomPrefetch;
+  constexpr std::uint32_t used = 10;
+  const auto expect = [](std::uint32_t room_slots, std::uint32_t room_experts,
+                         std::uint32_t prefetch, std::uint32_t compute,
+                         std::uint32_t passes) {
+    const auto plan = PlanDeskRoomPrefetch(room_slots, room_experts, used);
+    if (plan.prefetch_slots != prefetch || plan.compute_slots != compute ||
+        plan.passes != passes)
+      throw std::runtime_error("Desk/Room prefetch plan changed");
+  };
+
+  expect(102, 272, 11, 91, 3);
+  expect(102, 86, 16, 86, 1);
+  expect(102, 94, 8, 94, 1);
+  expect(102, 95, 16, 86, 2);
+  expect(102, 204, 16, 86, 3);
+  expect(102, 258, 16, 86, 3);
+  expect(102, 259, 15, 87, 3);
+  expect(102, 282, 8, 94, 3);
+  expect(102, 283, 16, 86, 4);
+  expect(24, 272, 8, 16, 17);
+  expect(20, 272, 6, 14, 20);
+  expect(19, 272, 0, 19, 15);
+  expect(102, 0, 0, 102, 0);
+}
+
 void CheckRoutedF16FormatMatrix() {
   using gufo::core::GgmlType;
   using gufo::models::qwen38_flash_next::rocm::UsesRoutedF16ExpertFormats;
@@ -237,6 +264,7 @@ void CheckRoutedF16FormatMatrix() {
 int main() {
   try {
     CheckDeskRoomSlotBoundary();
+    CheckDeskRoomPrefetchPlan();
     CheckRoutedF16FormatMatrix();
     RunDeferredWindowEpilogue();
     constexpr std::size_t kExpert =

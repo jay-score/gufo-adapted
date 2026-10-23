@@ -63,6 +63,8 @@ struct ModelOptions {
   bool ssd_stats{false};
   /// Weight learned expert priors during cache victim selection (default off).
   float cache_prior_bias{0.0F};
+  /// Expert-cache victim policy: lru, hotness, or decayed (default lru).
+  std::string cache_policy{"lru"};
   /// Opt into a 128 MiB compressed-row PLE cache; off preserves the legacy
   /// 8 MiB row cache.
   bool ple_shelf{false};

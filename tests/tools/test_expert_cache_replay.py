@@ -12,6 +12,11 @@ sys.modules[SPEC.name] = REPLAY
 SPEC.loader.exec_module(REPLAY)
 
 
+def _event(ids, phase="prefill", layer=0):
+    return {"layer": layer, "phase": phase, "rows": len(ids), "used": 1,
+            "windows": [len(ids)], "ids": ids}
+
+
 class ExpertCacheReplayTest(unittest.TestCase):
     def test_load_and_replay_trace_and_greedy_windows(self):
         content = (
@@ -100,6 +105,79 @@ class ExpertCacheReplayTest(unittest.TestCase):
         self.assertEqual(result["room_slots"], 2)
         self.assertGreater(result["desk_coverage_pct"], 0)
         self.assertLessEqual(result["peak_room_experts"], 2)
+
+    def test_prefill_reset_hotness_is_reset_only(self):
+        events = [_event([0] * 10), _event([1]), _event([2], "decode")]
+        cumulative = REPLAY.replay(events, 2, "hotness")
+        reset = REPLAY.replay(events, 2, "prefill_reset_hotness")
+        reset_small_decay = REPLAY.replay(
+            events, 2, "prefill_reset_hotness", hotness_decay_tokens=1)
+        self.assertEqual(cumulative.resident_experts[0], {0, 2})
+        self.assertEqual(reset.resident_experts[0], {1, 2})
+        self.assertEqual(reset.resident_experts, reset_small_decay.resident_experts)
+
+    def test_flashmoe_frequency_reset_changes_victim(self):
+        events = [_event([0] * 10), _event([1]), _event([2], "decode")]
+        full = REPLAY.replay(events, 2, "flashmoe_norm",
+                             flashmoe_alpha=0.2, reset_frequency=False)
+        reset = REPLAY.replay(events, 2, "flashmoe_norm",
+                              flashmoe_alpha=0.2, reset_frequency=True)
+        self.assertEqual(full.resident_experts[0], {0, 2})
+        self.assertEqual(reset.resident_experts[0], {1, 2})
+
+    def test_flashmoe_retention_trades_recency_and_frequency(self):
+        recent = REPLAY._flashmoe_retention(9, 1, 10, 10, 0.2)
+        frequent = REPLAY._flashmoe_retention(0, 10, 10, 10, 0.2)
+        recent_high = REPLAY._flashmoe_retention(9, 1, 10, 10, 0.8)
+        frequent_high = REPLAY._flashmoe_retention(0, 10, 10, 10, 0.8)
+        self.assertLess(recent, frequent)
+        self.assertGreater(recent_high, frequent_high)
+        self.assertEqual(REPLAY._flashmoe_retention(None, 10, 10, 10, 0.2), 0.8)
+
+    def test_belady_uses_furthest_next_use(self):
+        events = [_event([2]), _event([3]), _event([2]),
+                  _event([4]), _event([3])]
+        lru = REPLAY.replay(events, 2, "lru")
+        belady = REPLAY.replay(events, 2, "belady")
+        self.assertEqual((lru.hits, lru.misses), (1, 4))
+        self.assertEqual((belady.hits, belady.misses), (2, 3))
+
+    def test_five_step_evicted_refetch_overall_and_decode(self):
+        events = [_event([2]), _event([3]),
+                  _event([4], "decode"), _event([2], "decode")]
+        result = REPLAY.replay(events, 2, "lru")
+        self.assertEqual((result.prefill_requests, result.decode_requests),
+                         (2, 2))
+        self.assertEqual((result.prefill_misses, result.decode_misses), (2, 2))
+        self.assertEqual(result.eviction_count, 4)
+        self.assertEqual(result.decode_eviction_count, 2)
+        self.assertEqual(result.refetch_5, 1)
+        self.assertEqual(result.refetch_5_pct, 25.0)
+        self.assertEqual(result.decode_refetch_5, 1)
+        self.assertEqual(result.decode_refetch_5_pct, 50.0)
+
+    def test_five_step_refetch_boundary(self):
+        within = REPLAY.ReplayStats(
+            evictions=[REPLAY.EvictionRecord(0, 5, 0, "decode")])
+        REPLAY._score_evicted_refetches(within, {
+            0: [frozenset({0}), frozenset(), frozenset(), frozenset(),
+                frozenset(), frozenset({5})],
+        })
+        outside = REPLAY.ReplayStats(
+            evictions=[REPLAY.EvictionRecord(0, 5, 0, "decode")])
+        REPLAY._score_evicted_refetches(outside, {
+            0: [frozenset({0}), frozenset(), frozenset(), frozenset(),
+                frozenset(), frozenset(), frozenset({5})],
+        })
+        self.assertEqual((within.refetch_5, within.decode_refetch_5), (1, 1))
+        self.assertEqual((outside.refetch_5, outside.decode_refetch_5), (0, 0))
+
+    def test_replay_rejects_unknown_policy_and_alpha(self):
+        events = [_event([0])]
+        with self.assertRaisesRegex(ValueError, "unknown policy"):
+            REPLAY.replay(events, 2, "bogus")
+        with self.assertRaisesRegex(ValueError, "flashmoe_alpha"):
+            REPLAY.replay(events, 2, "flashmoe_norm", flashmoe_alpha=1.1)
 
 
 if __name__ == "__main__":

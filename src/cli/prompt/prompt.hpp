@@ -43,6 +43,7 @@ struct PromptOptions {
   bool prompt_lookup{false};
   double memory_budget_gb{0.0};
   float cache_prior_bias{0.0F};
+  std::string cache_policy{"lru"};
   bool ple_shelf{false};
   bool ssd_stats{false};
 };
