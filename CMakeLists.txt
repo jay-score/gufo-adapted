@@ -49,9 +49,11 @@ set(CMAKE_HIP_ARCHITECTURES gfx1151 CACHE STRING "HIP architecture")
 if (ENGINE_ENABLE_HIP AND NOT CMAKE_HIP_ARCHITECTURES STREQUAL "gfx1151")
   message(FATAL_ERROR "Gufo kernels require CMAKE_HIP_ARCHITECTURES=gfx1151")
 endif()
-# Standard ROCm installations; custom prefixes use CMAKE_PREFIX_PATH.
+# Standard ROCm installations; custom prefixes use CMAKE_PREFIX_PATH. As a
+# system prefix /opt/rocm is searched after CMAKE_PREFIX_PATH in the
+# environment, so a development shell's ROCm wins over the host's.
 if (EXISTS /opt/rocm)
-  list(APPEND CMAKE_PREFIX_PATH /opt/rocm)
+  list(APPEND CMAKE_SYSTEM_PREFIX_PATH /opt/rocm)
 endif()
 
 if (ENGINE_ENABLE_HIP)
@@ -60,6 +62,7 @@ if (ENGINE_ENABLE_HIP)
   find_package(hipblas REQUIRED)
   find_package(hipblaslt REQUIRED)
   find_package(rocblas REQUIRED)
+  find_package(rocm-core CONFIG QUIET)
   find_path(HIPCUB_INCLUDE_DIR hipcub/hipcub.hpp REQUIRED)
   find_path(ROCPRIM_INCLUDE_DIR rocprim/rocprim.hpp REQUIRED)
   find_path(ROCWMMA_INCLUDE_DIR rocwmma/rocwmma.hpp REQUIRED)
@@ -142,6 +145,10 @@ if (ENGINE_ENABLE_HIP)
   target_sources(gufo_diagnostics PRIVATE
     src/core/hip/allocation_benchmark.hip)
   target_compile_definitions(gufo_diagnostics PRIVATE ENGINE_ENABLE_HIP=1)
+  if (rocm-core_FOUND)
+    target_compile_definitions(gufo_diagnostics PRIVATE
+      GUFO_ROCM_VERSION="${rocm-core_VERSION}")
+  endif()
   target_link_libraries(gufo_diagnostics PRIVATE hip::host roc::hipblas roc::rocblas)
 endif()
 
