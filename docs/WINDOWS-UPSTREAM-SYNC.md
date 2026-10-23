@@ -122,6 +122,20 @@ For the next sync, copy the shape of the latest entry and replace its evidence.
 Use **validated**, **reviewed/unchanged**, or **pending (reason)** per contract;
 do not count missing models, excluded disk persistence or noisy timings as passes.
 
+For Windows functional timing comparisons, use the budget preflight wrapper:
+
+```powershell
+python tools/windows/compare-functional.py --pair BASE_RUN CANDIDATE_RUN --output NEW_COMPARISON.json
+```
+
+It delegates to the upstream functional comparator with the same per-request
+gates and accepts its repeated `--pair` and `--control` arguments. Before
+comparing timings, it reads both server startup logs in every run and rejects
+clamped explicit RAM requests or different effective RAM, staging or disk
+capacities. Identical launch arguments alone do not establish matched memory
+budgets. Keep rejected runs as evidence; do not use them to clear earlier
+matched failures.
+
 ### Reproduce the first-request control
 
 Finish builds first and stop nothing you do not own. Run
@@ -190,9 +204,56 @@ Reply with exactly the word ACK."},
 }
 ```
 
-## October 22, 2026: PR #350 candidate
+## October 23, 2026: PR #350 qualification follow-up
 
-Status: **unqualified candidate; timing controls and extended-context/API checks are in progress**.
+Status: **no confirmed YaRN regression after matched controls; timing remains inconclusive**.
+PR #75 merged as `a63f2b4e597a2ece22f817ec6164ff96149abdfe` while local
+qualification was still running. The final October 22 record is retained in
+`build/sync-350-2026-10-22/FINAL-VALIDATION.md`; follow-up commands, hashes and
+per-request results are in `build/sync-350-2026-10-23/`.
+
+The original two API pairs per mode used equal effective 8 GiB RAM budgets.
+They preserve outputs and cache/prefill work, but fail two AR timing cells and
+seven MTP cells. Later October 22 controls had unequal effective budgets as
+host memory availability changed. One MTP pair consequently differs in warm
+image-prefix reuse (13/5 candidate prefill tokens versus zero on baseline).
+Those controls cannot clear the original matched failures.
+
+On October 23, the retained executable hashes still match. Fresh baseline
+controls verify the full 8 GiB at startup and restart: AR restore timing becomes
+inconclusive, while three MTP total-duration cells remain outside the gate.
+Decode time and actual token/draft work agree. An instrumented completion probe
+and a byte-identical candidate under a different filename vary in latency;
+these are diagnostic controls, not qualified fixes. A same-path baseline/head
+ABBA control also reproduces the extra duration on the unchanged baseline.
+Its standalone comparison flags one snapshot phase; the retained baseline
+already varies from 12.30 to 30.30 ms in that exact history.
+
+The final assessment retains all five valid matched MTP pairs, verifies their
+build roles by SHA-256 across executable paths, and verifies all 143 runtime
+files against the original control. It uses the unchanged upstream
+`compare_runs` and `qualify` functions: **577 timing cells pass, 283 remain
+inconclusive, none is confirmed slower; output and work changes are zero**.
+Clamped and instrumented runs are excluded from qualification and retained
+separately. Raw reports are unmodified. Original failed comparisons remain
+failed observations; the assessment adds the verified controls instead of
+discarding them or averaging requests. See the
+[model measurements](models/qwen3.8-flash-next/WINDOWS.md#yarn-matched-follow-up-october-23-2026).
+
+There is no confirmed #350 blocker requiring deferral, and no inference change
+or relaxed tolerance is retained. A complete Windows performance pass remains
+unclaimed. PR #699 remains reverted.
+
+The Windows functional comparison wrapper now rejects clamped requests and
+different effective cache budgets before invoking the upstream comparator.
+Its native-host unit checks also cover restart clamping and staging/disk
+capacity differences. It preserves the original per-request 5% and 3 ms gates
+and retains rejected evidence.
+
+## October 22, 2026: PR #350
+
+Status: **merged; correctness evidence completed, Windows timing unqualified**.
+See the October 23 follow-up above for the latest investigation status.
 
 - Windows base: `d10a852f0f094d926128ecf2e9dd112cae0c4a8e` (PR #74 merged).
 - Previous official ancestor: `53ebb51ed0c0b24dbe7c1e35dce6c97d82740bfe`.
@@ -230,10 +291,10 @@ format changes from `QFNSNAP5` to `QFNSNAP6`; the outer session version stays 18
 | Contract | Outcome |
 | --- | --- |
 | Cached concurrent n-gram reads | Windows reopening/read flags unchanged; native n-gram checks pass. Fresh-process inference timing remains inconclusive pending controls. |
-| WDDM admission budgets | Helper unchanged; scaled-context allocation/admission still needs the extended-context run. |
-| Pinned memory and transfer lifetime | Native snapshot-copy operator and AR/MTP 4K cross-slot component/continuation checks pass. Extended-context capture remains pending. |
+| WDDM admission budgets | Helper unchanged; native 409,600-capacity AR/MTP fixtures and public 262,145-capacity MTP serving pass without weakening admission. |
+| Pinned memory and transfer lifetime | Native snapshot-copy operator, AR/MTP 4K cross-slot checks and above-native YaRN checkpoint replay pass. |
 | Sockets and shutdown | Implementation unchanged; bounded native HTTP/WebSocket and real console-shutdown checks pass. |
-| Filesystem identity, privacy and failures | Native implementation checks pass; new model payload/factor compatibility passes. API disk restart remains pending. |
+| Filesystem identity, privacy and failures | Native implementation and model payload/factor compatibility checks pass. Scaled MTP API disk restart passes exact response replay and actual drafting. |
 | GPU queue policy | Boundary unchanged; bounded native startup policy checks pass. |
 
 Completed local checks and current limits:
@@ -253,10 +314,16 @@ Completed local checks and current limits:
 - First-prompt control: correctness passes in all eight fresh processes;
   snapshot timing and first MTP decode have noisy cells. Overall timing is
   **inconclusive**, not passed (`cold-control-1/`). An unchanged-base MTP
-  control is in progress for the flagged histories.
-- Standard benchmark, extended-context execution, API continuation/cache checks
-  and hosted Linux/Windows checks remain pending. This candidate is not ready
-  to merge until the sync PR's qualification record is complete.
+  control also reports moved snapshot cells on identical binaries.
+- Standard AR/MTP pp2048/tg128 spots, extended native YaRN replay and public
+  scaled MTP startup/RAM retry/disk restart pass. See the model sidecar for
+  measurements and scope. Both CLI opt-in refusal checks pass.
+- All 14 selected API executions pass their own correctness assertions, but
+  the original matched timing failures and later unequal-budget cache-work
+  failure remain retained. They do not establish a performance pass.
+- Six executed hosted Linux/repository/Windows CPU gates pass on `5d60b5bc`;
+  skipped GPU/functional/report jobs are not counted as passes. No complete
+  Linux GPU/model or Windows performance qualification is claimed.
 
 ## October 22, 2026: PR #702
 

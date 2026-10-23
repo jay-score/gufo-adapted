@@ -62,7 +62,7 @@ jobs:
         run: ./tools/windows/diff-guard.ps1
 
       - name: Run sync tool tests
-        run: python -m unittest tests/tools/sync_tools_test.py tests/tools/first_prompt_control_test.py -v
+        run: python -m unittest tests/tools/sync_tools_test.py tests/tools/first_prompt_control_test.py tests/tools/win32_functional_budget_test.py -v
 
   installer:
     name: Installer checks
