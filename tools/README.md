@@ -32,6 +32,23 @@ Functional and regression tests live in [tests/functional/](../tests/functional/
 including the OpenAI SDK suites and interrupted-chat/disk replay. Use its runner
 for API changes.
 
+## Flash-Next expert-cache replay
+
+Set `GUFO_EXPERT_ROUTE_TRACE` to a writable JSONL path before loading a
+budgeted Flash-Next model to record each streamed-MoE resolve window. Compare
+the trace's current windows and greedy row packing with LRU, cumulative route
+hotness, and prefill-reset/decayed hotness:
+
+```sh
+python tools/bench/expert_cache_replay.py build/routes.jsonl --room-slots 128
+```
+
+The optional Desk/Room line is an oracle placement/pressure estimate. Replay
+models demand routes and future-use hints, but not asynchronous prefetch
+completion, speculative hotness updates, token-prior prediction, SSD timing, or
+HIP execution; use the runtime `SsdStats` report and end-to-end runs to decide
+policy changes.
+
 ## Qwen27B
 
 `qwen27b/check.py` owns the focused checks (`fast`, `kernels`, `model`, `serving`).
