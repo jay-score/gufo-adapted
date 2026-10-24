@@ -62,6 +62,9 @@ struct ModelOptions {
   /// Maximum proposals per cycle; acceptance history selects the length.
   std::uint32_t max_draft_tokens = kMaxMtpDraftTokens;
   std::string vision_model_path;
+  /// Let repeated committed text fill remaining MTP draft slots (default on;
+  /// the prompt CLI exposes it as an opt-in flag).
+  bool prompt_lookup{true};
   /// Fixed serving capacity used by the calibrated MTP cost model. Keeping
   /// it independent of scheduler timing preserves seeded request replay.
   std::uint32_t decode_concurrency = 1;

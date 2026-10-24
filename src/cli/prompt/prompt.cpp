@@ -178,6 +178,10 @@ static void RegisterTextOptions(ArgParser& parser, PromptOptions& opt,
   parser.AddOption("", "--mtp-model", "PATH",
                    "Path to quantized Qwen MTP draft head GGUF file",
                    "Speculative", &opt.mtp_model_path);
+  parser.AddFlag(
+      "", "--prompt-lookup",
+      "Allow repeated committed text to fill remaining MTP draft slots",
+      "Speculative", &opt.prompt_lookup);
   parser.AddCustomOption(
       "-d", "--draft-tokens", "N",
       "Maximum speculative draft tokens evaluated per step (default: 7)",
@@ -693,7 +697,8 @@ std::shared_ptr<models::qwen38_flash_next::Model> LoadFlashNextModel(
        .mtp_model_path =
            opt.speculative_backend == "mtp" ? opt.mtp_model_path : "",
        .max_draft_tokens = opt.draft_tokens,
-       .vision_model_path = opt.vision_model_path},
+       .vision_model_path = opt.vision_model_path,
+       .prompt_lookup = opt.prompt_lookup},
       &error);
   PrintModelLoadTime(load_start, model != nullptr);
   if (!model)
@@ -714,10 +719,15 @@ int GenerateFlashNextResponse(const PromptOptions& opt,
   }
   const std::vector<std::int32_t> input(prompt.begin(), prompt.end());
   std::string error;
+  const auto prefill_start = std::chrono::steady_clock::now();
   if (!session.Sync(input, &error)) {
     std::cerr << "Flash-Next prefill failed: " << error << '\n';
     return 1;
   }
+  const double prefill_seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                    prefill_start)
+          .count();
   sampling::SamplerState sampler(opt.sampling, prompt);
   std::vector<tokenization::TokenId> generated;
   const auto stats_before = session.Statistics();
@@ -740,12 +750,16 @@ int GenerateFlashNextResponse(const PromptOptions& opt,
       break;
   }
   std::cout << '\n';
-  if (opt.verbose) {
-    const double seconds =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
-            .count();
+  const double seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
+          .count();
+  if (opt.verbose || opt.ssd_stats) {
+    std::cerr << "Prefill " << prompt.size() << " tokens in " << prefill_seconds
+              << " s (" << prompt.size() / prefill_seconds << " tok/s)\n";
     std::cerr << "Generated " << generated.size() << " tokens ("
               << generated.size() / seconds << " tok/s)\n";
+  }
+  if (opt.verbose) {
     const auto& stats = session.Statistics();
     if (stats.cycles != stats_before.cycles) {
       std::cerr << "[Speculative]: cycles="
@@ -757,6 +771,11 @@ int GenerateFlashNextResponse(const PromptOptions& opt,
                 << stats.lookup_accepted - stats_before.lookup_accepted << '\n';
     }
     PrintTokenTrace(generated);
+  }
+  if (opt.ssd_stats) {
+    const auto report = model.SsdStatsReport();
+    if (!report.empty())
+      std::cerr << report;
   }
   return 0;
 }

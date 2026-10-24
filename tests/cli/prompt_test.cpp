@@ -60,6 +60,10 @@ void TestFlashMtpFlags() {
   assert(opt->speculative_backend == "mtp");
   assert(opt->draft_tokens == 3);
   assert(opt->sampling.temperature == 0.7F && opt->sampling.seed == 1);
+  assert(!opt->prompt_lookup);
+  const char* lookup_args[] = {"--prompt-lookup", "Prompt"};
+  const auto with_lookup = gufo::cli::ParsePromptOptions(lookup_args);
+  assert(with_lookup.has_value() && with_lookup->prompt_lookup);
 }
 
 void TestCachePolicyFlag() {
