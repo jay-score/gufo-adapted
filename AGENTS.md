@@ -1,10 +1,10 @@
 # AGENTS.md
 
-## Platform and build
+## Platform and Build (Linux Primary Target — AMD Strix Halo `gfx1151`)
 
-Production targets Linux x86-64 AMD Strix Halo (`gfx1151`) only. CMake owns
-compiler flags, dependencies and installation; Nix supplies the pinned toolchain.
-Linux source-build prerequisites are in [README.md](README.md#build-from-source).
+The primary development and runtime target is **Linux x86_64 on AMD Strix Halo (`gfx1151`)** with unified memory (54–60 GiB budget) and NVMe SSD streaming. Preserve cross-platform (`_WIN32` / `compat/win32`) compilation compatibility in shared code, but optimize and validate natively on Linux.
+
+CMake owns compiler flags, dependencies, and installation; Nix supplies the pinned Linux toolchain (including the patched ROCr runtime).
 
 ```sh
 nix build                              # production package, no tests/tools
@@ -12,89 +12,65 @@ nix build                              # production package, no tests/tools
 nix build .#checks.x86_64-linux.pr      # bounded hosted CPU/repository checks
 nix develop                            # GPU development and reference tools
 
-# Same production build without Nix, with the documented dependencies installed
-cmake --preset release
-cmake --build --preset release --parallel 4
+# Iterative development builds inside Nix environment:
+nix develop -c cmake --preset gpu-test
+nix develop -c cmake --build --preset gpu-test --target gufo qwen38_flash_next_tests expert_cache_manager_test
+
+# Production release binary for benchmarking / serve:
+nix develop -c cmake --preset release
+nix develop -c cmake --build --preset release --target gufo --parallel 8
 ```
 
-Stage only task-owned paths before Nix builds; flakes include tracked files.
-Measure performance with `result/bin/gufo` or `build/release/gufo`. Preserve
-compiler/dependency versions when comparing results.
+Stage only task-owned paths before Nix builds; flakes include tracked files. Measure performance with `build/release/gufo` or `result/bin/gufo`. Preserve compiler/dependency versions when comparing results.
 
-## Focused tests
+## Out-of-Core MoE Streaming Architecture (`Qwen3.8-Flash-Next`)
 
-Formatting and Python repository checks may run on the editing host; they do
-not need the remote GPU. Before committing C++ changes, run the shared CI check:
+### Key File Map
+- `src/models/qwen38_flash_next/kernels/rocm/executor.cpp`: Core MoE execution (`StreamedMoeRows` for decode, `StreamedMoeRowsDeskRoom` for whole-chunk prefill).
+- `src/models/qwen38_flash_next/kernels/rocm/streamed_moe_policy.hpp`: Thresholds (`kDeskRoomMinTokens`) and pass-sizing math for Desk/Room streaming.
+- `src/storage/expert_cache_manager.{hpp,cpp}`: Expert slot state machine, `Resolve`, speculative `Prefetch`, `FinishPrefetch`, and eviction policies (`lru` default, `hotness`, `decayed`).
+- `src/storage/ssd_batch_reader.{hpp,cpp}`: Linux `O_DIRECT` + 4 KiB page-aligned range coalescing and 3-tier I/O priority (`Demand -> Room -> Speculative`).
+- `src/models/qwen38_flash_next/engine.{hpp,cpp}`: Memory budget planner (`--memory-budget-gb`), session KV/snapshot reservation, and model initialization.
+- `src/models/qwen38_flash_next/ngram.{hpp,cpp}`: Per-Layer Embedding (`NgramTable` / `--ple-shelf`) lookup and SSD read path.
+- `MAPPING.md` & `docs/models/qwen3.8-flash-next/EXPERIMENTS.md`: Ground-truth engineering log and verified invariants.
+
+### Verified Architectural Invariants (Do Not Regress)
+1. **Default Cache Policy (`lru`):** Keep `lru` as the default `--cache-policy`. Live GPU benchmarks with speculative prefetch (`--speculative mtp --prompt-lookup`) proved `lru` beats `hotness` by reducing decode cold misses by 34% (high prefill frequency counts under `hotness` cause premature eviction of newly prefetched Stage A/B experts).
+2. **Prefetch Lifecycle Ordering:** `FinishPrefetch(layer.layer_index)` MUST execute *after* `Resolve` and layer execution complete (via scope guard on early returns) and *before* submitting next-layer lookahead. Never call `FinishPrefetch` before `Resolve`, or it will cancel queued prefetches and zero out `prefetched_hit_async` accounting.
+3. **3-Tier I/O Priority:** `Demand` (`Resolve`) -> `Room` (prefill pass streaming) -> `Speculative` (decode lookahead, capped at `kSpeculativeTransactionCap = 2`).
+4. **Deferred Epilogue Exactness:** Maintain 100% bit-exact FP32 logit equivalence on deterministic changes via deferred `Combine()` (`moe_pending_`) across multi-pass windows.
+
+## Focused Tests & Verification
+
+Before committing C++ changes, run the shared CI format check:
 
 ```sh
 nix shell --inputs-from . nixpkgs#clang-tools -c python3 tools/ci/check-format.py
 # Add --fix to apply formatting, then rerun the check.
 ```
 
-Run the smallest check covering the change. `gpu-test` is RelWithDebInfo with
-assertions enabled. Build only the affected target during iteration:
+Run the smallest check covering the change (`gpu-test` is `RelWithDebInfo` with assertions enabled):
 
 ```sh
-nix develop -c cmake --preset gpu-test
 nix develop -c cmake --build --preset gpu-test --target <test-target>
 nix develop -c ctest --preset gpu-full -R '^<test-name>$' --output-on-failure
 ```
 
-The same CMake/CTest commands work outside Nix. `cmake --build --preset pr`
-runs the hosted contract suite after configuring `cpu-test`. Full CPU checks,
-sanitisers, GPU/operator/model checks and H3 quality tools remain available
-locally; see [docs/TESTING.md](docs/TESTING.md). Do not run full model sweeps,
-video generation or duplicate suites for routine edits. A missing-model skip
-is not a quality pass. Broaden checks when shared behavior changes or failures
-expose risk.
+Key focused tests for Qwen3.8-Flash-Next and server changes:
+- MoE & cache unit tests: `ctest --preset gpu-full -R '^(expert_cache_manager_test|qwen38_flash_next\.(iq_experts_ops|moe_ids|moe_epilogue_ops|routed_wmma_ops))$' --output-on-failure`
+- Offline cache replay test: `nix develop -c python3 tests/tools/test_expert_cache_replay.py`
+- Server / API tests: `ctest --preset gpu-full -R '^(openai_chat_test|http_server_test)$' --output-on-failure`
 
-Text API functional/regression tests live in [tests/functional/](tests/functional/README.md).
-Select suites explicitly. Model-specific changes need the affected model/modes;
-use all four profiles only for shared behavior changes. Run correctness on the
-candidate; use main for matched affected timing controls and suspected regressions,
-not a duplicate full correctness run. Reuse baseline evidence only when revision,
-toolchain, harness, model, settings and cache history match. Include `long-context`
-and `cache` for continuation changes; verify loaded mode and actual drafts.
-Correctness and expected prefill/cache work are strict; timings are
-mandatory per request/phase at 5% and 3 ms, never averaged across requests.
-Run once, investigate flags, then alternate main/PR only for affected histories;
-use unchanged-main controls when needed and retain every result. Fix confirmed
-regressions before publishing. Noisy evidence stays visibly inconclusive and
-unqualified; do not widen margins or stop at reporting failures. Use the code
-diff to select affected metrics; unrelated timing variance does not justify
-another full matrix.
-For reported coding-agent loops, also replay the affected workflow with
-`tests/functional/pi_agent.py`; retain its sessions and inspect actual tool results.
-Retain numerical quality tests and the standard speed benchmark. Keep these
-tests in `tests/functional/`, outside hosted model CI; avoid full sweeps.
+For code changes that could affect inference correctness, run matched-token logit and perplexity checks against a recorded baseline (`docs/TESTING.md#matched-token-and-layer-comparisons`). Require exact full-logit equality when arithmetic should be unchanged, or declared numerical limits when it intentionally changes.
 
-## Profiling and kernels
+## Profiling and Kernels
 
 Apply [.agents/skills/optimize-kernel/SKILL.md](.agents/skills/optimize-kernel/SKILL.md).
-Use `tools/bench/build.sh` for standalone HIP experiments,
-`tools/bench/gfx1151_peak.hip` for measured hardware ceilings,
-`tools/prof/prof.py` for pipeline/wall-time profiles, and
-`tools/prof/isa_mix.py` for instruction analysis. Production paths must retain
-quality; successful optimizations become the default, without extra switches.
+Use `tools/bench/build.sh` for standalone HIP experiments, `tools/bench/gfx1151_peak.hip` for measured hardware ceilings, `tools/prof/prof.py` for pipeline/wall-time profiles, and `tools/prof/isa_mix.py` for instruction analysis. Production paths must retain quality; successful optimizations become the default, without extra switches.
 
-## Development
+## Agent Operating Rules (Token & Hardware Efficiency)
 
-- Keep model code, tests, tools and numerical contracts with their model.
-- Use the shared Qwen control-token constants for framing; see
-  [src/models/qwen/AGENTS.md](src/models/qwen/AGENTS.md). Inspect their definitions
-  when reviewing or changing behavior, and keep reference fixtures independent.
-- Put Windows-specific code in `src/core/platform/`: one leaf per OS facility
-  (files, pages, sockets), whose sources may branch on `_WIN32` or split into
-  `<leaf>_posix.cpp`/`<leaf>_windows.cpp` selected in CMake. Outside it and
-  vendored code, call the leaf, with no `windows.h` or `_WIN32`/`_MSC_VER`
-  checks. POSIX code moves into a leaf, verbatim, once it gains a Windows
-  counterpart. Never emulate POSIX with macros or copy a file per OS; when the
-  logic itself differs, add `<file>_windows.cpp` beside it.
-- Use one canonical long option and backend name per behavior; avoid aliases.
-- Use `gh` for GitHub operations after checking `gh auth status`.
-- Follow Conventional Commits with a single-line message. Title pull requests
-  according to [the release policy](docs/RELEASING.md); squash merging retains
-  that title on `main`. Mark breaking changes with `!` in the title, and leave
-  version and changelog updates to the release workflow.
-- Prefer `jj` when available (`jj version`); otherwise use Git.
-- Follow the user's remote workflow and preserve unrelated work.
+- **Keep command output concise:** Never dump thousands of lines of build logs or raw traces into context. Pipe verbose commands through `tail -n 40` or filter for errors.
+- **Avoid unprompted full-model prewarm sweeps inside the agent loop:** Do not run multi-minute 26+ GiB full-model prewarm benchmarks repeatedly inside automated loops; validate logic with unit tests first, then run targeted `build/release/gufo` benchmarks when ready.
+- **CodeGraph:** If `.codegraph/` exists, use CodeGraph before searching or reading code to locate an implementation.
+- **Git & Commits:** Confirm the checkout, branch, and working tree before editing. Follow Conventional Commits with a single-line message. Keep improvements small and independently reviewable; do not push unless requested.

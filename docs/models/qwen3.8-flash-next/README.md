@@ -107,6 +107,24 @@ context and selected rollback depth (about 27.5 KiB per context token with
 MTP, measured on gfx1151); admission reserves the configured capacity before
 creating sessions.
 
+## Out-of-core streaming
+
+`--memory-budget-gb N` caps the resident expert weights in GiB and streams the
+remaining routed expert rows from the target's GGUF shards on demand. It works
+for `chat`, `prompt`, `bench` and `serve llm`; without the flag the whole model
+stays resident. On Linux the reader opens each shard with `O_DIRECT` and
+coalesces 4 KiB page-aligned ranges, so the shards must stay on local storage
+that tolerates direct I/O.
+
+Requests are issued in three priority tiers: demand rows for the current layer,
+room rows that were just mapped, and speculative rows for the next lookahead
+layer. `--cache-policy lru|hotness|decayed` (default `lru`) selects the victim
+policy of the resident expert cache, and `--cache-prior-bias FLOAT` biases it
+toward the model's learned expert priors. `--ple-shelf` opts into a 128 MiB
+compressed PLE row cache instead of the default 8 MiB rows. `--ssd-stats`
+prints read/priority/cache totals plus process memory after the run, and
+`--verbose` adds per-layer counters. Streaming needs a Linux build with HIP.
+
 ## Images
 
 Use this model's `mmproj-BF16.gguf`, discovered beside the target or selected
