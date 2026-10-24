@@ -45,6 +45,7 @@
 #include "src/cli/serve/video_jobs.hpp"
 #include "src/cli/video/video.hpp"
 #include "src/models/qwen3_tts/audio.hpp"
+#include "src/storage/cache_policy.hpp"
 
 namespace gufo::cli {
 namespace {
@@ -603,6 +604,11 @@ void PrintServeHelp(std::string_view program_name,
     std::string model;
     std::string served_model_name;
     std::uint32_t max_context = 0;
+    double memory_budget_gb = 0.0;
+    float cache_prior_bias = 0.0F;
+    std::string cache_policy = "lru";
+    bool ple_shelf = false;
+    bool ssd_stats = false;
     std::int64_t max_tokens = -1;
     sampling::SamplingConfig sampling_config;
     std::string reasoning_mode = "auto";
@@ -711,6 +717,25 @@ void PrintServeHelp(std::string_view program_name,
     parser.AddOption("", "--min-draft-tokens", "N",
                      "Adaptive draft floor (default: 1)", "Speculative",
                      &min_draft_tokens);
+    parser.AddOption("", "--memory-budget-gb", "GB",
+                     "Qwen3.8-Flash-Next memory budget in GiB (default: off)",
+                     "Memory", &memory_budget_gb);
+    parser.AddFlag(
+        "", "--ple-shelf",
+        "Cache PLE rows in a 128 MiB bounded RAM shelf (default: off)",
+        "Memory", &ple_shelf);
+    parser.AddFlag(
+        "", "--ssd-stats",
+        "Print SSD, cache, memory and session-write telemetry on shutdown",
+        "Memory", &ssd_stats);
+    parser.AddOption(
+        "", "--cache-prior-bias", "FLOAT",
+        "Weight learned expert priors in cache retention (default: 0)",
+        "Memory", &cache_prior_bias);
+    parser.AddOption(
+        "", "--cache-policy", "POLICY",
+        "Expert cache victim policy: lru, hotness, or decayed (default: lru)",
+        "Memory", &cache_policy);
     parser.AddOption(
         "", "--prefill-chunk", "N",
         "Maximum prompt tokens between active decode rounds (default: 512)",
@@ -971,6 +996,7 @@ int RunServe(std::span<const char* const> args) {
   std::string parse_err;
 
   std::shared_ptr<server::InferenceBackend> backend;
+  bool print_ssd_stats = false;
   std::shared_ptr<server::VideoJobService> video_jobs;
   std::shared_ptr<server::TtsService> tts;
   std::shared_ptr<server::AsrService> asr;
@@ -1206,6 +1232,11 @@ int RunServe(std::span<const char* const> args) {
     std::string model;
     std::string served_model_name;
     std::uint32_t max_context = 0;
+    double memory_budget_gb = 0.0;
+    float cache_prior_bias = 0.0F;
+    std::string cache_policy = "lru";
+    bool ple_shelf = false;
+    bool ssd_stats = false;
     std::int64_t max_tokens = -1;
     sampling::SamplingConfig sampling_config;
     std::string reasoning_mode = "auto";
@@ -1309,6 +1340,26 @@ int RunServe(std::span<const char* const> args) {
     llm_parser.AddOption("", "--min-draft-tokens", "N",
                          "Adaptive draft floor (default: 1)", "Speculative",
                          &min_draft_tokens);
+    llm_parser.AddOption(
+        "", "--memory-budget-gb", "GB",
+        "Qwen3.8-Flash-Next memory budget in GiB (default: off)", "Memory",
+        &memory_budget_gb);
+    llm_parser.AddFlag(
+        "", "--ple-shelf",
+        "Cache PLE rows in a 128 MiB bounded RAM shelf (default: off)",
+        "Memory", &ple_shelf);
+    llm_parser.AddFlag(
+        "", "--ssd-stats",
+        "Print SSD, cache, memory and session-write telemetry on shutdown",
+        "Memory", &ssd_stats);
+    llm_parser.AddOption(
+        "", "--cache-prior-bias", "FLOAT",
+        "Weight learned expert priors in cache retention (default: 0)",
+        "Memory", &cache_prior_bias);
+    llm_parser.AddOption(
+        "", "--cache-policy", "POLICY",
+        "Expert cache victim policy: lru, hotness, or decayed (default: lru)",
+        "Memory", &cache_policy);
     llm_parser.AddOption(
         "", "--prefill-chunk", "N",
         "Maximum prompt tokens between active decode rounds (default: 512)",
@@ -1431,6 +1482,15 @@ int RunServe(std::span<const char* const> args) {
       std::cerr << "Error: speculative draft limits are invalid\n";
       return 2;
     }
+    if (!std::isfinite(cache_prior_bias) || cache_prior_bias < 0.0F) {
+      std::cerr
+          << "Error: --cache-prior-bias must be finite and non-negative\n";
+      return 2;
+    }
+    if (!storage::ParseExpertCacheVictimPolicy(cache_policy)) {
+      std::cerr << "Error: --cache-policy must be lru, hotness, or decayed\n";
+      return 2;
+    }
     auto reasoning_defaults = ResolveReasoningDefaults(
         reasoning_mode, reasoning_effort, preserve_thinking, &parse_err);
     if (!reasoning_defaults.has_value()) {
@@ -1488,6 +1548,12 @@ int RunServe(std::span<const char* const> args) {
         static_cast<std::uint32_t>(draft_tokens);
     speculative_config.min_draft_tokens =
         static_cast<std::uint32_t>(min_draft_tokens);
+    speculative_config.memory_budget_gb = memory_budget_gb;
+    speculative_config.cache_prior_bias = cache_prior_bias;
+    speculative_config.cache_policy = cache_policy;
+    speculative_config.ple_shelf = ple_shelf;
+    speculative_config.ssd_stats = ssd_stats;
+    print_ssd_stats = ssd_stats;
     if (model.empty()) {
       std::cerr << "Error: --model <PATH> is required\n";
       return 2;
@@ -1620,6 +1686,11 @@ int RunServe(std::span<const char* const> args) {
     throw;
   }
   exit_if_device_lost();
+  if (print_ssd_stats && backend != nullptr) {
+    const auto report = backend->ssd_stats_report();
+    if (!report.empty())
+      std::cerr << report;
+  }
   return 0;
 }
 

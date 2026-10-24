@@ -34,6 +34,7 @@
 #include "src/models/qwen/control_tokens.hpp"
 #include "src/models/qwen/generator.hpp"
 #include "src/models/qwen/vision/image_cache.hpp"
+#include "src/storage/ssd_stats.hpp"
 
 #if defined(ENGINE_ENABLE_HIP)
 #include "src/core/hip/committed_backing.hpp"
@@ -2902,6 +2903,7 @@ struct InferenceBackend::Impl {
     ReasoningOptions reasoning_defaults;
     std::string model_path;
     std::string build_info;
+    std::shared_ptr<storage::SsdStats> ssd_stats;
   };
 
   class ScheduledGenerationRequest final : public GenerationRequest {
@@ -3145,14 +3147,24 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
         model_path,
         models::qwen38_flash_next::ModelOptions{
             .max_context = max_context,
+            .memory_budget_gb = speculative_config.memory_budget_gb,
+            .ssd_stats = speculative_config.ssd_stats,
+            .cache_prior_bias = speculative_config.cache_prior_bias,
+            .cache_policy = speculative_config.cache_policy,
+            .ple_shelf = speculative_config.ple_shelf,
             .mtp_model_path =
                 speculative_config.backend == TextSpeculativeBackend::kMtp
                     ? speculative_config.draft_model_path
                     : std::string{},
             .max_draft_tokens = speculative_config.max_draft_tokens,
             .vision_model_path = vision_model_path,
-            .decode_concurrency = static_cast<std::uint32_t>(
-                std::clamp<std::size_t>(session_count, 1, 8)),
+            // A budgeted runtime reserves one session's KV and rollback rows;
+            // the streamed-expert scheduler drives one decode cohort.
+            .decode_concurrency =
+                speculative_config.memory_budget_gb > 0.0
+                    ? 1
+                    : static_cast<std::uint32_t>(
+                          std::clamp<std::size_t>(session_count, 1, 8)),
             .rope_scaling = rope_scaling,
         },
         &load_error);
@@ -3525,6 +3537,7 @@ bool InferenceBackend::load(
     new_state->sampling_defaults.model = sampling::TextModelPreset::kQwen38;
     new_state->sampling_defaults.supplied = {};
     new_state->supports_images = model->VisionEncoder() != nullptr;
+    new_state->ssd_stats = model->SsdStatsHandle();
     auto runner = std::make_shared<QwenFlashNextTextRunner>(
         std::move(model), max_context,
         speculative_config.backend == TextSpeculativeBackend::kMtp,
@@ -3599,6 +3612,17 @@ std::uint32_t InferenceBackend::max_context() const {
   return state != nullptr ? state->max_context : 0;
 #else
   return 0;
+#endif
+}
+
+std::string InferenceBackend::ssd_stats_report() const {
+#if defined(ENGINE_ENABLE_HIP)
+  const auto state = impl_->Snapshot();
+  return state != nullptr && state->ssd_stats != nullptr
+             ? state->ssd_stats->Format()
+             : std::string{};
+#else
+  return {};
 #endif
 }
 

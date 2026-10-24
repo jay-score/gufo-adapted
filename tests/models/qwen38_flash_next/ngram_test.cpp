@@ -21,9 +21,11 @@ std::unique_ptr<q::NgramTable> OpenTable(const std::filesystem::path& path,
                                          std::uint64_t offset,
                                          std::uint64_t rows, std::uint32_t dim,
                                          gufo::core::GgmlType type,
-                                         std::string* error) {
+                                         std::string* error,
+                                         std::size_t cache_bytes = 0) {
   const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
-  auto table = q::NgramTable::Open(fd, offset, rows, dim, type, error);
+  auto table =
+      q::NgramTable::Open(fd, offset, rows, dim, type, error, cache_bytes);
   if (fd >= 0)
     ::close(fd);
   return table;
@@ -132,10 +134,12 @@ void TestTable() {
     }
   }
   std::string error;
-  auto table =
-      OpenTable(path, offset, rows, dim, gufo::core::GgmlType::kBF16, &error);
+  auto table = OpenTable(path, offset, rows, dim, gufo::core::GgmlType::kBF16,
+                         &error, 128 * 1024 * 1024);
   Check(table != nullptr, error.c_str());
   if (table) {
+    Check(table->CacheBytes() < 1024 * 1024,
+          "PLE shelf capacity is bounded by the table's row count");
     table->ReserveGather(32769);
     const std::vector<std::uint32_t> ids{7, rows - 1, 7, 0, 128, rows - 1};
     std::vector<float> out(ids.size() * dim);

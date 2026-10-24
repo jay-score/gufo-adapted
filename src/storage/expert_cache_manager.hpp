@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "src/models/qwen38_flash_next/kernels/rocm/device_model.hpp"
+#include "src/storage/cache_policy.hpp"
 
 namespace gufo::storage {
 class SsdStats;
@@ -25,22 +26,12 @@ public:
   static constexpr std::size_t kSharedScratchBufferCount = 32;
   static constexpr std::size_t kSpeculativeTransactionCap = 2;
 
-  enum class VictimPolicy : std::uint8_t {
-    kLru,
-    kCumulativeHotness,
-    kDecayedHotness,
-  };
+  using VictimPolicy = ExpertCacheVictimPolicy;
 
   /// Canonical CLI spelling: lru, hotness, or decayed.
   [[nodiscard]] static constexpr std::optional<VictimPolicy> ParseVictimPolicy(
       std::string_view name) noexcept {
-    if (name == "lru")
-      return VictimPolicy::kLru;
-    if (name == "hotness")
-      return VictimPolicy::kCumulativeHotness;
-    if (name == "decayed")
-      return VictimPolicy::kDecayedHotness;
-    return std::nullopt;
+    return ParseExpertCacheVictimPolicy(name);
   }
 
   struct WarmupResult {

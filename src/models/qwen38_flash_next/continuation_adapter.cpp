@@ -415,6 +415,7 @@ void ContinuationAdapter::BeginRestore(
   state.session->logits_.reserve(model_->VocabSize());
   std::vector<Coverage> coverage(descriptors_.size());
   state.GuardAll();
+  model_->executor_->FinishAllExpertPrefetch();
   Check(hipStreamSynchronize(model_->executor_->stream()));
   state.session->session_->PreserveSnapshots(0, 0);
   state.expected = std::move(ordered);
@@ -545,6 +546,7 @@ cache::Completion ContinuationAdapter::CapturePrivatePiece(
   if (!state.IsValid() || state.session->session_->spec_tokens_)
     throw std::logic_error(
         "cannot capture an invalid or speculative Flash-Next frontier");
+  model_->executor_->FinishAllExpertPrefetch();
   const auto& component = Component(id);
   const auto total = component.descriptor.state_bytes;
   if (component.descriptor.kind != cache::ComponentKind::kPrivateState ||

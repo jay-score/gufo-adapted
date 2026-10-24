@@ -4,7 +4,10 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <type_traits>
@@ -18,6 +21,9 @@
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
 #include "src/models/qwen38_flash_next/ngram.hpp"
 #include "src/models/qwen38_flash_next/weights.hpp"
+#include "src/storage/expert_cache_manager.hpp"
+#include "src/storage/memory_budget_planner.hpp"
+#include "src/storage/ssd_stats.hpp"
 
 namespace gufo::models::qwen38_flash_next {
 namespace {
@@ -31,6 +37,8 @@ constexpr std::uint32_t kPrefillChunkTokens = 4096;
 // A prompt ending this close past a chunk finishes in that chunk: a separate
 // tail pass costs about as much as this many more chunk rows.
 constexpr std::uint32_t kPrefillTailTokens = 128;
+// Opt-in --ple-shelf capacity for the compressed PLE row cache.
+constexpr std::size_t kPleShelfBytes = 128ULL * 1024 * 1024;
 
 void AssignError(std::string* error_msg, std::string_view message) {
   if (error_msg != nullptr) {
@@ -82,6 +90,23 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     AssignError(error_msg, "draft token limit must be positive");
     return nullptr;
   }
+  if (!std::isfinite(options.memory_budget_gb) ||
+      options.memory_budget_gb < 0.0) {
+    AssignError(error_msg,
+                "memory budget must be a finite, non-negative GiB value");
+    return nullptr;
+  }
+  if (!std::isfinite(options.cache_prior_bias) ||
+      options.cache_prior_bias < 0.0F) {
+    AssignError(error_msg, "cache prior bias must be finite and non-negative");
+    return nullptr;
+  }
+  const auto cache_policy =
+      storage::ExpertCacheManager::ParseVictimPolicy(options.cache_policy);
+  if (!cache_policy.has_value()) {
+    AssignError(error_msg, "cache policy must be lru, hotness, or decayed");
+    return nullptr;
+  }
   if (!options.mtp_model_path.empty() &&
       options.max_draft_tokens > kMaxMtpDraftTokens) {
     AssignError(error_msg,
@@ -89,6 +114,8 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     return nullptr;
   }
   m->options_ = options;
+  if (options.ssd_stats)
+    m->ssd_stats_ = std::make_shared<storage::SsdStats>();
   m->reader_ = core::GgufReader::OpenFile(model_path, error_msg);
   if (!m->reader_) {
     return nullptr;
@@ -128,7 +155,8 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     const auto& t = m->weights_->ple_table;
     m->ngram_ = NgramTable::Open(
         m->reader_->GetMappedRegions()[t.shard].file_descriptor, t.file_offset,
-        t.rows, c.ple_head_dim, t.type, error_msg);
+        t.rows, c.ple_head_dim, t.type, error_msg,
+        options.ple_shelf ? kPleShelfBytes : 0, m->ssd_stats_.get());
     if (!m->ngram_) {
       return nullptr;
     }
@@ -145,9 +173,9 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     }
     m->mtp_weights_ = std::make_unique<MtpWeights>(std::move(*mtp));
   }
-  m->device_ = rocm::DeviceModel::Upload(*m->weights_, *m->reader_,
-                                         m->mtp_weights_.get(),
-                                         m->mtp_reader_.get(), error_msg);
+  m->device_ = rocm::DeviceModel::Upload(
+      *m->weights_, *m->reader_, m->mtp_weights_.get(), m->mtp_reader_.get(),
+      error_msg, options.memory_budget_gb > 0.0);
   if (!m->device_) {
     return nullptr;
   }
@@ -167,19 +195,108 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
       m->draft_subset_ = true;
     }
   }
+  constexpr std::size_t kGiB = std::size_t{1024} * 1024 * 1024;
+  const long double requested_safety =
+      static_cast<long double>(options.memory_budget_gb) * kGiB * 0.05L;
+  const long double max_size =
+      static_cast<long double>(std::numeric_limits<std::size_t>::max());
+  const std::size_t memory_safety_margin_bytes =
+      options.memory_budget_gb <= 0.0 ? 0
+      : requested_safety >= max_size
+          ? std::numeric_limits<std::size_t>::max()
+          : std::max<std::size_t>(kGiB,
+                                  static_cast<std::size_t>(requested_safety));
   rocm::Executor::Options exec;
   exec.max_batch = m->PrefillThroughCapacity();
+  exec.max_context = options.max_context;
+  if (options.memory_budget_gb > 0.0) {
+    if (const char* route_trace = std::getenv("GUFO_EXPERT_ROUTE_TRACE"))
+      exec.route_trace_path = route_trace;
+  }
+  exec.streamed_experts = options.memory_budget_gb > 0.0;
   exec.max_logit_rows =
       m->mtp_weights_
           ? static_cast<std::uint32_t>(std::min<std::uint64_t>(
                 exec.max_batch, std::uint64_t{options.max_draft_tokens} + 1))
           : 1;
   exec.max_speculative = exec.max_logit_rows;
-  exec.max_context = options.max_context;
   m->executor_ =
       rocm::Executor::Create(*m->device_, m->ngram_.get(), exec, error_msg);
   if (!m->executor_) {
     return nullptr;
+  }
+  if (options.memory_budget_gb > 0.0) {
+    const auto mode = m->HasMtp() ? core::SessionMode::kSpeculative
+                                  : core::SessionMode::kAutoregressive;
+    const std::size_t per_session = m->SessionBytes(mode, options.max_context);
+    if (per_session >
+        std::numeric_limits<std::size_t>::max() / options.decode_concurrency) {
+      AssignError(error_msg, "reserved session memory exceeds size limits");
+      return nullptr;
+    }
+    const std::size_t backbone_bytes =
+        m->device_->backbone_bytes() +
+        (m->vision_ ? m->vision_->ResidentBytes() : 0);
+    const std::size_t scratch_bytes = m->executor_->ScratchBytes();
+    std::size_t reader_scratch_bytes = 0;
+    try {
+      reader_scratch_bytes =
+          storage::ExpertCacheManager::SharedScratchBytes(m->device_->layers());
+    } catch (const std::exception& error) {
+      AssignError(error_msg, error.what());
+      return nullptr;
+    }
+    std::size_t free_bytes = 0;
+    std::size_t total_bytes = 0;
+    const bool has_available =
+        hipMemGetInfo(&free_bytes, &total_bytes) == hipSuccess;
+    (void)total_bytes;
+    storage::MemoryBudgetInputs inputs{
+        .budget_gb = options.memory_budget_gb,
+        .backbone_bytes = backbone_bytes,
+        .drafter_bytes = m->device_->draft_bytes(),
+        .ple_shelf_bytes = m->ngram_ ? m->ngram_->CacheBytes() : 0,
+        .kv_reserved_bytes = per_session * options.decode_concurrency,
+        .scratch_bytes = scratch_bytes,
+        .reader_scratch_bytes = reader_scratch_bytes,
+        .continuation_cache_bytes = per_session * options.decode_concurrency,
+        .safety_margin_bytes = memory_safety_margin_bytes,
+        .wddm_available_bytes = free_bytes,
+        .has_wddm_available = has_available,
+        .routed_expert_bytes = m->device_->routed_expert_bytes(),
+    };
+    storage::MemoryBudgetPlan plan;
+    if (!storage::PlanMemoryBudget(inputs, &plan, error_msg))
+      return nullptr;
+    if (!plan.fits_fixed) {
+      AssignError(error_msg,
+                  "memory budget cannot reserve the requested " +
+                      std::to_string(options.max_context) +
+                      "-token context, backbone, drafter, PLE, snapshot "
+                      "reserve, reader scratch, and safety margin; reduce "
+                      "--context (try 65536 or 32768) or increase "
+                      "--memory-budget-gb");
+      return nullptr;
+    }
+    if (plan.expert_cache_bytes == 0) {
+      AssignError(error_msg,
+                  "the GPU leaves no expert-cache headroom after reserving the "
+                  "requested " +
+                      std::to_string(options.max_context) +
+                      "-token context; reduce --context (try 65536 or 32768) "
+                      "or increase --memory-budget-gb");
+      return nullptr;
+    }
+    m->memory_budget_ = plan;
+    std::clog << "memory_budget_plan\n" << plan.Format();
+    if (!m->executor_->EnableExpertCache(
+            plan.expert_cache_bytes, m->ssd_stats_.get(),
+            options.cache_prior_bias, *cache_policy, error_msg))
+      return nullptr;
+  }
+  if (m->ssd_stats_ != nullptr) {
+    m->ssd_stats_->Start(m->memory_budget_ ? m->memory_budget_->budget_bytes
+                                           : 0);
   }
   return m;
 }
@@ -268,7 +385,9 @@ const Config& Model::config() const noexcept {
 }
 
 std::size_t Model::ResidentBytes() const noexcept {
-  return device_->resident_bytes() + (vision_ ? vision_->ResidentBytes() : 0);
+  return device_->resident_bytes() + executor_->ScratchBytes() +
+         executor_->ExpertCacheBytes() +
+         (vision_ ? vision_->ResidentBytes() : 0);
 }
 
 std::size_t Model::SessionBytes(core::SessionMode mode,
@@ -287,6 +406,10 @@ std::size_t Model::SessionBytes(core::SessionMode mode,
 
 std::size_t Model::DeferredScratchBytes() const {
   return executor_->DeferredScratchBytes();
+}
+
+std::string Model::SsdStatsReport() const {
+  return ssd_stats_ != nullptr ? ssd_stats_->Format() : std::string{};
 }
 
 std::size_t Session::AllocatedBytes() const noexcept {
@@ -1096,6 +1219,14 @@ bool Session::PrepareDecode(const DecodeRequest& request,
         return false;
       }
     }
+    if (pending->speculative) {
+      std::string prefetch_error;
+      if (!exec.PrefetchCandidates(pending->chain, &prefetch_error) &&
+          !prefetch_error.empty()) {
+        std::clog << "expert_prefetch_skipped layer=0 reason=" << prefetch_error
+                  << '\n';
+      }
+    }
   }
   return true;
 }
@@ -1533,6 +1664,20 @@ bool Session::DecodeBatchImpl(std::span<const DecodeRequest> requests,
     }
     if (!bodies.empty() && !exec.MtpForwardBatch(bodies, error_msg))
       return false;
+  }
+  std::vector<std::int32_t> candidate_tokens;
+  for (std::size_t i = 0; i < requests.size(); ++i) {
+    if (!requests[i].session->session_->Cancelled() && pending[i].speculative)
+      candidate_tokens.insert(candidate_tokens.end(), pending[i].chain.begin(),
+                              pending[i].chain.end());
+  }
+  if (!candidate_tokens.empty()) {
+    std::string prefetch_error;
+    if (!exec.PrefetchCandidates(candidate_tokens, &prefetch_error) &&
+        !prefetch_error.empty()) {
+      std::clog << "expert_prefetch_skipped layer=0 reason=" << prefetch_error
+                << '\n';
+    }
   }
   // In an all-greedy cohort, full copies can widen verification far beyond
   // the neural planner's chosen shape and delay peers producing new text.
