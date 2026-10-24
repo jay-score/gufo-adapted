@@ -9,6 +9,20 @@
 
 namespace gufo::platform {
 
+/// Positional-read file handle: int fd on POSIX, HANDLE on Windows.
+#if defined(_WIN32)
+using PlatformFile = void*;
+#else
+using PlatformFile = int;
+#endif
+
+/// The invalid PlatformFile value.
+#if defined(_WIN32)
+inline constexpr PlatformFile kInvalidFile = nullptr;
+#else
+inline constexpr PlatformFile kInvalidFile = -1;
+#endif
+
 /// Access hint for a mapping. kSequential tells the OS the mapping is read
 /// front to back once; kNone leaves the access pattern to the OS.
 enum class MapHint { kNone, kSequential };
@@ -36,9 +50,9 @@ public:
   std::size_t size() const noexcept { return size_; }
   bool valid() const noexcept { return data_ != nullptr; }
 
-  /// Borrowed POSIX file descriptor backing the mapping; -1 on Windows and
-  /// for an empty view. Valid for the lifetime of this object.
-  int PlatformDescriptor() const noexcept;
+  /// Borrowed file handle backing the mapping; invalid for an empty view.
+  /// Valid for the lifetime of this object.
+  PlatformFile PlatformHandle() const noexcept;
 
   void Close() noexcept;
 
@@ -87,13 +101,6 @@ struct RawMappedFile {
 /// OS page size, never zero.
 std::size_t SystemPageSize() noexcept;
 
-/// Positional-read file handle: int fd on POSIX, HANDLE on Windows.
-#if defined(_WIN32)
-using PlatformFile = void*;
-#else
-using PlatformFile = int;
-#endif
-
 /// Opens `path` read-only; check FileValid() before use. On failure,
 /// `error` (when given) receives the reason.
 PlatformFile OpenReadFile(const std::filesystem::path& path,
@@ -105,6 +112,17 @@ std::size_t ReadFileAt(PlatformFile file, void* output, std::size_t bytes,
                        std::uint64_t offset) noexcept;
 /// Total file size, or nullopt when it cannot be determined.
 std::optional<std::uint64_t> FileSizeBytes(PlatformFile file) noexcept;
+
+/// Duplicates the handle of `file` without re-resolving any path. POSIX
+/// shares the open file description; Windows shares the file object. Returns
+/// kInvalidFile on failure.
+PlatformFile DuplicateFile(PlatformFile file) noexcept;
+
+/// Reopens `file` with unbuffered (direct) I/O, creating an independent
+/// description from the retained handle without resolving the original,
+/// replaceable pathname. Returns kInvalidFile when direct I/O is unavailable;
+/// callers then fall back to buffered reads.
+PlatformFile ReopenUnbuffered(PlatformFile file) noexcept;
 
 }  // namespace gufo::platform
 

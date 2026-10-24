@@ -71,9 +71,9 @@ ReadOnlyMappedFile::~ReadOnlyMappedFile() {
   Close();
 }
 
-int ReadOnlyMappedFile::PlatformDescriptor() const noexcept {
+PlatformFile ReadOnlyMappedFile::PlatformHandle() const noexcept {
 #if defined(_WIN32)
-  return -1;
+  return handle_;
 #else
   return fd_;
 #endif
@@ -437,6 +437,38 @@ std::optional<std::uint64_t> FileSizeBytes(PlatformFile file) noexcept {
   if (::fstat(file, &status) != 0 || status.st_size < 0)
     return std::nullopt;
   return static_cast<std::uint64_t>(status.st_size);
+#endif
+}
+
+PlatformFile DuplicateFile(PlatformFile file) noexcept {
+  if (!FileValid(file))
+    return kInvalidFile;
+#if defined(_WIN32)
+  HANDLE copy = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), static_cast<HANDLE>(file),
+                       GetCurrentProcess(), &copy, 0, FALSE,
+                       DUPLICATE_SAME_ACCESS))
+    return kInvalidFile;
+  return copy;
+#else
+  return ::fcntl(file, F_DUPFD_CLOEXEC, 0);
+#endif
+}
+
+PlatformFile ReopenUnbuffered(PlatformFile file) noexcept {
+  if (!FileValid(file))
+    return kInvalidFile;
+#if defined(_WIN32)
+  // ReOpenFile fails when the desired share mode conflicts with the original
+  // open; callers fall back to buffered I/O.
+  HANDLE reopened = ReOpenFile(static_cast<HANDLE>(file), GENERIC_READ,
+                               FILE_SHARE_READ, FILE_FLAG_NO_BUFFERING);
+  return reopened == INVALID_HANDLE_VALUE ? kInvalidFile : reopened;
+#else
+  // Reopening the retained descriptor creates an independent O_DIRECT file
+  // description without resolving the original, replaceable pathname.
+  const auto path = "/proc/self/fd/" + std::to_string(file);
+  return ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_DIRECT);
 #endif
 }
 

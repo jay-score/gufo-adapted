@@ -61,11 +61,11 @@ int main() {
     CHECK(mapped.size() == bytes.size());
     CHECK(std::equal(bytes.begin(), bytes.end(), mapped.data()));
 #if !defined(_WIN32)
-    CHECK(mapped.PlatformDescriptor() >= 0);
+    CHECK(mapped.PlatformHandle() != platform::kInvalidFile);
 #endif
     auto moved = std::move(mapped);
     CHECK(!mapped.valid());
-    CHECK(mapped.PlatformDescriptor() == -1);
+    CHECK(mapped.PlatformHandle() == platform::kInvalidFile);
     CHECK(moved.valid() && moved.size() == bytes.size());
 
     CHECK(!platform::ReadOnlyMappedFile::Open(empty, &error).valid());

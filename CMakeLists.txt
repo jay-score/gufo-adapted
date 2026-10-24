@@ -104,7 +104,7 @@ add_subdirectory(src/cache)
 
 if (ENGINE_ENABLE_HIP)
   add_library(gufo_hip_host STATIC src/core/hip/host_allocations.cpp)
-  target_link_libraries(gufo_hip_host PUBLIC hip::host)
+  target_link_libraries(gufo_hip_host PUBLIC hip::host gufo_platform)
   target_include_directories(gufo_hip_host PUBLIC ${PROJECT_SOURCE_DIR})
   add_library(gufo_cache_hip STATIC
     src/core/hip/committed_backing.cpp
@@ -152,13 +152,24 @@ if (ENGINE_ENABLE_HIP)
   target_link_libraries(gufo_diagnostics PRIVATE hip::host roc::hipblas roc::rocblas)
 endif()
 
-add_library(gufo_core STATIC
+add_library(gufo_platform STATIC
+  src/core/platform/mapped_file.cpp
   src/core/platform/net.cpp
   src/core/platform/shutdown_signal.cpp
-  src/core/platform/mapped_file.cpp
-  src/core/platform/mapped_file.cpp
   src/core/platform/publish.cpp
   src/core/platform/os_info.cpp
+  "$<$<NOT:$<PLATFORM_ID:Windows>>:src/core/platform/fs_posix.cpp>"
+  "$<$<NOT:$<PLATFORM_ID:Windows>>:src/core/platform/pages_posix.cpp>"
+  "$<$<NOT:$<PLATFORM_ID:Windows>>:src/core/platform/page_pin_linux.cpp>"
+  "$<$<PLATFORM_ID:Windows>:src/core/platform/fs_windows.cpp>"
+  "$<$<PLATFORM_ID:Windows>:src/core/platform/pages_windows.cpp>"
+  "$<$<PLATFORM_ID:Windows>:src/core/platform/page_pin_windows.cpp>")
+target_link_libraries(gufo_platform PUBLIC Threads::Threads)
+if (WIN32)
+  target_link_libraries(gufo_platform PUBLIC ${GUFO_PLATFORM_LIBS})
+endif()
+
+add_library(gufo_core STATIC
   src/core/image.cpp
   src/core/crypto/sha256.cpp
   src/core/gguf_reader.cpp
@@ -192,8 +203,9 @@ target_include_directories(gufo_core PUBLIC ${CMAKE_SOURCE_DIR})
 target_compile_definitions(gufo_core PRIVATE
   GUFO_FFMPEG_EXECUTABLE="${GUFO_FFMPEG_EXECUTABLE}"
   GUFO_FFPROBE_EXECUTABLE="${GUFO_FFPROBE_EXECUTABLE}")
-target_link_libraries(gufo_core PUBLIC ICU::uc ICU::i18n Threads::Threads
-  PNG::PNG JPEG::JPEG PkgConfig::WEBP CURL::libcurl OpenSSL::Crypto)
+target_link_libraries(gufo_core PUBLIC gufo_platform ICU::uc ICU::i18n
+  Threads::Threads PNG::PNG JPEG::JPEG PkgConfig::WEBP CURL::libcurl
+  OpenSSL::Crypto)
 
 add_subdirectory(src/models/qwen)
 add_subdirectory(src/models/qwen_image_21)
@@ -903,6 +915,13 @@ if (BUILD_TESTING)
   add_test(NAME platform_mapped_file_test COMMAND platform_mapped_file_test)
   set_tests_properties(platform_mapped_file_test PROPERTIES
     LABELS "cpu;platform")
+  add_executable(platform_fs_test
+    tests/core/platform_fs_test.cpp
+    "$<$<NOT:$<PLATFORM_ID:Windows>>:src/core/platform/fs_posix.cpp>"
+    "$<$<PLATFORM_ID:Windows>:src/core/platform/fs_windows.cpp>"
+    src/core/platform/mapped_file.cpp)
+  add_test(NAME platform_fs_test COMMAND platform_fs_test)
+  set_tests_properties(platform_fs_test PROPERTIES LABELS "cpu;platform")
 
   add_executable(hipblaslt_plan_cache_test
     tests/core/hipblaslt_plan_cache_test.cpp)
