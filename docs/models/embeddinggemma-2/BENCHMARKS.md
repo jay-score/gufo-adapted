@@ -38,3 +38,40 @@ Against #700, this build is 1.5 to 2.3 times faster at the median on every row o
 ## Reference comparison
 
 The llama.cpp comparison is TODO.  It requires a llama.cpp build with EmbeddingGemma 2 support and the matching GGUF.  Measure both over HTTP with the same texts and report the ratio per row.
+
+## Image support qualification (2026-10-24)
+
+Requalified after PR review on main `1fafd5ad`, preserving its hipBLASLt text
+GEMMs and startup warm-up. Both the candidate and unchanged-main control use
+the production release CMake preset with the same pinned Nix compiler and
+libraries. The image request holds a 320×180 RGB PNG followed by a newline in
+the typed `content` format: 264 image soft tokens and **269 total tokens**.
+One resident warm-up precedes 60 sequential HTTP requests. Timing includes
+PNG reading, preprocessing, vision/text inference and response transport.
+
+| Input | Requests | Median | p95 | Requests/s |
+| --- | ---: | ---: | ---: | ---: |
+| One 320×180 PNG + newline | 60 | **545.31 ms** | **548.47 ms** | **1.84** |
+
+This is a new workload with no supported main image path to compare. The first
+image request additionally loads **335.5 MB** of vision/projector weights; text
+startup still loads only the text backbone. Audio weights are never uploaded.
+
+The affected text controls retain every request. Main and candidate alternate
+per workload, with 60 requests each and no per-request failures at the 5% and
+3 ms thresholds. These are controls, not a speedup claim; startup's measured
+algorithm selection can differ between processes.
+
+| Inputs × words | Tokens/request | Main median | Candidate median |
+| --- | ---: | ---: | ---: |
+| 1 × 16 | 40 | 6.63 ms | 6.49 ms |
+| 1 × 128 | 404 | 19.13 ms | 18.97 ms |
+| 8 × 128 | 3,495 | 146.23 ms | 139.25 ms |
+
+The [review qualification record](artifacts/gfx1151-pr759-review.json) retains
+all request timings, image checks and CPU/GPU test results. The
+[pre-rebase record](artifacts/gfx1151-2026-10-24-images.json) is historical
+evidence against worktree revision `8e7979cc`, which was not origin/main. Its
+initial isolated 152.8 ms outlier remains marked inconclusive and is not used
+to qualify the rebased PR. Earlier published text benchmark rows above remain
+their original measurements.
