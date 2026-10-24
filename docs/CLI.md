@@ -37,6 +37,23 @@ The supported model types are LLM, image, video, audio (TTS, ASR), and text embe
   above 262144 and rejected at or below it.
 - `prefillChunk` — prompt tokens processed between active decode steps in
   HTTP serving. Model runtimes choose their own internal prefill batch sizes.
+- `--memory-budget-gb GB` — enables Qwen3.8-Flash-Next out-of-core expert
+  storage and sets its target memory budget; zero leaves streaming disabled.
+  Although the option is labeled `GB`, the planner converts the value using
+  2³⁰ bytes (GiB), as reflected in the `target_memory_budget_gib` statistics.
+- `--ple-shelf` — keeps a bounded 128 MiB PLE row cache in RAM. Disabled by
+  default; it can reduce repeated PLE table reads without loading the full
+  table.
+- `--ssd-stats` — prints the storage report at shutdown, including total SSD
+  traffic, expert demand/prefetch traffic, separately accounted PLE bytes and
+  read time, cache behavior, and memory/swap samples.
+- `--cache-prior-bias FLOAT` — non-negative weight for learned token-to-expert
+  priors when ranking prefetch candidates and choosing retained cache entries.
+  The default is `0`, which leaves the prior score out of those rankings.
+- `--cache-policy POLICY` — expert-cache victim selection for out-of-core
+  weights: `lru` evicts the least recently used expert, `hotness` retains
+  cumulative access counts, and `decayed` biases those counts toward recent
+  tokens. The default is `lru`.
 - `maxTokens` — maximum number of tokens a request may generate. In practice:
   stops a model that rambles forever.
 

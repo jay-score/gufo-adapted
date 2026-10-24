@@ -6,11 +6,13 @@
 #include <algorithm>
 #include <bit>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
 
 #include "src/core/quant/ggml_dequant.hpp"
+#include "src/storage/ssd_stats.hpp"
 
 namespace gufo::models::qwen38_flash_next {
 namespace {
@@ -78,7 +80,8 @@ NgramTable::~NgramTable() {
 
 std::unique_ptr<NgramTable> NgramTable::Open(
     int file_descriptor, std::uint64_t file_offset, std::uint64_t rows,
-    std::uint32_t row_dim, core::GgmlType type, std::string* error_msg) {
+    std::uint32_t row_dim, core::GgmlType type, std::string* error_msg,
+    std::size_t cache_bytes, storage::SsdStats* stats) {
   std::unique_ptr<NgramTable> t(new NgramTable());
   const std::size_t block = type == core::GgmlType::kIQ4_NL ? 32 : 1;
   const std::size_t block_bytes = type == core::GgmlType::kIQ4_NL ? 18 : 2;
@@ -90,9 +93,16 @@ std::unique_ptr<NgramTable> NgramTable::Open(
     return nullptr;
   }
   t->type_ = type;
+  t->stats_ = stats;
   t->row_dim_ = row_dim;
   t->row_bytes_ = row_dim / block * block_bytes;
-  t->cache_count_ = std::bit_floor(kCacheBytes / t->row_bytes_);
+  const auto effective_cache_bytes =
+      cache_bytes == 0 ? kCacheBytes : cache_bytes;
+  const auto rows_per_shelf = effective_cache_bytes / t->row_bytes_;
+  const auto shelf_rows = cache_bytes == 0
+                              ? rows_per_shelf
+                              : std::min<std::uint64_t>(rows_per_shelf, rows);
+  t->cache_count_ = std::bit_floor(static_cast<std::size_t>(shelf_rows));
   t->cache_entries_ = std::make_unique<CacheEntry[]>(t->cache_count_);
   t->cache_rows_.resize(t->cache_count_ * t->row_bytes_);
   t->rows_ = rows;
@@ -116,6 +126,10 @@ std::unique_ptr<NgramTable> NgramTable::Open(
     t->workers_.emplace_back([raw = t.get()] { raw->Worker(); });
   }
   return t;
+}
+
+std::size_t NgramTable::CacheBytes() const noexcept {
+  return cache_rows_.size() + cache_count_ * sizeof(CacheEntry);
 }
 
 void NgramTable::DecodeRow(const std::uint8_t* src, float* dst) const {
@@ -156,8 +170,12 @@ bool NgramTable::ReadOne(std::uint32_t row, float* dst,
   if (ReadCached(row, dst)) {
     if (owner != nullptr)
       owner->cache_hits_.fetch_add(1, std::memory_order_relaxed);
+    if (stats_ != nullptr)
+      stats_->RecordPleLookup(true, read_prefill_);
     return true;
   }
+  if (stats_ != nullptr)
+    stats_->RecordPleLookup(false, read_prefill_);
   const std::uint64_t offset = base_offset_ + row * row_bytes_;
   const std::uint64_t begin = direct_ ? offset & ~(kPage - 1) : offset;
   const std::uint64_t end =
@@ -194,6 +212,8 @@ bool NgramTable::ReadOne(std::uint32_t row, float* dst,
   }
   if (owner != nullptr)
     owner->disk_reads_.fetch_add(1, std::memory_order_relaxed);
+  if (stats_ != nullptr)
+    stats_->RecordPleStorageBytes(got, read_prefill_);
   // Cache only a complete row, still in its original quantized format.
   // A busy slot is skipped; readers never wait for another row's I/O.
   if (entry != nullptr &&
@@ -261,7 +281,8 @@ void NgramTable::ReserveGather(std::size_t rows) {
 
 bool NgramTable::StartRead(std::span<const std::uint32_t> rows,
                            std::span<float> out,
-                           std::span<const NgramGatherOwner> owners) {
+                           std::span<const NgramGatherOwner> owners,
+                           bool prefill) {
   std::lock_guard<std::mutex> lock(mutex_);
   std::size_t owned = 0;
   for (const auto& owner : owners)
@@ -273,6 +294,7 @@ bool NgramTable::StartRead(std::span<const std::uint32_t> rows,
                   [this](std::uint32_t row) { return row >= rows_; })) {
     return false;
   }
+  read_prefill_ = prefill;
   for (const auto& owner : owners) {
     if (owner.counters != nullptr)
       owner.counters->rows_.fetch_add(owner.rows, std::memory_order_relaxed);
@@ -326,6 +348,8 @@ bool NgramTable::StartRead(std::span<const std::uint32_t> rows,
         return false;
       if (job.owner != nullptr)
         job.owner->cache_hits_.fetch_add(1, std::memory_order_relaxed);
+      if (stats_ != nullptr)
+        stats_->RecordPleLookup(true, read_prefill_);
       return true;
     });
   }
@@ -333,6 +357,8 @@ bool NgramTable::StartRead(std::span<const std::uint32_t> rows,
   pending_ = jobs_.size();
   failed_ = false;
   active_ = true;
+  if (pending_ != 0)
+    read_started_ = std::chrono::steady_clock::now();
   // A decode gather has a handful of reads: wake one reader per read, not
   // the whole pool. Readers keep taking jobs until the queue is empty.
   if (pending_ >= workers_.size()) {
@@ -350,6 +376,12 @@ bool NgramTable::WaitRead() {
     return false;
   }
   done_.wait(lock, [&] { return pending_ == 0; });
+  const auto read_elapsed = std::chrono::steady_clock::now() - read_started_;
+  if (stats_ != nullptr && !jobs_.empty()) {
+    stats_->RecordPleStorageElapsed(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(read_elapsed),
+        read_prefill_);
+  }
   if (!failed_) {
     for (const Copy& copy : copies_) {
       std::copy_n(copy.src, row_dim_, copy.dst);

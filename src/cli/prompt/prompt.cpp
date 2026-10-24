@@ -23,6 +23,7 @@
 #include "src/models/qwen/chat_template.hpp"
 #include "src/models/qwen/generator.hpp"
 #include "src/models/qwen/tokenizer.hpp"
+#include "src/storage/cache_policy.hpp"
 
 #if defined(ENGINE_ENABLE_HIP)
 #include <hip/hip_runtime.h>
@@ -101,6 +102,23 @@ static void RegisterTextOptions(ArgParser& parser, PromptOptions& opt,
   parser.AddOption("", "--system", "PROMPT",
                    "Optional system role instructions prepended to the prompt",
                    "Prompt", &opt.system_prompt);
+  parser.AddOption("", "--memory-budget-gb", "GB",
+                   "Qwen3.8-Flash-Next memory budget in GiB (default: off)",
+                   "Memory", &opt.memory_budget_gb);
+  parser.AddFlag("", "--ple-shelf",
+                 "Cache PLE rows in a 128 MiB bounded RAM shelf (default: off)",
+                 "Memory", &opt.ple_shelf);
+  parser.AddFlag("", "--ssd-stats",
+                 "Print SSD, cache, memory and session-write telemetry",
+                 "Memory", &opt.ssd_stats);
+  parser.AddOption(
+      "", "--cache-prior-bias", "FLOAT",
+      "Weight expert routing priors in cache retention (default: 0)", "Memory",
+      &opt.cache_prior_bias);
+  parser.AddOption(
+      "", "--cache-policy", "POLICY",
+      "Expert cache victim policy: lru, hotness, or decayed (default: lru)",
+      "Memory", &opt.cache_policy);
   if (command == "prompt") {
     parser.AddInverseFlag("", "--raw",
                           "Disable chat template framing and pass raw tokens",
@@ -667,6 +685,11 @@ std::shared_ptr<models::qwen38_flash_next::Model> LoadFlashNextModel(
   auto model = models::qwen38_flash_next::Model::Load(
       opt.model_path,
       {.max_context = kDefaultContext,
+       .memory_budget_gb = opt.memory_budget_gb,
+       .ssd_stats = opt.ssd_stats,
+       .cache_prior_bias = opt.cache_prior_bias,
+       .cache_policy = opt.cache_policy,
+       .ple_shelf = opt.ple_shelf,
        .mtp_model_path =
            opt.speculative_backend == "mtp" ? opt.mtp_model_path : "",
        .max_draft_tokens = opt.draft_tokens,
@@ -862,6 +885,11 @@ static std::optional<PromptOptions> ParseTextOptions(
     if (error_msg != nullptr) {
       *error_msg = exception.what();
     }
+    return std::nullopt;
+  }
+  if (!storage::ParseExpertCacheVictimPolicy(opt.cache_policy)) {
+    if (error_msg != nullptr)
+      *error_msg = "--cache-policy must be lru, hotness, or decayed";
     return std::nullopt;
   }
   if ((!opt.image_paths.empty() || !opt.vision_model_path.empty()) &&

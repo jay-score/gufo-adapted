@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -24,8 +25,15 @@
 #include "src/models/qwen38_flash_next/kernels/rocm/blaslt.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/device_model.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
+#include "src/models/qwen38_flash_next/kernels/rocm/moe_pending_state.hpp"
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
 #include "src/models/qwen38_flash_next/ngram.hpp"
+#include "src/storage/expert_cache_manager.hpp"
+
+namespace gufo::storage {
+class ExpertCacheManager;
+class SsdStats;
+}  // namespace gufo::storage
 
 namespace gufo::models::qwen38_flash_next::rocm {
 
@@ -247,6 +255,10 @@ public:
     /// Largest session context. Zero selects the native context; values
     /// above it require YaRN (Config::MaxContextLength()).
     std::uint32_t max_context{0};
+    /// Allocate bounded lookahead router scratch when expert weights stream.
+    bool streamed_experts{false};
+    /// Optional JSONL route trace destination for offline cache replay.
+    std::string route_trace_path;
   };
 
   ~Executor();
@@ -257,15 +269,28 @@ public:
   [[nodiscard]] static std::unique_ptr<Executor> Create(
       const DeviceModel& model, NgramTable* ngram, Options options,
       std::string* error_msg = nullptr);
+  [[nodiscard]] bool EnableExpertCache(
+      std::size_t budget_bytes, gufo::storage::SsdStats* stats,
+      float cache_prior_bias,
+      gufo::storage::ExpertCacheManager::VictimPolicy victim_policy,
+      std::string* error_msg);
+  [[nodiscard]] bool PrefetchCandidates(
+      std::span<const std::int32_t> candidate_tokens,
+      std::string* error_msg) const;
+  void FinishAllExpertPrefetch() const noexcept;
+  [[nodiscard]] std::size_t ExpertCacheBytes() const noexcept;
 
   [[nodiscard]] std::unique_ptr<Session> CreateSession(
       core::SessionMode mode, std::uint32_t max_context,
       std::string* error_msg = nullptr) const;
   [[nodiscard]] bool EnsureRollback(Session& session, std::uint32_t depth,
                                     std::string* error_msg) const;
+  [[nodiscard]] bool ReserveRollback(Session& session, std::uint32_t depth,
+                                     std::string* error_msg) const;
   [[nodiscard]] std::size_t SessionBytes(
       core::SessionMode mode, std::uint32_t max_context,
       std::uint32_t rollback_depth) const noexcept;
+  [[nodiscard]] std::size_t ScratchBytes() const noexcept;
   [[nodiscard]] std::size_t DeferredScratchBytes() const;
 
   enum class ForwardMode { kDecode, kVerify, kPrefill };
@@ -437,7 +462,21 @@ public:
   [[nodiscard]] bool has_mtp() const noexcept { return model_->has_mtp(); }
 
 private:
+  friend struct ExecutorTestAccess;
+  friend class Session;
   Executor() = default;
+
+  struct RouteTracePass {
+    std::uint32_t first_row{0};
+    std::uint32_t rows{0};
+    std::vector<std::int32_t> experts;
+  };
+
+  struct LookaheadPrediction {
+    std::uint32_t layer{0};
+    std::size_t max_slots{0};
+    std::vector<std::int32_t> expert_ids;
+  };
 
   /// Visits every device region of a snapshot in payload order with
   /// (device pointer or null when sizing, payload offset, bytes, name).
@@ -543,15 +582,48 @@ private:
                  std::uint32_t checkpoint_tokens = 0) const;
   bool Moe(const DeviceLayer& l, const float* x, float* out,
            std::uint32_t n_tokens, std::string* error_msg,
-           bool last_only = false) const;
+           bool last_only = false,
+           const float* lookahead_residual = nullptr) const;
   /// Whether MoeExperts takes the routed F16 WMMA route, whose epilogue the
   /// following combine absorbs (see Moe).
   bool WmmaExperts(const DeviceLayer& l, std::uint32_t n_tokens) const;
   /// Runs routed experts after the router and shared expert are ready.
   bool MoeExperts(const DeviceLayer& l, const float* x, float* out,
-                  std::uint32_t n_tokens, std::string* error_msg) const;
+                  std::uint32_t n_tokens, std::string* error_msg,
+                  bool defer_epilogue = false,
+                  bool recompute_route_counts = false,
+                  std::span<const LookaheadPrediction> lookahead = {}) const;
+  bool MoeEpilogueRows(const DeviceLayer& l, float* out, std::uint32_t n_tokens,
+                       std::string* error_msg) const;
   bool MoeBatch(const DeviceLayer& l, const float* x, float* out,
-                std::uint32_t rows, std::string* error) const;
+                std::uint32_t rows, std::string* error,
+                const float* lookahead_residual = nullptr) const;
+  [[nodiscard]] const DeviceLayer& Layer(std::uint32_t index) const noexcept;
+  [[nodiscard]] bool CaptureExpertIds(const std::int32_t* ids,
+                                      std::size_t count,
+                                      std::string* error_msg) const;
+  [[nodiscard]] bool WriteRouteTrace(
+      std::uint32_t layer, bool prefill, std::uint32_t rows,
+      std::uint32_t experts_used, std::span<const std::int32_t> expert_ids,
+      std::span<const std::uint32_t> windows,
+      std::span<const RouteTracePass> passes,
+      std::span<const std::int32_t> desk_experts,
+      std::span<const std::int32_t> resident_experts,
+      std::string* error_msg) const;
+  [[nodiscard]] bool StreamedMoeRows(
+      const DeviceLayer& layer, const float* x, float* out, std::uint32_t rows,
+      std::string* error_msg, std::uint32_t compute_group_rows = 0,
+      std::span<const LookaheadPrediction> lookahead = {}) const;
+  [[nodiscard]] bool StreamedMoeRowsDeskRoom(
+      const DeviceLayer& layer, const float* x, float* out, std::uint32_t rows,
+      std::uint32_t compute_group_rows, std::string* error_msg,
+      std::span<const LookaheadPrediction> lookahead) const;
+  [[nodiscard]] bool PredictLookahead(
+      const DeviceLayer& layer, const float* residual, std::uint32_t rows,
+      std::vector<LookaheadPrediction>* predictions,
+      std::string* error_msg) const;
+  void SubmitLookaheadPrefetch(std::span<const LookaheadPrediction> predictions,
+                               bool prefill) const;
   /// Whether a draft of `session` requesting the small head gets it.
   bool UseDraftSubset(const Session& session, bool requested) const noexcept {
     return requested && !model_->draft_output().empty() &&
@@ -694,6 +766,12 @@ private:
   [[nodiscard]] Scratch RowScratch(const Scratch& base,
                                    std::uint32_t offset) const;
   void UseScratch(const Scratch& scratch) const;
+  template<typename RunEpilogue>
+  bool RestoreBaseScratchThenRun(const Scratch& base,
+                                 RunEpilogue run_epilogue) const {
+    UseScratch(base);
+    return run_epilogue();
+  }
   bool DenseBatch(const DeviceTensor& w, const float* x, float* out,
                   std::uint32_t rows, std::string* error_msg) const;
   bool GatedDenseBatch(const DeviceTensor& up, const DeviceTensor& gate,
@@ -713,6 +791,21 @@ private:
   mutable std::vector<sampling::TokenPenalty> verification_penalty_host_;
   /// Allocated only when concurrent decoding is first requested.
   mutable float* batch_logits_{nullptr};
+  std::unique_ptr<gufo::storage::ExpertCacheManager> expert_cache_;
+  std::int32_t* expert_ids_host_{nullptr};
+  std::int32_t* expert_slot_ids_host_{nullptr};
+  std::int32_t* expert_id_to_slot_host_{nullptr};
+  std::size_t expert_ids_capacity_{0};
+  hipEvent_t expert_ids_ready_{nullptr};
+  mutable std::mutex route_trace_mutex_;
+  mutable std::ofstream route_trace_;
+  float* lookahead_norm_{nullptr};
+  float* lookahead_mixed_{nullptr};
+  float* lookahead_inject_{nullptr};
+  float* lookahead_router_{nullptr};
+  std::int32_t* lookahead_ids_{nullptr};
+  float* lookahead_weights_{nullptr};
+  std::int32_t* tokens_device_base_{nullptr};
   mutable Session::Control* batch_controls_{nullptr};
   mutable MtpCandidateLogits* batch_candidates_host_{nullptr};
   // Mapped descriptors, one slice per layer: GPU reads cannot race the host
@@ -730,8 +823,10 @@ private:
   std::uint32_t context_capacity_{0};
   /// YaRN constants every rope launch receives (disabled: original path).
   YarnRope yarn_{};
+  std::size_t qfn_workspace_bytes_{0};
   /// Bounded score scratch, shared by sequential selector chunks.
   std::size_t select_score_floats_{0};
+  std::size_t scratch_allocated_bytes_{0};
   std::vector<void*> allocations_;
   /// Coherent pinned storage, read directly by the GPU through s_.ple_emb.
   /// Reused only after the preceding forward has drained its stream.
@@ -777,7 +872,7 @@ private:
   /// The model geometry allows the wide mixer route (see Combine).
   bool wide_mixer_{false};
   /// Set by Moe when its epilogue is left for the combine that follows.
-  mutable bool moe_pending_{false};
+  mutable MoePendingState moe_pending_;
   /// Set before an attention-side combine whose FFN combine fuses the MoE
   /// epilogue: that combine may then leave its residual update to the next
   /// one (res_deferred_), which reads s_.block_out and s_.hc_defer_w.

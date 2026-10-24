@@ -3,6 +3,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -15,6 +16,10 @@
 
 #include "src/core/gguf_reader.hpp"
 #include "src/models/qwen38_flash_next/config.hpp"
+
+namespace gufo::storage {
+class SsdStats;
+}
 
 namespace gufo::models::qwen38_flash_next {
 
@@ -84,7 +89,8 @@ public:
   [[nodiscard]] static std::unique_ptr<NgramTable> Open(
       int file_descriptor, std::uint64_t file_offset, std::uint64_t rows,
       std::uint32_t row_dim, core::GgmlType type,
-      std::string* error_msg = nullptr);
+      std::string* error_msg = nullptr, std::size_t cache_bytes = 0,
+      storage::SsdStats* stats = nullptr);
 
   /// Gathers `rows.size()` rows into `out` (rows.size() * row_dim floats).
   /// Duplicate ids are read once. Returns false on any failed read.
@@ -100,12 +106,14 @@ public:
   /// `owners` partitions `rows` in order; empty leaves the gather uncounted.
   [[nodiscard]] bool StartRead(std::span<const std::uint32_t> rows,
                                std::span<float> out,
-                               std::span<const NgramGatherOwner> owners = {});
+                               std::span<const NgramGatherOwner> owners = {},
+                               bool prefill = false);
   [[nodiscard]] bool WaitRead();
 
   [[nodiscard]] std::uint32_t RowDim() const noexcept { return row_dim_; }
   [[nodiscard]] std::uint64_t Rows() const noexcept { return rows_; }
   [[nodiscard]] std::size_t RowBytes() const noexcept { return row_bytes_; }
+  [[nodiscard]] std::size_t CacheBytes() const noexcept;
 
 private:
   NgramTable() = default;
@@ -144,6 +152,7 @@ private:
   std::uint32_t row_dim_{0};
   std::size_t row_bytes_{0};
   core::GgmlType type_{core::GgmlType::kIQ4_NL};
+  storage::SsdStats* stats_{nullptr};
 
   // A small resident pool keeps decode-time reads from paying thread
   // creation; prefill batches fan out over the same workers.
@@ -155,9 +164,11 @@ private:
   std::vector<Copy> copies_;
   std::size_t next_job_{0};
   std::size_t pending_{0};
+  std::chrono::steady_clock::time_point read_started_{};
   bool active_{false};
   bool failed_{false};
   bool stop_{false};
+  bool read_prefill_{false};
 };
 
 }  // namespace gufo::models::qwen38_flash_next

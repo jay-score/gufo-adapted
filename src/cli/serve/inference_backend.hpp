@@ -46,6 +46,13 @@ struct TextSpeculativeConfig {
   std::uint32_t min_draft_tokens{1};
   speculative::DFlashDraftPolicy dflash_policy{
       speculative::DFlashDraftPolicy::kAdaptive};
+  /// Flash-Next out-of-core expert budget in GiB; zero keeps routed experts
+  /// fully resident.
+  double memory_budget_gb{0.0};
+  float cache_prior_bias{0.0F};
+  std::string cache_policy{"lru"};
+  bool ple_shelf{false};
+  bool ssd_stats{false};
 };
 
 struct TextDiskCacheConfig {
@@ -128,6 +135,8 @@ public:
   [[nodiscard]] std::string build_info() const override;
   [[nodiscard]] SamplingDefaults sampling_defaults() const override;
   [[nodiscard]] std::uint32_t max_context() const override;
+  /// Expert-cache, SSD and process-memory telemetry of the loaded model.
+  [[nodiscard]] std::string ssd_stats_report() const;
   [[nodiscard]] std::vector<SessionState> session_states() const override;
   [[nodiscard]] ReasoningOptions reasoning_defaults() const override;
   [[nodiscard]] InitialOutputState initial_output_state(

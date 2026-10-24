@@ -1,3 +1,6 @@
+#include <climits>
+#include <limits>
+
 #include "qfn_mmq_prelude.h"
 #include "src/core/hip/managed_alloc.hpp"
 namespace qfn_mmq {
@@ -25,155 +28,229 @@ namespace qfn_mmq {
 constexpr int kIdsRowsPerBlock = 256;
 constexpr int kIdsWaves = kIdsRowsPerBlock / 32;
 
-static __global__ void mm_ids_rank_kernel(
-        const int32_t * __restrict__ ids, int32_t * __restrict__ local_rank,
-        int32_t * __restrict__ block_counts, const int n_rows,
-        const int n_experts, const int n_expert_used, const int si1) {
-    extern __shared__ int32_t wave_counts[];  // [n_experts][kIdsWaves]
-    const int tid = threadIdx.x;
-    const int lane = tid & 31;
-    const int wave = tid >> 5;
-    for (int i = tid; i < (n_experts + 1) * kIdsWaves; i += blockDim.x) {
-        wave_counts[i] = 0;
+static __global__ void mm_ids_rank_kernel(const int32_t* __restrict__ ids,
+                                          int32_t* __restrict__ local_rank,
+                                          int32_t* __restrict__ block_counts,
+                                          const int n_rows, const int n_experts,
+                                          const int n_expert_used,
+                                          const int si1) {
+  extern __shared__ int32_t wave_counts[];  // [n_experts][kIdsWaves]
+  const int tid = threadIdx.x;
+  const int lane = tid & 31;
+  const int wave = tid >> 5;
+  for (int i = tid; i < (n_experts + 1) * kIdsWaves; i += blockDim.x) {
+    wave_counts[i] = 0;
+  }
+  __syncthreads();
+  const int row = blockIdx.x * kIdsRowsPerBlock + tid;
+  int expert = -2;  // rows past the end are dropped
+  if (row < n_rows) {
+    const int it = row / n_expert_used;
+    const int iex = row - it * n_expert_used;
+    expert = ids[it * si1 + iex];
+    if (expert >= n_experts) {
+      expert = -2;  // dropped
+    } else if (expert < 0) {
+      expert = -1;  // counted below expert 0, never written
     }
-    __syncthreads();
-    const int row = blockIdx.x * kIdsRowsPerBlock + tid;
-    int expert = -2;  // rows past the end are dropped
-    if (row < n_rows) {
-        const int it = row / n_expert_used;
-        const int iex = row - it * n_expert_used;
-        expert = ids[it * si1 + iex];
-        if (expert >= n_experts) {
-            expert = -2;  // dropped
-        } else if (expert < 0) {
-            expert = -1;  // counted below expert 0, never written
-        }
-    }
-    // Rank among the same expert at lower lanes of this wave.
-    int rank = 0;
+  }
+  // Rank among the same expert at lower lanes of this wave.
+  int rank = 0;
 #pragma unroll
-    for (int l = 0; l < 32; ++l) {
-        const int other = __shfl(expert, l, 32);
-        rank += (l < lane && other == expert) ? 1 : 0;
-    }
-    if (expert >= 0) {
-        atomicAdd(&wave_counts[expert * kIdsWaves + wave], 1);
-    } else if (expert == -1) {
-        atomicAdd(&wave_counts[n_experts * kIdsWaves + wave], 1);
-    }
-    __syncthreads();
-    // Exclusive prefix over the waves of each expert; the total is the
-    // block's count.
-    for (int e = tid; e <= n_experts; e += blockDim.x) {
-        int32_t * counts = wave_counts + e * kIdsWaves;
-        int running = 0;
+  for (int l = 0; l < 32; ++l) {
+    const int other = __shfl(expert, l, 32);
+    rank += (l < lane && other == expert) ? 1 : 0;
+  }
+  if (expert >= 0) {
+    atomicAdd(&wave_counts[expert * kIdsWaves + wave], 1);
+  } else if (expert == -1) {
+    atomicAdd(&wave_counts[n_experts * kIdsWaves + wave], 1);
+  }
+  __syncthreads();
+  // Exclusive prefix over the waves of each expert; the total is the
+  // block's count.
+  for (int e = tid; e <= n_experts; e += blockDim.x) {
+    int32_t* counts = wave_counts + e * kIdsWaves;
+    int running = 0;
 #pragma unroll
-        for (int w = 0; w < kIdsWaves; ++w) {
-            const int c = counts[w];
-            counts[w] = running;
-            running += c;
-        }
-        block_counts[blockIdx.x * (n_experts + 1) + e] = running;
+    for (int w = 0; w < kIdsWaves; ++w) {
+      const int c = counts[w];
+      counts[w] = running;
+      running += c;
     }
-    __syncthreads();
-    if (row < n_rows) {
-        local_rank[row] = expert >= 0
-            ? wave_counts[expert * kIdsWaves + wave] + rank : -1;
-    }
+    block_counts[blockIdx.x * (n_experts + 1) + e] = running;
+  }
+  __syncthreads();
+  if (row < n_rows) {
+    local_rank[row] =
+        expert >= 0 ? wave_counts[expert * kIdsWaves + wave] + rank : -1;
+  }
 }
 
-static __global__ void mm_ids_bounds_kernel(
-        int32_t * __restrict__ block_counts, int32_t * __restrict__ expert_bounds,
-        const int n_blocks, const int n_experts) {
-    // One block: per-expert totals, then a block-wide exclusive scan over
-    // experts for the bounds. Block counts become block bases in place.
-    extern __shared__ int32_t totals[];  // [n_experts + 1]
-    for (int e = threadIdx.x; e <= n_experts; e += blockDim.x) {
-        int running = 0;
-        for (int b = 0; b < n_blocks; ++b) {
-            const int c = block_counts[b * (n_experts + 1) + e];
-            block_counts[b * (n_experts + 1) + e] = running;
-            running += c;
-        }
-        totals[e] = running;
+static __global__ void mm_ids_bounds_kernel(int32_t* __restrict__ block_counts,
+                                            int32_t* __restrict__ expert_bounds,
+                                            const int n_blocks,
+                                            const int n_experts) {
+  // One block: per-expert totals, then a block-wide exclusive scan over
+  // experts for the bounds. Block counts become block bases in place.
+  extern __shared__ int32_t totals[];  // [n_experts + 1]
+  for (int e = threadIdx.x; e <= n_experts; e += blockDim.x) {
+    int running = 0;
+    for (int b = 0; b < n_blocks; ++b) {
+      const int c = block_counts[b * (n_experts + 1) + e];
+      block_counts[b * (n_experts + 1) + e] = running;
+      running += c;
     }
-    __syncthreads();
-    if (threadIdx.x == 0) {
-        int running = totals[n_experts];  // negative ids sit below expert 0
-        for (int e = 0; e < n_experts; ++e) {
-            expert_bounds[e] = running;
-            running += totals[e];
-        }
-        expert_bounds[n_experts] = running;
+    totals[e] = running;
+  }
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    int running = totals[n_experts];  // negative ids sit below expert 0
+    for (int e = 0; e < n_experts; ++e) {
+      expert_bounds[e] = running;
+      running += totals[e];
     }
+    expert_bounds[n_experts] = running;
+  }
 }
 
 static __global__ void mm_ids_scatter_kernel(
-        const int32_t * __restrict__ ids, const int32_t * __restrict__ local_rank,
-        const int32_t * __restrict__ block_counts,
-        const int32_t * __restrict__ expert_bounds,
-        int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst,
-        const int n_rows, const int n_experts, const int n_expert_used,
-        const int nchannels_y, const int si1, const int sis1) {
-    const int row = blockIdx.x * kIdsRowsPerBlock + threadIdx.x;
-    if (row >= n_rows) {
-        return;
-    }
-    const int rank = local_rank[row];
-    if (rank < 0) {
-        return;
-    }
-    const int it = row / n_expert_used;
-    const int iex = row - it * n_expert_used;
-    const int expert = ids[it * si1 + iex];
-    const int pos = expert_bounds[expert] +
-                    block_counts[blockIdx.x * (n_experts + 1) + expert] + rank;
-    ids_src1[pos] = it * sis1 + iex % nchannels_y;
-    ids_dst[pos] = it * n_expert_used + iex;
+    const int32_t* __restrict__ ids, const int32_t* __restrict__ local_rank,
+    const int32_t* __restrict__ block_counts,
+    const int32_t* __restrict__ expert_bounds, int32_t* __restrict__ ids_src1,
+    int32_t* __restrict__ ids_dst, const int n_rows, const int n_experts,
+    const int n_expert_used, const int nchannels_y, const int si1,
+    const int sis1) {
+  const int row = blockIdx.x * kIdsRowsPerBlock + threadIdx.x;
+  if (row >= n_rows) {
+    return;
+  }
+  const int rank = local_rank[row];
+  if (rank < 0) {
+    return;
+  }
+  const int it = row / n_expert_used;
+  const int iex = row - it * n_expert_used;
+  const int expert = ids[it * si1 + iex];
+  const int pos = expert_bounds[expert] +
+                  block_counts[blockIdx.x * (n_experts + 1) + expert] + rank;
+  ids_src1[pos] = it * sis1 + iex % nchannels_y;
+  ids_dst[pos] = it * n_expert_used + iex;
 }
 
-static int32_t * g_ids_scratch = nullptr;
+static int32_t* g_ids_scratch = nullptr;
 static size_t g_ids_scratch_elems = 0;
+static bool g_ids_scratch_frozen = false;
 
-static void launch_mm_ids_helper_scan(
-        const int32_t * __restrict__ ids, int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst, int32_t * __restrict__ expert_bounds,
-        const int n_experts, const int n_tokens, const int n_expert_used, const int nchannels_y, const int si1, const int sis1, hipStream_t stream) {
-    const int n_rows = n_tokens * n_expert_used;
-    const int n_blocks = (n_rows + kIdsRowsPerBlock - 1) / kIdsRowsPerBlock;
-    const size_t need = (size_t)n_rows + (size_t)n_blocks * (n_experts + 1);
-    const size_t lds = (size_t)(n_experts + 1) * kIdsWaves * sizeof(int32_t);
-    GGML_ASSERT(n_rows > 0 && lds <= 48 * 1024 && "routed id maps: shape");
-    if (need > g_ids_scratch_elems) {
-        // Grown only while the previous buffer may still be in flight, so
-        // the old allocation is left to the process (it happens once per
-        // widest shape).
-        int32_t * grown = nullptr;
-        HIP_CHECK(gufo::hip::AllocateDevice(&grown, need * sizeof(int32_t)));
-        g_ids_scratch = grown;
-        g_ids_scratch_elems = need;
-    }
-    int32_t * local_rank = g_ids_scratch;
-    int32_t * block_counts = g_ids_scratch + n_rows;
-    mm_ids_rank_kernel<<<n_blocks, kIdsRowsPerBlock, lds, stream>>>(
-        ids, local_rank, block_counts, n_rows, n_experts, n_expert_used, si1);
-    mm_ids_bounds_kernel<<<1, 1024, (size_t)(n_experts + 1) * sizeof(int32_t), stream>>>(
-        block_counts, expert_bounds, n_blocks, n_experts);
-    mm_ids_scatter_kernel<<<n_blocks, kIdsRowsPerBlock, 0, stream>>>(
-        ids, local_rank, block_counts, expert_bounds, ids_src1, ids_dst, n_rows,
-        n_experts, n_expert_used, nchannels_y, si1, sis1);
+static int reserve_ids_scratch(int max_tokens, int n_experts, int n_expert_used,
+                               bool freeze) {
+  if (max_tokens <= 0 || n_experts <= 0 || n_expert_used <= 0 ||
+      max_tokens > INT_MAX / n_expert_used) {
+    return -1;
+  }
+  const size_t n_rows = (size_t)max_tokens * n_expert_used;
+  const size_t n_blocks = (n_rows + kIdsRowsPerBlock - 1) / kIdsRowsPerBlock;
+  if (n_blocks >
+      (std::numeric_limits<size_t>::max() - n_rows) / (size_t(n_experts) + 1)) {
+    return -1;
+  }
+  const size_t need = n_rows + n_blocks * (size_t(n_experts) + 1);
+  if (need > std::numeric_limits<size_t>::max() / sizeof(int32_t) ||
+      (need > g_ids_scratch_elems && g_ids_scratch_frozen)) {
+    return -1;
+  }
+  if (need > g_ids_scratch_elems) {
+    int32_t* grown = nullptr;
+    const hipError_t status =
+        gufo::hip::AllocateDevice(&grown, need * sizeof(int32_t));
+    if (status != hipSuccess)
+      return -1;
+    if (g_ids_scratch != nullptr)
+      (void)hipFree(g_ids_scratch);
+    g_ids_scratch = grown;
+    g_ids_scratch_elems = need;
+  }
+  g_ids_scratch_frozen = freeze;
+  return 0;
 }
 
-void ggml_hip_launch_mm_ids_helper(
-        const int32_t * __restrict__ ids, int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst, int32_t * __restrict__ expert_bounds,
-        const int n_experts, const int n_tokens, const int n_expert_used, const int nchannels_y, const int si1, const int sis1, hipStream_t stream) {
-    launch_mm_ids_helper_scan(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, stream);
+static bool launch_mm_ids_helper_scan(
+    const int32_t* __restrict__ ids, int32_t* __restrict__ ids_src1,
+    int32_t* __restrict__ ids_dst, int32_t* __restrict__ expert_bounds,
+    const int n_experts, const int n_tokens, const int n_expert_used,
+    const int nchannels_y, const int si1, const int sis1, hipStream_t stream) {
+  if (n_tokens <= 0 || n_expert_used <= 0 || n_experts <= 0 ||
+      n_tokens > INT_MAX / n_expert_used) {
+    return false;
+  }
+  const int n_rows = n_tokens * n_expert_used;
+  const int n_blocks = (n_rows - 1) / kIdsRowsPerBlock + 1;
+  const size_t n_expert_columns = (size_t)n_experts + 1;
+  if ((size_t)n_blocks > (std::numeric_limits<size_t>::max() - (size_t)n_rows) /
+                             n_expert_columns) {
+    return false;
+  }
+  const size_t need = (size_t)n_rows + (size_t)n_blocks * n_expert_columns;
+  if (need > std::numeric_limits<size_t>::max() / sizeof(int32_t)) {
+    return false;
+  }
+  const size_t lds = (size_t)(n_experts + 1) * kIdsWaves * sizeof(int32_t);
+  GGML_ASSERT(n_rows > 0 && lds <= 48 * 1024 && "routed id maps: shape");
+  if (need > g_ids_scratch_elems) {
+    if (g_ids_scratch_frozen) {
+      fprintf(stderr,
+              "routed id-map scratch exceeded its model-load reserve "
+              "(%zu > %zu elements)\n",
+              need, g_ids_scratch_elems);
+      return false;
+    }
+    // Grown only while the previous buffer may still be in flight, so
+    // the old allocation is left to the process (it happens once per
+    // widest shape).
+    int32_t* grown = nullptr;
+    HIP_CHECK(gufo::hip::AllocateDevice(&grown, need * sizeof(int32_t)));
+    g_ids_scratch = grown;
+    g_ids_scratch_elems = need;
+  }
+  int32_t* local_rank = g_ids_scratch;
+  int32_t* block_counts = g_ids_scratch + n_rows;
+  mm_ids_rank_kernel<<<n_blocks, kIdsRowsPerBlock, lds, stream>>>(
+      ids, local_rank, block_counts, n_rows, n_experts, n_expert_used, si1);
+  mm_ids_bounds_kernel<<<1, 1024, (size_t)(n_experts + 1) * sizeof(int32_t),
+                         stream>>>(block_counts, expert_bounds, n_blocks,
+                                   n_experts);
+  mm_ids_scatter_kernel<<<n_blocks, kIdsRowsPerBlock, 0, stream>>>(
+      ids, local_rank, block_counts, expert_bounds, ids_src1, ids_dst, n_rows,
+      n_experts, n_expert_used, nchannels_y, si1, sis1);
+  return hipGetLastError() == hipSuccess;
+}
+
+bool ggml_hip_launch_mm_ids_helper(
+    const int32_t* __restrict__ ids, int32_t* __restrict__ ids_src1,
+    int32_t* __restrict__ ids_dst, int32_t* __restrict__ expert_bounds,
+    const int n_experts, const int n_tokens, const int n_expert_used,
+    const int nchannels_y, const int si1, const int sis1, hipStream_t stream) {
+  return launch_mm_ids_helper_scan(ids, ids_src1, ids_dst, expert_bounds,
+                                   n_experts, n_tokens, n_expert_used,
+                                   nchannels_y, si1, sis1, stream);
 }
 
 }  // namespace qfn_mmq
 
-extern "C" int qfn_mmq_build_ids_maps(
-        const int32_t * ids, int32_t * ids_src1, int32_t * ids_dst, int32_t * expert_bounds,
-        int n_experts, int n_tokens, int n_expert_used, int nchannels_y, int si1, int sis1, hipStream_t stream) {
-    qfn_mmq::ggml_hip_launch_mm_ids_helper(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, stream);
-    return hipGetLastError() == hipSuccess ? 0 : -1;
+extern "C" int qfn_mmq_reserve_ids_scratch(int max_tokens, int n_experts,
+                                           int n_expert_used, int freeze) {
+  return qfn_mmq::reserve_ids_scratch(max_tokens, n_experts, n_expert_used,
+                                      freeze != 0);
+}
+
+extern "C" int qfn_mmq_build_ids_maps(const int32_t* ids, int32_t* ids_src1,
+                                      int32_t* ids_dst, int32_t* expert_bounds,
+                                      int n_experts, int n_tokens,
+                                      int n_expert_used, int nchannels_y,
+                                      int si1, int sis1, hipStream_t stream) {
+  return qfn_mmq::ggml_hip_launch_mm_ids_helper(
+             ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens,
+             n_expert_used, nchannels_y, si1, sis1, stream)
+             ? 0
+             : -1;
 }

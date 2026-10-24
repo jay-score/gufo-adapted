@@ -7,12 +7,18 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <tuple>
@@ -24,6 +30,8 @@
 #include "src/core/hip/snapshot_transfer.hpp"
 #include "src/models/qwen38_flash_next/draft_vocab.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
+#include "src/models/qwen38_flash_next/kernels/rocm/streamed_moe_policy.hpp"
+#include "src/storage/expert_cache_manager.hpp"
 
 namespace gufo::models::qwen38_flash_next::rocm {
 namespace {
@@ -97,6 +105,13 @@ bool MatrixRows(std::uint32_t rows) {
 bool ExpertMatrixRows(std::uint32_t rows) {
   return prefill_phase || rows > 4 * kVecBatch;
 }
+bool UsesRoutedF16Experts(const DeviceLayer& layer, const Config& config,
+                          std::uint32_t rows) {
+  return ExpertMatrixRows(rows) &&
+         UsesRoutedF16ExpertFormats(
+             layer.ffn_gate_exps.type, layer.ffn_up_exps.type,
+             layer.ffn_down_exps.type, config.hidden_size, config.expert_ff);
+}
 /// Prefill passes wider than a vector batch take the fused projections and
 /// the paired routed expert tiles: they win from 9 rows up to the full chunk.
 /// Decode and verification batches keep their single-token arithmetic.
@@ -129,6 +144,8 @@ constexpr std::uint32_t kDenseF16MaxCols = 2560;
 /// mean bucket fills most of it (the weight dequantization is per tile).
 constexpr std::uint32_t kRoutedTileRowsNarrow = 16;
 constexpr std::uint32_t kRoutedTileRowsWide = 48;
+constexpr std::size_t kQfnMmqScratchReserveBytes =
+    std::size_t{256} * 1024 * 1024;
 
 std::uint32_t RoutedTileRows(std::size_t slots, const Config& c) {
   return slots >= static_cast<std::size_t>(16) * c.num_experts
@@ -690,6 +707,9 @@ Session::~Session() {
     snapshots_->failure = std::current_exception();
   }
   TrimRollback(0);
+  for (void* allocation : rollback_allocations_) {
+    (void)hipFree(allocation);
+  }
   for (auto& [key, exec] : graphs_) {
     (void)hipGraphExecDestroy(exec);
   }
@@ -867,6 +887,12 @@ void Session::TrimRollback(std::uint32_t depth) noexcept {
       ++it;
     }
   }
+  if (owner_ != nullptr && owner_->options_.streamed_experts) {
+    // Rollback rows are reserved for the session's full speculative width at
+    // CreateSession when experts stream. Trimming invalidates graphs only; it
+    // never releases device memory during a request or reset.
+    return;
+  }
   for (auto row = depth; row < rollback_depth_; ++row) {
     (void)hipFree(rollback_allocations_[row]);
     for (auto& layer : linear_) {
@@ -924,10 +950,16 @@ void Session::Reset(bool reuse_mtp) {
 }
 
 Executor::~Executor() {
+  if (stream_ != nullptr) {
+    (void)hipStreamSynchronize(stream_);
+  }
   // Readers write pinned staging memory; drain them before freeing it,
   // including when a forward failed before reaching PLE.
   if (ple_pending_ || prefetch_.pending) {
     (void)ngram_->WaitRead();
+  }
+  if (expert_ids_ready_ != nullptr) {
+    (void)hipEventDestroy(expert_ids_ready_);
   }
   (void)hipFree(batch_logits_);
   (void)hipFree(verification_penalties_);
@@ -973,6 +1005,13 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
   if (!Check(hipStreamCreate(&e->stream_), "hipStreamCreate", error_msg)) {
     return nullptr;
   }
+  if (qfn_mmq_reserve_scratch_for_stream(e->stream_, kQfnMmqScratchReserveBytes,
+                                         options.streamed_experts ? 1 : 0) !=
+      0) {
+    AssignError(error_msg, "failed to reserve QFN scratch before inference");
+    return nullptr;
+  }
+  e->qfn_workspace_bytes_ = kQfnMmqScratchReserveBytes;
   if (!Check(hipEventCreateWithFlags(&e->counts_ready_, hipEventDisableTiming),
              "expert counts event", error_msg)) {
     return nullptr;
@@ -983,6 +1022,15 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
     return nullptr;
   }
   const Config& c = model.config();
+  if (!options.route_trace_path.empty()) {
+    e->route_trace_.open(options.route_trace_path,
+                         std::ios::out | std::ios::trunc);
+    if (!e->route_trace_) {
+      AssignError(error_msg, "failed to open expert route trace: " +
+                                 options.route_trace_path);
+      return nullptr;
+    }
+  }
   if (options.max_context > c.MaxContextLength()) {
     AssignError(error_msg, "executor context exceeds the model context");
     return nullptr;
@@ -990,6 +1038,25 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
   e->context_capacity_ = std::max(c.context_length, options.max_context);
   e->yarn_ = MakeYarnRope(c.rope_scaling, c.rotary_dim, c.rope_theta);
   const std::size_t T = e->options_.max_batch;
+  if (qfn_mmq_reserve_ids_scratch(static_cast<int>(T),
+                                  static_cast<int>(c.num_experts),
+                                  static_cast<int>(c.num_experts_used),
+                                  options.streamed_experts ? 1 : 0) != 0) {
+    AssignError(error_msg,
+                "failed to reserve routed-ID scratch before inference");
+    return nullptr;
+  }
+  const std::size_t id_rows = T * c.num_experts_used;
+  const std::size_t id_blocks = (id_rows + 255) / 256;
+  const std::size_t ids_bytes =
+      (id_rows + id_blocks * (std::size_t{c.num_experts} + 1)) *
+      sizeof(std::int32_t);
+  if (ids_bytes >
+      std::numeric_limits<std::size_t>::max() - e->qfn_workspace_bytes_) {
+    AssignError(error_msg, "QFN routed-ID scratch size overflows");
+    return nullptr;
+  }
+  e->qfn_workspace_bytes_ += ids_bytes;
   e->blaslt_ = BlasLt::Create(e->stream_, error_msg);
   if (e->blaslt_ == nullptr) {
     return nullptr;
@@ -1017,32 +1084,33 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
   const std::size_t slots = T * c.num_experts_used;
   auto& a = e->allocations_;
   Scratch& s = e->s_;
-  auto f32 = [&](std::size_t n) { return Alloc<float>(a, n, error_msg); };
-  s.tokens = Alloc<std::int32_t>(a, T, error_msg);
-  s.x_half = Alloc<std::uint16_t>(a, T * model.max_half_cols(), error_msg);
+  auto alloc = [&]<typename TAlloc>(std::size_t n) {
+    return Alloc<TAlloc>(a, n, error_msg, &e->scratch_allocated_bytes_);
+  };
+  auto f32 = [&](std::size_t n) { return alloc.template operator()<float>(n); };
+  s.tokens = alloc.template operator()<std::int32_t>(T);
+  e->tokens_device_base_ = s.tokens;
+  s.x_half =
+      alloc.template operator()<std::uint16_t>(T * model.max_half_cols());
   for (void*& slot : s.x_q8) {
-    slot = Alloc<std::uint8_t>(
-        a,
-        qfn_mmq_q8_1_bytes(static_cast<int>(kVecBatch),
-                           static_cast<int>(model.max_q8_cols())),
-        error_msg);
+    slot = alloc.template operator()<std::uint8_t>(qfn_mmq_q8_1_bytes(
+        static_cast<int>(kVecBatch), static_cast<int>(model.max_q8_cols())));
   }
   const auto q8_1 = [&](std::size_t k) {
-    return Alloc<std::uint8_t>(
-        a, qfn_mmq_q8_1_bytes(static_cast<int>(kVecBatch), static_cast<int>(k)),
-        error_msg);
+    return alloc.template operator()<std::uint8_t>(
+        qfn_mmq_q8_1_bytes(static_cast<int>(kVecBatch), static_cast<int>(k)));
   };
   s.xn_q8_1 = q8_1(hc_dim);
   s.lo_q8_1 = q8_1(c.hc_low_rank);
   s.mixed_q8_1 = q8_1(hidden);
   s.gdn_q8_1 = q8_1(c.SsmValueDim());
   s.ctx_q8_1 = q8_1(c.AttentionQDim());
-  s.x_q8t =
-      Alloc<std::uint8_t>(a, Q8TiledBytes(T, model.max_q8_cols()), error_msg);
+  s.x_q8t = alloc.template operator()<std::uint8_t>(
+      Q8TiledBytes(T, model.max_q8_cols()));
   s.res = f32(T * hc_dim);
   s.xn = f32(T * hc_dim);
-  s.xn_half = Alloc<__half>(a, T * hc_dim, error_msg);
-  s.xn_q8t = Alloc<std::uint8_t>(a, Q8TiledBytes(T, hc_dim), error_msg);
+  s.xn_half = alloc.template operator()<__half>(T * hc_dim);
+  s.xn_q8t = alloc.template operator()<std::uint8_t>(Q8TiledBytes(T, hc_dim));
   s.lo = f32(T * c.hc_low_rank);
   s.mixed = f32(T * hidden);
   s.inject = f32(T * c.hc_count * HcInjectParts(hidden));
@@ -1109,10 +1177,9 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
   s.scores = f32(e->select_score_floats_);
   s.attn_partials = f32(static_cast<std::size_t>(kVecBatch) * c.num_heads *
                         kAttnSplits * (c.head_dim + 2));
-  s.attn_lists = Alloc<std::uint32_t>(
-      a, std::size_t{kVecBatch} * (c.indexer_top_k / c.compress_ratio),
-      error_msg);
-  s.attn_counts = Alloc<std::uint32_t>(a, kVecBatch, error_msg);
+  s.attn_lists = alloc.template operator()<std::uint32_t>(
+      std::size_t{kVecBatch} * (c.indexer_top_k / c.compress_ratio));
+  s.attn_counts = alloc.template operator()<std::uint32_t>(kVecBatch);
   if (c.ple_layer >= 0) {
     // PLE finishes before this layer's mixer/SSM. Its gate consumes key
     // and query before normalization/convolution reuse those two buffers.
@@ -1147,26 +1214,35 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
       ngram->ReserveGather(T * c.ple_heads);
   }
   s.router = f32(T * (c.num_experts + 1));
-  s.ids = Alloc<std::int32_t>(a, slots, error_msg);
-  s.expert_counts = Alloc<std::uint32_t>(a, c.num_experts, error_msg);
+  s.ids = alloc.template operator()<std::int32_t>(slots);
+  s.expert_counts = alloc.template operator()<std::uint32_t>(c.num_experts);
   {
     const std::size_t compact = RoutedCompactRows(slots, c.num_experts);
-    s.routed_bounds = Alloc<std::int32_t>(a, c.num_experts + 1, error_msg);
-    s.routed_cursors = Alloc<std::int32_t>(a, c.num_experts, error_msg);
-    s.rows_token = Alloc<std::int32_t>(a, compact, error_msg);
-    s.rows_slot = Alloc<std::int32_t>(a, compact, error_msg);
-    s.routed_tiles =
-        Alloc<std::int32_t>(a, 3 * RoutedTileCapacity(slots, c), error_msg);
+    s.routed_bounds =
+        alloc.template operator()<std::int32_t>(c.num_experts + 1);
+    s.routed_cursors = alloc.template operator()<std::int32_t>(c.num_experts);
+    s.rows_token = alloc.template operator()<std::int32_t>(compact);
+    s.rows_slot = alloc.template operator()<std::int32_t>(compact);
+    s.routed_tiles = alloc.template operator()<std::int32_t>(
+        3 * RoutedTileCapacity(slots, c));
   }
   s.weights = f32(slots);
   cursor = stage;
   s.gate_e = take(slots * c.expert_ff);
   s.up_e = take(slots * c.expert_ff);
   s.down_e = take(slots * hidden);
+  if (options.streamed_experts) {
+    e->lookahead_norm_ = f32(T * hc_dim);
+    e->lookahead_mixed_ = f32(T * hidden);
+    e->lookahead_inject_ = f32(T * c.hc_count * HcInjectParts(hidden));
+    e->lookahead_router_ = f32(T * (c.num_experts + 1));
+    e->lookahead_ids_ = alloc.template operator()<std::int32_t>(slots);
+    e->lookahead_weights_ = f32(slots);
+  }
   s.shexp_gate = f32(T * c.shared_expert_ff);
   s.shexp_up = f32(T * c.shared_expert_ff);
   s.shexp_out = f32(T * hidden);
-  s.shexp_half = Alloc<__half>(a, T * c.shared_expert_ff, error_msg);
+  s.shexp_half = alloc.template operator()<__half>(T * c.shared_expert_ff);
   s.logits =
       f32(static_cast<std::size_t>(e->options_.max_logit_rows) * c.vocab_size);
   {
@@ -1218,14 +1294,14 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
     s.mtp_embd = s.mixed;
     s.mtp_eproj = s.qkvz;
     s.mtp_res = s.res;
-    s.mtp_argmax = Alloc<ArgmaxCandidate>(a, kArgmaxParts, error_msg);
-    s.mtp_token = Alloc<std::int32_t>(a, 1, error_msg);
+    s.mtp_argmax = alloc.template operator()<ArgmaxCandidate>(kArgmaxParts);
+    s.mtp_token = alloc.template operator()<std::int32_t>(1);
     const auto candidate_ids = std::max<std::size_t>(
         MtpCandidateWorkspaceSize(c.vocab_size),
         e->options_.max_speculative * kArgmaxParts *
             sizeof(PenaltyArgmaxCandidate) / sizeof(std::uint32_t));
-    s.mtp_ids = Alloc<std::uint32_t>(a, candidate_ids, error_msg);
-    s.mtp_scratch_ids = Alloc<std::uint32_t>(a, candidate_ids, error_msg);
+    s.mtp_ids = alloc.template operator()<std::uint32_t>(candidate_ids);
+    s.mtp_scratch_ids = alloc.template operator()<std::uint32_t>(candidate_ids);
     // Final selection consumes intermediate IDs before writing its scores.
     // Pack those scores behind the 64 returned IDs for one host transfer.
     s.mtp_scores = reinterpret_cast<float*>(s.mtp_ids + kMtpCandidates);
@@ -1242,24 +1318,60 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
         std::min<std::size_t>(c.vocab_size, kMtpCandidates);
     const auto rows = std::min<std::size_t>(7, e->options_.max_speculative - 1);
     if (rows != 0) {
-      e->verification_ids_ = Alloc<std::uint32_t>(
-          a, rows * MtpCandidateWorkspaceSize(c.vocab_size), error_msg);
-      e->verification_scratch_ids_ = Alloc<std::uint32_t>(
-          a, rows * MtpCandidateWorkspaceSize(c.vocab_size), error_msg);
+      e->verification_ids_ = alloc.template operator()<std::uint32_t>(
+          rows * MtpCandidateWorkspaceSize(c.vocab_size));
+      e->verification_scratch_ids_ = alloc.template operator()<std::uint32_t>(
+          rows * MtpCandidateWorkspaceSize(c.vocab_size));
       const auto candidates = rows * (kMtpCandidates + kCompactPenaltyLimit);
       e->verification_candidates_ =
-          Alloc<sampling::LogitCandidate>(a, candidates, error_msg);
+          alloc.template operator()<sampling::LogitCandidate>(candidates);
+      const std::size_t penalty_bytes =
+          rows * kCompactPenaltyLimit * sizeof(sampling::TokenPenalty);
       if (!Check(e->host_allocations_.Allocate(
                      &e->verification_candidates_host_,
                      candidates * sizeof(sampling::LogitCandidate)),
                  "pinned verification candidates", error_msg) ||
-          !Check(hip::AllocateDevice(&e->verification_penalties_,
-                                     rows * kCompactPenaltyLimit *
-                                         sizeof(sampling::TokenPenalty)),
-                 "verification penalties", error_msg))
+          !Check(
+              hip::AllocateDevice(&e->verification_penalties_, penalty_bytes),
+              "verification penalties", error_msg))
         return nullptr;
+      e->scratch_allocated_bytes_ += penalty_bytes;
       e->verification_penalty_capacity_ = rows * kCompactPenaltyLimit;
       e->verification_penalty_host_.reserve(e->verification_penalty_capacity_);
+    }
+  }
+  if (options.streamed_experts) {
+    const std::size_t batch_logit_bytes =
+        std::size_t{8} *
+        std::min<std::uint32_t>(8, e->options_.max_logit_rows) * c.vocab_size *
+        sizeof(float);
+    if (!Check(hip::AllocateDevice(&e->batch_logits_, batch_logit_bytes),
+               "batch logits", error_msg)) {
+      return nullptr;
+    }
+    e->scratch_allocated_bytes_ += batch_logit_bytes;
+    if (!Check(e->host_allocations_.Allocate(&e->batch_controls_,
+                                             8 * sizeof(Session::Control)),
+               "pinned decode controls", error_msg) ||
+        !Check(e->host_allocations_.Allocate(&e->batch_candidates_host_,
+                                             8 * sizeof(MtpCandidateLogits)),
+               "pinned batch candidates", error_msg)) {
+      return nullptr;
+    }
+    for (std::size_t i = 0; i < 8; ++i)
+      std::construct_at(e->batch_candidates_host_ + i);
+    if (c.ssm_head_dim == 128 && c.ssm_conv_kernel == 4) {
+      const std::size_t batch_gdn_bytes =
+          std::size_t{c.num_layers} * 8 * sizeof(GdnBatchItem);
+      if (!Check(e->host_allocations_.Allocate(
+                     &e->batch_gdn_host_, batch_gdn_bytes, hipHostMallocMapped),
+                 "pinned batched recurrent descriptors", error_msg) ||
+          !Check(
+              hipHostGetDevicePointer(reinterpret_cast<void**>(&e->batch_gdn_),
+                                      e->batch_gdn_host_, 0),
+              "mapped batched recurrent descriptors", error_msg)) {
+        return nullptr;
+      }
     }
   }
   for (void* p : a) {
@@ -1268,6 +1380,795 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
     }
   }
   return e;
+}
+
+bool Executor::EnableExpertCache(
+    std::size_t budget_bytes, gufo::storage::SsdStats* stats,
+    float cache_prior_bias,
+    gufo::storage::ExpertCacheManager::VictimPolicy victim_policy,
+    std::string* error_msg) {
+  if (expert_cache_ != nullptr || budget_bytes == 0) {
+    AssignError(error_msg, "expert cache is already enabled or has no budget");
+    return false;
+  }
+  const auto& layers = model_->layers();
+  const std::size_t num_experts = config().num_experts;
+  if (num_experts == 0 || config().num_experts_used == 0 ||
+      layers.size() > std::numeric_limits<std::size_t>::max() / num_experts ||
+      options_.max_batch >
+          std::numeric_limits<std::size_t>::max() / config().num_experts_used) {
+    AssignError(error_msg, "expert cache staging dimensions overflow");
+    return false;
+  }
+  expert_ids_capacity_ =
+      static_cast<std::size_t>(options_.max_batch) * config().num_experts_used;
+  const std::size_t map_count = layers.size() * num_experts;
+  if (expert_ids_capacity_ >
+          std::numeric_limits<std::size_t>::max() / sizeof(std::int32_t) ||
+      map_count >
+          std::numeric_limits<std::size_t>::max() / sizeof(std::int32_t)) {
+    AssignError(error_msg, "expert cache pinned buffer size overflows");
+    return false;
+  }
+  if (!Check(
+          host_allocations_.Allocate(
+              &expert_ids_host_, expert_ids_capacity_ * sizeof(std::int32_t)),
+          "pinned router IDs", error_msg) ||
+      !Check(host_allocations_.Allocate(
+                 &expert_slot_ids_host_,
+                 expert_ids_capacity_ * sizeof(std::int32_t)),
+             "pinned expert slot IDs", error_msg) ||
+      !Check(host_allocations_.Allocate(&expert_id_to_slot_host_,
+                                        map_count * sizeof(std::int32_t)),
+             "pinned expert indirection table", error_msg) ||
+      !Check(hipEventCreateWithFlags(&expert_ids_ready_, hipEventDisableTiming),
+             "expert IDs ready event", error_msg)) {
+    return false;
+  }
+  expert_cache_ = gufo::storage::ExpertCacheManager::Create(
+      layers, budget_bytes, config().num_experts_used, config().num_experts,
+      std::span<std::int32_t>(expert_id_to_slot_host_, map_count), error_msg,
+      stats, cache_prior_bias, victim_policy);
+  if (expert_cache_ == nullptr)
+    return false;
+  gufo::storage::ExpertCacheManager::WarmupResult warmup;
+  if (!expert_cache_->Prewarm(&warmup, error_msg))
+    return false;
+  if (route_trace_.is_open()) {
+    const std::lock_guard<std::mutex> lock(route_trace_mutex_);
+    route_trace_ << "{\"format\":\"gufo-expert-route-v1\","
+                 << "\"num_experts\":" << config().num_experts << ','
+                 << "\"experts_used\":" << config().num_experts_used << ','
+                 << "\"slots_per_layer\":" << expert_cache_->slots_per_layer()
+                 << "}\n";
+    if (!route_trace_) {
+      AssignError(error_msg, "failed to write expert route trace header");
+      return false;
+    }
+  }
+  std::clog << "expert_cache_prewarm slots_per_layer="
+            << expert_cache_->slots_per_layer()
+            << " bytes=" << warmup.bytes_read << " elapsed_ms="
+            << std::chrono::duration<double, std::milli>(warmup.elapsed).count()
+            << '\n';
+  return true;
+}
+
+void Executor::FinishAllExpertPrefetch() const noexcept {
+  if (expert_cache_ != nullptr)
+    expert_cache_->FinishAllPrefetch();
+}
+
+std::size_t Executor::ExpertCacheBytes() const noexcept {
+  return expert_cache_ != nullptr ? expert_cache_->allocated_bytes() : 0;
+}
+
+bool Executor::PrefetchCandidates(
+    std::span<const std::int32_t> candidate_tokens,
+    std::string* error_msg) const {
+  if (expert_cache_ == nullptr || candidate_tokens.empty())
+    return true;
+  const std::size_t max_prefetch =
+      std::min<std::size_t>(16, expert_cache_->slots_per_layer() / 3);
+  if (max_prefetch == 0)
+    return true;
+  const bool ok = expert_cache_->PrefetchTokenPriors(0, candidate_tokens,
+                                                     max_prefetch, error_msg);
+  if (!ok)
+    expert_cache_->FinishPrefetch(0);
+  return ok;
+}
+
+const DeviceLayer& Executor::Layer(std::uint32_t index) const noexcept {
+  if (expert_cache_ != nullptr && index < expert_cache_->device_layers().size())
+    return expert_cache_->device_layers()[index];
+  return model_->layers()[index];
+}
+
+bool Executor::CaptureExpertIds(const std::int32_t* ids, std::size_t count,
+                                std::string* error_msg) const {
+  if (ids == nullptr || count == 0 || count > expert_ids_capacity_ ||
+      expert_ids_host_ == nullptr || expert_ids_ready_ == nullptr) {
+    AssignError(error_msg, "router ID capture exceeds pinned staging capacity");
+    return false;
+  }
+  return Check(
+             hipMemcpyAsync(expert_ids_host_, ids, count * sizeof(std::int32_t),
+                            hipMemcpyDeviceToHost, stream_),
+             "router IDs download", error_msg) &&
+         Check(hipEventRecord(expert_ids_ready_, stream_),
+               "router IDs ready event", error_msg) &&
+         Check(hipEventSynchronize(expert_ids_ready_), "router IDs ready",
+               error_msg);
+}
+
+bool Executor::WriteRouteTrace(std::uint32_t layer, bool prefill,
+                               std::uint32_t rows, std::uint32_t experts_used,
+                               std::span<const std::int32_t> expert_ids,
+                               std::span<const std::uint32_t> windows,
+                               std::span<const RouteTracePass> passes,
+                               std::span<const std::int32_t> desk_experts,
+                               std::span<const std::int32_t> resident_experts,
+                               std::string* error_msg) const {
+  if (!route_trace_.is_open())
+    return true;
+  if (experts_used == 0 ||
+      static_cast<std::size_t>(rows) >
+          std::numeric_limits<std::size_t>::max() / experts_used ||
+      expert_ids.size() != static_cast<std::size_t>(rows) * experts_used) {
+    AssignError(error_msg, "expert route trace record has invalid dimensions");
+    return false;
+  }
+  std::uint64_t window_rows = 0;
+  for (const std::uint32_t count : windows)
+    window_rows += count;
+  if (window_rows != rows) {
+    AssignError(error_msg, "expert route trace window sizes do not match rows");
+    return false;
+  }
+
+  const std::lock_guard<std::mutex> lock(route_trace_mutex_);
+  route_trace_ << "{\"layer\":" << layer << ",\"phase\":\""
+               << (prefill ? "prefill" : "decode") << "\",\"rows\":" << rows
+               << ",\"used\":" << experts_used << ",\"windows\":[";
+  for (std::size_t i = 0; i < windows.size(); ++i) {
+    if (i != 0)
+      route_trace_ << ',';
+    route_trace_ << windows[i];
+  }
+  route_trace_ << "],\"ids\":[";
+  for (std::size_t i = 0; i < expert_ids.size(); ++i) {
+    if (i != 0)
+      route_trace_ << ',';
+    route_trace_ << expert_ids[i];
+  }
+  route_trace_ << "],\"passes\":[";
+  for (std::size_t i = 0; i < passes.size(); ++i) {
+    if (i != 0)
+      route_trace_ << ',';
+    route_trace_ << "{\"first\":" << passes[i].first_row
+                 << ",\"rows\":" << passes[i].rows << ",\"ids\":[";
+    for (std::size_t j = 0; j < passes[i].experts.size(); ++j) {
+      if (j != 0)
+        route_trace_ << ',';
+      route_trace_ << passes[i].experts[j];
+    }
+    route_trace_ << "]}";
+  }
+  route_trace_ << "],\"desk\":[";
+  for (std::size_t i = 0; i < desk_experts.size(); ++i) {
+    if (i != 0)
+      route_trace_ << ',';
+    route_trace_ << desk_experts[i];
+  }
+  route_trace_ << "],\"resident\":[";
+  for (std::size_t i = 0; i < resident_experts.size(); ++i) {
+    if (i != 0)
+      route_trace_ << ',';
+    route_trace_ << resident_experts[i];
+  }
+  route_trace_ << "]}\n";
+  route_trace_.flush();
+  if (!route_trace_) {
+    AssignError(error_msg, "failed while writing expert route trace");
+    return false;
+  }
+  return true;
+}
+
+bool Executor::StreamedMoeRows(
+    const DeviceLayer& layer, const float* x, float* out, std::uint32_t rows,
+    std::string* error_msg, std::uint32_t compute_group_rows,
+    std::span<const LookaheadPrediction> lookahead) const {
+  if (expert_cache_ == nullptr) {
+    AssignError(error_msg, "streamed experts have no enabled cache");
+    return false;
+  }
+  // Retire the just-consumed layer's lookahead credit before this path
+  // submits its own L+2 prediction. Otherwise L and L+1 can fill the cap.
+  expert_cache_->FinishPrefetch(layer.layer_index);
+  const auto& c = config();
+  const std::uint32_t used = c.num_experts_used;
+  const std::uint32_t default_group_rows =
+      expert_cache_->demand_slots_available(layer.layer_index) /
+      std::max(used, 1u);
+  const std::uint32_t rows_per_compute_group =
+      compute_group_rows == 0 ? default_group_rows : compute_group_rows;
+  if (rows_per_compute_group == 0) {
+    AssignError(error_msg, "expert cache cannot hold one routed token");
+    return false;
+  }
+  const std::size_t id_count = static_cast<std::size_t>(rows) * used;
+  if (used == 0 || id_count > expert_ids_capacity_ ||
+      !CaptureExpertIds(s_.ids, id_count, error_msg)) {
+    if (error_msg != nullptr && error_msg->empty())
+      AssignError(error_msg,
+                  "router ID window exceeds pinned staging capacity");
+    return false;
+  }
+
+  const Scratch base = s_;
+  DeviceLayer resident_layer = Layer(layer.layer_index);
+  resident_layer.experts_streamed = false;
+  if (tokens_device_base_ != nullptr && tokens_host_ != nullptr) {
+    const auto token_offset =
+        static_cast<std::size_t>(base.tokens - tokens_device_base_);
+    expert_cache_->RecordTokenRouting(
+        layer.layer_index,
+        std::span<const std::int32_t>(tokens_host_ + token_offset, rows),
+        std::span<const std::int32_t>(expert_ids_host_, id_count));
+  }
+  if (prefill_phase && rows > 64 &&
+      DeskRoomHasSlotHeadroom(expert_cache_->slots_per_layer(), used)) {
+    return StreamedMoeRowsDeskRoom(layer, x, out, rows, rows_per_compute_group,
+                                   error_msg, lookahead);
+  }
+
+  std::vector<std::uint32_t> route_windows;
+  for (std::uint32_t first = 0; first < rows;) {
+    const std::uint32_t available =
+        expert_cache_->demand_slots_available(layer.layer_index);
+    if (available < used) {
+      AssignError(error_msg, "expert cache cannot hold one routed token");
+      UseScratch(base);
+      return false;
+    }
+
+    // Grow by the original compute group (eight rows for MoeBatch, or the
+    // cache-bounded group for ForwardBody). Stop before the first group whose
+    // actual unique routed-expert union would consume a protected lookahead
+    // slot. This lets wide prefill windows batch more experts than the
+    // conservative slots/used estimate without changing arithmetic groups.
+    std::vector<std::uint8_t> seen(c.num_experts, 0);
+    std::size_t unique = 0;
+    std::uint32_t fitting_rows = 0;
+    while (first + fitting_rows < rows) {
+      const std::uint32_t group_rows = std::min<std::uint32_t>(
+          rows_per_compute_group, rows - first - fitting_rows);
+      bool fits = true;
+      for (std::uint32_t row = 0; row < group_rows && fits; ++row) {
+        const std::size_t id_base =
+            (static_cast<std::size_t>(first + fitting_rows + row)) * used;
+        for (std::uint32_t route = 0; route < used; ++route) {
+          const auto expert = expert_ids_host_[id_base + route];
+          if (expert < 0 ||
+              static_cast<std::uint32_t>(expert) >= c.num_experts) {
+            AssignError(error_msg, "router selected an out-of-range expert ID");
+            UseScratch(base);
+            return false;
+          }
+          if (!seen[static_cast<std::uint32_t>(expert)]) {
+            seen[static_cast<std::uint32_t>(expert)] = 1;
+            if (++unique > available) {
+              fits = false;
+              break;
+            }
+          }
+        }
+      }
+      if (!fits)
+        break;
+      fitting_rows += group_rows;
+    }
+
+    // Very small budgets may not fit a complete eight-row union. Fall back to
+    // the old conservative bound in that case; each row chunk is still
+    // resolved once and the existing short-batch arithmetic is retained.
+    const std::uint32_t fallback_rows =
+        std::min(available / used, rows - first);
+    const std::uint32_t bounded_fallback =
+        fallback_rows >= rows_per_compute_group
+            ? fallback_rows / rows_per_compute_group * rows_per_compute_group
+            : fallback_rows;
+    const std::uint32_t rows_per_window =
+        fitting_rows != 0 ? fitting_rows : bounded_fallback;
+    const std::size_t window_ids =
+        static_cast<std::size_t>(rows_per_window) * used;
+    const std::size_t future_id_count =
+        static_cast<std::size_t>(rows - first - rows_per_window) * used;
+    const auto* window_experts =
+        expert_ids_host_ + static_cast<std::size_t>(first) * used;
+    const auto* future_experts = window_experts + window_ids;
+    auto* window_slots =
+        expert_slot_ids_host_ + static_cast<std::size_t>(first) * used;
+    if (!expert_cache_->Resolve(
+            layer.layer_index,
+            std::span<const std::int32_t>(window_experts, window_ids),
+            std::span<std::int32_t>(window_slots, window_ids), error_msg,
+            std::span<const std::int32_t>(future_experts, future_id_count),
+            nullptr, true, prefill_phase)) {
+      UseScratch(base);
+      return false;
+    }
+    route_windows.push_back(rows_per_window);
+
+    bool ok = true;
+    for (std::uint32_t offset = 0; offset < rows_per_window;) {
+      const auto absolute_row = first + offset;
+      const auto group_remainder = absolute_row % rows_per_compute_group;
+      const auto rows_to_group_end =
+          group_remainder == 0 ? rows_per_compute_group
+                               : rows_per_compute_group - group_remainder;
+      const std::uint32_t count =
+          std::min({rows_per_compute_group, rows_to_group_end,
+                    rows_per_window - offset});
+      const std::size_t chunk_id_count = static_cast<std::size_t>(count) * used;
+      UseScratch(RowScratch(base, first + offset));
+      ok = Check(hipMemcpyAsync(
+                     s_.ids,
+                     window_slots + static_cast<std::size_t>(offset) * used,
+                     chunk_id_count * sizeof(std::int32_t),
+                     hipMemcpyHostToDevice, stream_),
+                 "expert slot IDs upload", error_msg) &&
+           MoeExperts(
+               resident_layer,
+               x + static_cast<std::size_t>(first + offset) * c.hidden_size,
+               out + static_cast<std::size_t>(first + offset) * c.hidden_size,
+               count, error_msg, true, true);
+      if (!ok)
+        break;
+      offset += count;
+    }
+    UseScratch(base);
+    if (first + rows_per_window == rows)
+      SubmitLookaheadPrefetch(lookahead, prefill_phase);
+
+    const hipError_t recorded = hipEventRecord(expert_ids_ready_, stream_);
+    const bool drain_ok =
+        recorded == hipSuccess
+            ? hipEventSynchronize(expert_ids_ready_) == hipSuccess
+            : hipStreamSynchronize(stream_) == hipSuccess;
+    expert_cache_->Release(layer.layer_index);
+    if (!ok)
+      return false;
+    if (!drain_ok) {
+      AssignError(error_msg, "waiting for streamed expert kernels failed");
+      return false;
+    }
+    first += rows_per_window;
+  }
+  if (!RestoreBaseScratchThenRun(base, [&] {
+        return MoeEpilogueRows(resident_layer, out, rows, error_msg);
+      })) {
+    UseScratch(base);
+    return false;
+  }
+  if (!WriteRouteTrace(
+          layer.layer_index, prefill_phase, rows, used,
+          std::span<const std::int32_t>(expert_ids_host_, id_count),
+          route_windows, {}, {}, {}, error_msg)) {
+    UseScratch(base);
+    return false;
+  }
+  return true;
+}
+
+bool Executor::StreamedMoeRowsDeskRoom(
+    const DeviceLayer& layer, const float* x, float* out, std::uint32_t rows,
+    std::uint32_t compute_group_rows, std::string* error_msg,
+    std::span<const LookaheadPrediction> lookahead) const {
+  const Config& c = config();
+  const std::uint32_t used = c.num_experts_used;
+  const std::uint32_t slots = expert_cache_->slots_per_layer();
+  DeviceLayer resident_layer = Layer(layer.layer_index);
+  resident_layer.experts_streamed = false;
+  if (used == 0 || !DeskRoomHasSlotHeadroom(slots, used) || rows <= 64 ||
+      expert_ids_host_ == nullptr || expert_slot_ids_host_ == nullptr ||
+      expert_id_to_slot_host_ == nullptr) {
+    moe_pending_.Reset();
+    AssignError(error_msg, "Desk/Room execution has invalid dimensions");
+    return false;
+  }
+  assert(slots >= 2 * used + 1);
+  const Scratch base = s_;
+  const std::uint32_t group_rows =
+      std::max<std::uint32_t>(1, compute_group_rows);
+  const std::size_t groups = (rows + group_rows - 1) / group_rows;
+  std::vector<std::uint8_t> seen(c.num_experts, 0);
+  std::vector<std::uint32_t> frequencies(c.num_experts, 0);
+  std::uint64_t unique_sum = 0;
+  std::uint32_t max_unique = 0;
+  for (std::uint32_t first = 0; first < rows; first += group_rows) {
+    std::fill(seen.begin(), seen.end(), 0);
+    const std::uint32_t count = std::min(group_rows, rows - first);
+    std::uint32_t unique = 0;
+    for (std::uint32_t row = 0; row < count; ++row) {
+      for (std::uint32_t route = 0; route < used; ++route) {
+        const auto expert =
+            expert_ids_host_[static_cast<std::size_t>(first + row) * used +
+                             route];
+        if (expert < 0 || static_cast<std::uint32_t>(expert) >= c.num_experts) {
+          UseScratch(base);
+          AssignError(error_msg, "router selected an out-of-range expert ID");
+          return false;
+        }
+        auto& frequency = frequencies[static_cast<std::uint32_t>(expert)];
+        if (frequency != std::numeric_limits<std::uint32_t>::max())
+          ++frequency;
+        if (!seen[static_cast<std::uint32_t>(expert)]) {
+          seen[static_cast<std::uint32_t>(expert)] = 1;
+          ++unique;
+        }
+      }
+    }
+    unique_sum += unique;
+    max_unique = std::max(max_unique, unique);
+  }
+
+  const double mean_unique = static_cast<double>(unique_sum) / groups;
+  const auto estimated_room =
+      static_cast<std::uint32_t>(std::ceil(std::max<double>(
+          used, mean_unique - static_cast<double>(max_unique) * 0.5)));
+  const std::uint32_t room_target =
+      std::clamp(std::max(estimated_room, (slots + 1) / 2), used, slots - 1);
+  const std::uint32_t desk_capacity = slots - room_target;
+  std::vector<std::pair<std::uint32_t, std::int32_t>> ranked;
+  ranked.reserve(c.num_experts);
+  for (std::uint32_t expert = 0; expert < c.num_experts; ++expert) {
+    if (frequencies[expert] != 0)
+      ranked.emplace_back(frequencies[expert],
+                          static_cast<std::int32_t>(expert));
+  }
+  std::sort(ranked.begin(), ranked.end(),
+            [](const auto& left, const auto& right) {
+              return left.first != right.first ? left.first > right.first
+                                               : left.second < right.second;
+            });
+  std::vector<std::int32_t> resident_experts;
+  std::vector<std::int32_t> room_group;
+  std::vector<std::uint8_t> is_resident(c.num_experts, 0);
+  resident_experts.reserve(std::min<std::size_t>(ranked.size(), slots));
+  room_group.reserve(ranked.size());
+  for (const auto& [frequency, expert] : ranked) {
+    (void)frequency;
+    // Desk/Room reads this pinned host map directly. The executor's streamed
+    // path is driven by one scheduler thread, so it cannot race cache updates.
+    if (expert_id_to_slot_host_[static_cast<std::size_t>(layer.layer_index) *
+                                    c.num_experts +
+                                static_cast<std::uint32_t>(expert)] >= 0) {
+      resident_experts.push_back(expert);
+      is_resident[static_cast<std::uint32_t>(expert)] = 1;
+    } else {
+      room_group.push_back(expert);
+    }
+  }
+  const std::size_t desk_keep_count =
+      std::min<std::size_t>(desk_capacity, resident_experts.size());
+  const std::vector<std::int32_t> desk_keep(
+      resident_experts.begin(), resident_experts.begin() + desk_keep_count);
+  const std::vector<std::int32_t> desk_release(
+      resident_experts.begin() + desk_keep_count, resident_experts.end());
+  std::vector<std::int32_t> desk_slots(resident_experts.size());
+  if (!expert_cache_->PinDesk(layer.layer_index, resident_experts, desk_slots,
+                              error_msg, true)) {
+    UseScratch(base);
+    return false;
+  }
+  struct DeskLease {
+    gufo::storage::ExpertCacheManager* manager;
+    std::uint32_t layer;
+    const std::vector<std::int32_t>& experts;
+    ~DeskLease() { manager->ReleaseDesk(layer, experts); }
+  } desk_lease{expert_cache_.get(), layer.layer_index, resident_experts};
+
+  const std::uint32_t room_slots =
+      static_cast<std::uint32_t>(slots - desk_keep_count);
+  if (room_slots < used) {
+    AssignError(error_msg, "Desk/Room leaves too few slots for one token");
+    UseScratch(base);
+    return false;
+  }
+  const auto room_plan = PlanDeskRoomPrefetch(
+      room_slots, static_cast<std::uint32_t>(room_group.size()), used);
+  if (room_plan.compute_slots < used) {
+    AssignError(error_msg,
+                "Desk/Room prefetch leaves too few slots for one token");
+    UseScratch(base);
+    return false;
+  }
+  const std::size_t prefetch_slots = room_plan.prefetch_slots;
+  const std::size_t room_compute_slots = room_plan.compute_slots;
+  std::vector<std::uint8_t> selected(c.num_experts, 0);
+  std::vector<std::uint32_t> route_windows{rows};
+  std::vector<RouteTracePass> route_passes;
+  const std::size_t pair_count = static_cast<std::size_t>(rows) * used;
+  const auto* group_ids = expert_ids_host_;
+  auto* pair_slots = expert_slot_ids_host_;
+  UseScratch(base);
+  const auto run_pass = [&](std::span<const std::int32_t> pass_experts,
+                            std::span<const std::int32_t> pass_routes,
+                            std::span<const std::int32_t> prefetch_routes,
+                            bool final_pass) {
+    if (pass_routes.empty())
+      return true;
+    std::vector<std::int32_t> resolved_slots(pass_routes.size());
+    if (!expert_cache_->Resolve(layer.layer_index, pass_routes, resolved_slots,
+                                error_msg, {}, nullptr, true, true, true, rows,
+                                true)) {
+      std::fill(selected.begin(), selected.end(), 0);
+      expert_cache_->Release(layer.layer_index);
+      return false;
+    }
+    route_passes.push_back(
+        {0, rows,
+         std::vector<std::int32_t>(pass_routes.begin(), pass_routes.end())});
+    for (const auto expert : pass_experts)
+      selected[static_cast<std::uint32_t>(expert)] = 1;
+    std::fill_n(pair_slots, pair_count, -1);
+    std::size_t route_index = 0;
+    for (std::size_t pair = 0; pair < pair_count; ++pair) {
+      const auto expert = group_ids[pair];
+      if (!selected[static_cast<std::uint32_t>(expert)])
+        continue;
+      if (route_index >= resolved_slots.size()) {
+        AssignError(error_msg, "Desk/Room route ownership is inconsistent");
+        std::fill(selected.begin(), selected.end(), 0);
+        (void)hipStreamSynchronize(stream_);
+        expert_cache_->Release(layer.layer_index);
+        return false;
+      }
+      const auto slot = resolved_slots[route_index++];
+      if (slot < 0 || static_cast<std::uint32_t>(slot) >= slots) {
+        AssignError(error_msg, "Desk/Room resolve returned an invalid slot");
+        std::fill(selected.begin(), selected.end(), 0);
+        (void)hipStreamSynchronize(stream_);
+        expert_cache_->Release(layer.layer_index);
+        return false;
+      }
+      pair_slots[pair] = slot;
+    }
+    std::fill(selected.begin(), selected.end(), 0);
+    if (route_index != resolved_slots.size()) {
+      AssignError(error_msg, "Desk/Room route ownership is inconsistent");
+      expert_cache_->Release(layer.layer_index);
+      return false;
+    }
+    bool ok = Check(hipMemcpyAsync(s_.ids, pair_slots,
+                                   pair_count * sizeof(std::int32_t),
+                                   hipMemcpyHostToDevice, stream_),
+                    "Desk/Room slot IDs upload", error_msg) &&
+              MoeExperts(resident_layer, x, out, rows, error_msg, true, true);
+    if (ok && prefetch_slots != 0 && !prefetch_routes.empty()) {
+      std::string prefetch_error;
+      if (!expert_cache_->Prefetch(layer.layer_index, prefetch_routes,
+                                   prefetch_slots, &prefetch_error, true,
+                                   false)) {
+        std::clog << "expert_room_prefetch_skipped layer=" << layer.layer_index
+                  << " reason=" << prefetch_error << '\n';
+        expert_cache_->FinishPrefetch(layer.layer_index);
+      }
+    }
+    if (ok && final_pass)
+      SubmitLookaheadPrefetch(lookahead, true);
+    const hipError_t record = hipEventRecord(expert_ids_ready_, stream_);
+    const bool drained =
+        record == hipSuccess
+            ? hipEventSynchronize(expert_ids_ready_) == hipSuccess
+            : hipStreamSynchronize(stream_) == hipSuccess;
+    expert_cache_->Release(layer.layer_index);
+    if (!ok)
+      return false;
+    if (!drained) {
+      AssignError(error_msg, "waiting for whole-chunk expert pass failed");
+      return false;
+    }
+    return true;
+  };
+
+  std::vector<std::vector<std::int32_t>> room_passes;
+  for (std::size_t room_first = 0; room_first < room_group.size();
+       room_first += room_compute_slots) {
+    const std::size_t room_count = std::min<std::size_t>(
+        room_compute_slots, room_group.size() - room_first);
+    room_passes.emplace_back(
+        room_group.begin() + static_cast<std::ptrdiff_t>(room_first),
+        room_group.begin() +
+            static_cast<std::ptrdiff_t>(room_first + room_count));
+  }
+  std::vector<std::int32_t> room_batch_of(c.num_experts, -1);
+  for (std::size_t batch = 0; batch < room_passes.size(); ++batch) {
+    for (const auto expert : room_passes[batch])
+      room_batch_of[static_cast<std::uint32_t>(expert)] =
+          static_cast<std::int32_t>(batch);
+  }
+  std::vector<std::int32_t> resident_routes;
+  resident_routes.reserve(pair_count);
+  std::vector<std::vector<std::int32_t>> room_routes(room_passes.size());
+  std::vector<std::uint8_t> pair_owners(pair_count, 0);
+  for (std::size_t pair = 0; pair < pair_count; ++pair) {
+    const auto expert = group_ids[pair];
+    const auto expert_index = static_cast<std::uint32_t>(expert);
+    if (is_resident[expert_index]) {
+      resident_routes.push_back(expert);
+    } else {
+      const auto batch = room_batch_of[expert_index];
+      if (batch < 0) {
+        AssignError(error_msg, "routed expert is absent from Desk and Room");
+        UseScratch(base);
+        return false;
+      }
+      room_routes[static_cast<std::size_t>(batch)].push_back(expert);
+    }
+    if (++pair_owners[pair] != 1) {
+      AssignError(error_msg, "routed pair has multiple Desk/Room owners");
+      UseScratch(base);
+      return false;
+    }
+  }
+  std::size_t routed_pairs = resident_routes.size();
+  for (const auto& routes : room_routes)
+    routed_pairs += routes.size();
+  if (routed_pairs != pair_count) {
+    AssignError(error_msg, "Desk/Room does not cover every routed pair");
+    UseScratch(base);
+    return false;
+  }
+
+  if (!resident_experts.empty()) {
+    const std::span<const std::int32_t> prefetch_first_room =
+        room_routes.empty()
+            ? std::span<const std::int32_t>{}
+            : std::span<const std::int32_t>(room_routes.front());
+    if (!run_pass(resident_experts, resident_routes, prefetch_first_room,
+                  room_passes.empty())) {
+      UseScratch(base);
+      return false;
+    }
+  }
+  // The non-kept resident experts have already written all of their routed
+  // down_e rows in Pass 0, so their slots become Room capacity now.
+  expert_cache_->ReleaseDesk(layer.layer_index, desk_release);
+  if (resident_experts.empty() && prefetch_slots != 0 && !room_routes.empty()) {
+    std::string prefetch_error;
+    if (!expert_cache_->Prefetch(layer.layer_index, room_routes.front(),
+                                 prefetch_slots, &prefetch_error, true,
+                                 false)) {
+      std::clog << "expert_room_prefetch_skipped layer=" << layer.layer_index
+                << " reason=" << prefetch_error << '\n';
+      expert_cache_->FinishPrefetch(layer.layer_index);
+    }
+  }
+  for (std::size_t room_index = 0; room_index < room_passes.size();
+       ++room_index) {
+    const std::span<const std::int32_t> prefetch_next =
+        room_index + 1 == room_passes.size()
+            ? std::span<const std::int32_t>{}
+            : std::span<const std::int32_t>(room_routes[room_index + 1]);
+    if (!run_pass(room_passes[room_index], room_routes[room_index],
+                  prefetch_next, room_index + 1 == room_passes.size())) {
+      UseScratch(base);
+      return false;
+    }
+  }
+  if (!RestoreBaseScratchThenRun(base, [&] {
+        return MoeEpilogueRows(resident_layer, out, rows, error_msg);
+      })) {
+    UseScratch(base);
+    return false;
+  }
+  if (!WriteRouteTrace(
+          layer.layer_index, true, rows, used,
+          std::span<const std::int32_t>(expert_ids_host_,
+                                        static_cast<std::size_t>(rows) * used),
+          route_windows, route_passes, desk_keep, resident_experts,
+          error_msg)) {
+    UseScratch(base);
+    return false;
+  }
+  return true;
+}
+
+bool Executor::PredictLookahead(const DeviceLayer& layer, const float* residual,
+                                std::uint32_t rows,
+                                std::vector<LookaheadPrediction>* predictions,
+                                std::string* error_msg) const {
+  if (expert_cache_ == nullptr || !layer.experts_streamed || rows == 0)
+    return true;
+  if (predictions == nullptr) {
+    AssignError(error_msg, "lookahead prediction output is null");
+    return false;
+  }
+  predictions->clear();
+  predictions->reserve(2);
+  const Config& c = config();
+  const std::uint32_t first = layer.layer_index + 1;
+  if (first >= c.num_layers)
+    return true;
+  const std::size_t prefetch_limit =
+      std::min<std::size_t>(16, expert_cache_->slots_per_layer() / 3);
+  if (prefetch_limit == 0)
+    return true;
+  if (residual == nullptr || lookahead_norm_ == nullptr ||
+      lookahead_mixed_ == nullptr || lookahead_inject_ == nullptr ||
+      lookahead_router_ == nullptr || lookahead_ids_ == nullptr ||
+      lookahead_weights_ == nullptr) {
+    AssignError(error_msg, "lookahead router scratch is not allocated");
+    return false;
+  }
+
+  const Scratch base = s_;
+  const std::uint32_t base_inject_parts = inject_parts_;
+  const auto restore_scratch = [&] {
+    UseScratch(base);
+    inject_parts_ = base_inject_parts;
+  };
+  Scratch lookahead = base;
+  lookahead.xn = lookahead_norm_;
+  lookahead.mixed = lookahead_mixed_;
+  lookahead.inject = lookahead_inject_;
+  const std::size_t id_count =
+      static_cast<std::size_t>(rows) * c.num_experts_used;
+  for (std::uint32_t distance = 1; distance <= 2; ++distance) {
+    if (distance > c.num_layers - first)
+      break;
+    const std::uint32_t target_index = first + distance - 1;
+    const DeviceLayer& target = Layer(target_index);
+    if (!target.experts_streamed || target.hc_ffn.norm.empty() ||
+        target.hc_ffn.down.empty() || target.hc_ffn.up.empty() ||
+        target.router.empty())
+      continue;
+
+    UseScratch(lookahead);
+    const bool prepared =
+        HcMix(target.hc_ffn, residual, false, s_.mixed, s_.inject, rows,
+              error_msg) &&
+        Dense(target.router, s_.mixed, lookahead_router_, rows, error_msg);
+    if (!prepared) {
+      restore_scratch();
+      return false;
+    }
+    RouterTopK(lookahead_router_, c.num_experts + 1, lookahead_ids_,
+               lookahead_weights_, rows, c.num_experts, c.num_experts_used,
+               stream_);
+    if (!Check(hipGetLastError(), "lookahead router", error_msg) ||
+        !CaptureExpertIds(lookahead_ids_, id_count, error_msg)) {
+      restore_scratch();
+      return false;
+    }
+    LookaheadPrediction prediction;
+    prediction.layer = target_index;
+    prediction.max_slots = prefetch_limit;
+    prediction.expert_ids.assign(expert_ids_host_, expert_ids_host_ + id_count);
+    predictions->push_back(std::move(prediction));
+  }
+  restore_scratch();
+  return true;
+}
+
+void Executor::SubmitLookaheadPrefetch(
+    std::span<const LookaheadPrediction> predictions, bool prefill) const {
+  if (expert_cache_ == nullptr)
+    return;
+  for (const auto& prediction : predictions) {
+    std::string prefetch_error;
+    if (!expert_cache_->Prefetch(prediction.layer, prediction.expert_ids,
+                                 prediction.max_slots, &prefetch_error, prefill,
+                                 true)) {
+      std::clog << "expert_prefetch_skipped layer=" << prediction.layer
+                << " reason=" << prefetch_error << '\n';
+      expert_cache_->FinishPrefetch(prediction.layer);
+    }
+  }
 }
 
 std::unique_ptr<Session> Executor::CreateSession(core::SessionMode mode,
@@ -1285,11 +2186,22 @@ std::unique_ptr<Session> Executor::CreateSession(core::SessionMode mode,
     AssignError(error_msg, "session context exceeds the model context");
     return nullptr;
   }
+  const std::uint32_t allocation_context =
+      !options_.streamed_experts || options_.max_context == 0
+          ? max_context
+          : options_.max_context;
+  if (allocation_context < max_context ||
+      allocation_context > context_capacity_) {
+    AssignError(error_msg,
+                "session reservation does not cover the requested context");
+    return nullptr;
+  }
   s->max_context_ = max_context;
   // Before sparse attention starts, pooling can lag by indexer_top_k
   // rows. Afterwards only an incomplete block precedes the current batch.
   // Completed block keys remain in block_k; their raw rows are dead.
-  s->index_capacity_ = IndexerCapacity(c, options_.max_batch, max_context);
+  s->index_capacity_ =
+      IndexerCapacity(c, options_.max_batch, allocation_context);
   s->linear_.resize(c.num_layers);
   s->attention_.resize(c.num_layers);
   auto& a = s->allocations_;
@@ -1306,18 +2218,18 @@ std::unique_ptr<Session> Executor::CreateSession(core::SessionMode mode,
       l.state = Alloc<float>(a, state_elems, error_msg, &s->allocated_bytes_);
     } else {
       auto& at = s->attention_[il];
-      at.k_cache =
-          Alloc<__half>(a, static_cast<std::size_t>(max_context) * kv_row,
-                        error_msg, &s->allocated_bytes_);
-      at.v_cache =
-          Alloc<__half>(a, static_cast<std::size_t>(max_context) * kv_row,
-                        error_msg, &s->allocated_bytes_);
+      at.k_cache = Alloc<__half>(
+          a, static_cast<std::size_t>(allocation_context) * kv_row, error_msg,
+          &s->allocated_bytes_);
+      at.v_cache = Alloc<__half>(
+          a, static_cast<std::size_t>(allocation_context) * kv_row, error_msg,
+          &s->allocated_bytes_);
       at.index_k = Alloc<float>(
           a, static_cast<std::size_t>(s->index_capacity_) * c.indexer_head_dim,
           error_msg, &s->allocated_bytes_);
       at.block_k = Alloc<__half>(
           a,
-          static_cast<std::size_t>(max_context / c.compress_ratio + 1) *
+          static_cast<std::size_t>(allocation_context / c.compress_ratio + 1) *
               c.indexer_head_dim,
           error_msg, &s->allocated_bytes_);
     }
@@ -1333,17 +2245,19 @@ std::unique_ptr<Session> Executor::CreateSession(core::SessionMode mode,
         a, static_cast<std::size_t>(options_.max_speculative) * c.HcDim(),
         error_msg, &s->allocated_bytes_);
     s->mtp_.k_cache =
-        Alloc<__half>(a, static_cast<std::size_t>(max_context) * kv_row,
+        Alloc<__half>(a, static_cast<std::size_t>(allocation_context) * kv_row,
                       error_msg, &s->allocated_bytes_);
     s->mtp_.v_cache =
-        Alloc<__half>(a, static_cast<std::size_t>(max_context) * kv_row,
+        Alloc<__half>(a, static_cast<std::size_t>(allocation_context) * kv_row,
                       error_msg, &s->allocated_bytes_);
     s->mtp_.index_k =
         Alloc<float>(a, std::size_t{s->index_capacity_} * c.indexer_head_dim,
                      error_msg, &s->allocated_bytes_);
-    s->mtp_.block_k = Alloc<__half>(
-        a, std::size_t{max_context / c.compress_ratio + 1} * c.indexer_head_dim,
-        error_msg, &s->allocated_bytes_);
+    s->mtp_.block_k =
+        Alloc<__half>(a,
+                      std::size_t{allocation_context / c.compress_ratio + 1} *
+                          c.indexer_head_dim,
+                      error_msg, &s->allocated_bytes_);
     s->mtp_.h = Alloc<float>(a, c.HcDim(), error_msg, &s->allocated_bytes_);
     if (!model_->draft_output().empty()) {
       s->mtp_.draft_rows = Alloc<std::uint8_t>(
@@ -1358,6 +2272,11 @@ std::unique_ptr<Session> Executor::CreateSession(core::SessionMode mode,
     if (p == nullptr) {
       return nullptr;
     }
+  }
+  if (options_.streamed_experts && s->mtp_enabled_ &&
+      options_.max_speculative > 1 &&
+      !ReserveRollback(*s, options_.max_speculative - 1, error_msg)) {
+    return nullptr;
   }
   // The zero fills above run on the null stream; nothing may read the new
   // buffers until they have landed.
@@ -1440,8 +2359,8 @@ bool Executor::DraftLogits(const Session& session, const float* x,
   return true;
 }
 
-bool Executor::EnsureRollback(Session& session, std::uint32_t depth,
-                              std::string* error_msg) const {
+bool Executor::ReserveRollback(Session& session, std::uint32_t depth,
+                               std::string* error_msg) const {
   if (depth <= session.rollback_depth_)
     return true;
   if (depth >= options_.max_speculative ||
@@ -1484,6 +2403,18 @@ bool Executor::EnsureRollback(Session& session, std::uint32_t depth,
     session.rollback_depth_ = row + 1;
   }
   return true;
+}
+
+bool Executor::EnsureRollback(Session& session, std::uint32_t depth,
+                              std::string* error_msg) const {
+  if (depth <= session.rollback_depth_)
+    return true;
+  if (options_.streamed_experts) {
+    AssignError(error_msg,
+                "session rollback depth exceeds its load-time reservation");
+    return false;
+  }
+  return ReserveRollback(session, depth, error_msg);
 }
 
 std::size_t Executor::SessionBytes(
@@ -1550,6 +2481,13 @@ std::size_t Executor::DeferredScratchBytes() const {
   }
   // Committed spare blocks for captures, whether or not they exist yet.
   return bytes + SnapshotAllocator::SpareBytes(mutable_bytes);
+}
+
+std::size_t Executor::ScratchBytes() const noexcept {
+  return qfn_workspace_bytes_ > std::numeric_limits<std::size_t>::max() -
+                                    scratch_allocated_bytes_
+             ? std::numeric_limits<std::size_t>::max()
+             : scratch_allocated_bytes_ + qfn_workspace_bytes_;
 }
 
 /// Column-tile width for the routed expert GEMMs: the tile at or above twice
@@ -1994,10 +2932,9 @@ void Executor::Combine(float* res, const float* gamma, std::uint32_t n_tokens,
   defer_residual_ = false;
   const bool deferred = res_deferred_;
   res_deferred_ = false;
-  if (moe_pending_) {
+  if (moe_pending_.Consume()) {
     // The MoE epilogue was deferred to this combine (see Moe), and with it
     // the previous combine's residual update when that was deferred too.
-    moe_pending_ = false;
     const auto* down = reinterpret_cast<const __half*>(s_.down_e);
     const float* fused_w = deferred ? fused_inject : nullptr;
     if (wide_mixer_ && MatrixRows(n_tokens) &&
@@ -2232,7 +3169,7 @@ bool Executor::PleFetch(Session& session, std::span<const std::int32_t> tokens,
           std::span<const std::uint32_t>(host_rows_.data(), rows),
           std::span<float>(host_emb_ + shared * c.PleEmbeddingDim(),
                            rest.size() * c.PleEmbeddingDim()),
-          std::span(&owner, 1));
+          std::span(&owner, 1), prefill_phase);
       if (!prefetch_.tail) {
         prefetch_.claimed = 0;
         prefetch_.ready = false;
@@ -2262,7 +3199,7 @@ bool Executor::PleFetch(Session& session, std::span<const std::int32_t> tokens,
       std::span<const std::uint32_t>(host_rows_.data(), n * c.ple_heads),
       std::span<float>(host_emb_,
                        static_cast<std::size_t>(n) * c.PleEmbeddingDim()),
-      std::span(&owner, 1));
+      std::span(&owner, 1), prefill_phase);
   if (!ple_pending_) {
     AssignError(error_msg, "n-gram table read could not start");
   }
@@ -2316,7 +3253,7 @@ void Executor::PrefetchPle(const Session& session,
   const NgramGatherOwner owner{rows.size(), &session.ngram_counters_};
   prefetch_.pending =
       ngram_->StartRead(rows, std::span<float>(prefetch_.rows.data(), count),
-                        std::span(&owner, 1));
+                        std::span(&owner, 1), true);
 }
 
 void Executor::FinishPrefetch() const {
@@ -2674,7 +3611,7 @@ bool Executor::Attention(const DeviceLayer& l, Session::AttentionState& s,
 
 bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
                    std::uint32_t n_tokens, std::string* error_msg,
-                   bool last_only) const {
+                   bool last_only, const float* lookahead_residual) const {
   const Config& c = config();
   const std::uint32_t used = c.num_experts_used;
   // Router logits and the shared-expert gate come out of one GEMM.
@@ -2683,6 +3620,19 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
   }
   RouterTopK(s_.router, c.num_experts + 1, s_.ids, s_.weights, n_tokens,
              c.num_experts, used, stream_);
+  std::vector<LookaheadPrediction> lookahead;
+  if (!PredictLookahead(
+          l, lookahead_residual != nullptr ? lookahead_residual : s_.res,
+          n_tokens, &lookahead, error_msg))
+    return false;
+  const auto cancel_future_prefetch = [&] {
+    if (expert_cache_ == nullptr)
+      return;
+    for (std::uint32_t distance = 1; distance <= 2; ++distance) {
+      if (distance < c.num_layers - l.layer_index)
+        expert_cache_->FinishPrefetch(l.layer_index + distance);
+    }
+  };
   if (ExpertMatrixRows(n_tokens)) {
     ExpertCounts(s_.ids, s_.expert_counts, n_tokens, c.num_experts, used,
                  stream_);
@@ -2692,6 +3642,7 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
                "expert counts download", error_msg) ||
         !Check(hipEventRecord(counts_ready_, stream_), "expert counts event",
                error_msg)) {
+      cancel_future_prefetch();
       return false;
     }
   }
@@ -2701,6 +3652,7 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
   shexp_half_ready_ = false;
   if (!GatedDense(l.shexp_up, l.shexp_gate, x, s_.shexp_up, n_tokens,
                   &l.shexp_down, error_msg)) {
+    cancel_future_prefetch();
     return false;
   }
   if (shexp_half_ready_) {
@@ -2708,10 +3660,12 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
     if (!DenseF16Gemm(l.shexp_down.data, s_.shexp_half, s_.shexp_out, n_tokens,
                       l.shexp_down.rows, l.shexp_down.cols, stream_)) {
       AssignError(error_msg, "shared expert F16 GEMM failed");
+      cancel_future_prefetch();
       return false;
     }
   } else if (!Dense(l.shexp_down, s_.shexp_up, s_.shexp_out, n_tokens,
                     error_msg)) {
+    cancel_future_prefetch();
     return false;
   }
   if (last_only && l.ffn_gate_exps.type == GgmlType::kQ8_0 &&
@@ -2726,7 +3680,8 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
     try {
       const std::size_t offset =
           static_cast<std::size_t>(n_tokens - 1) * c.hidden_size;
-      const bool ok = MoeExperts(l, x + offset, out + offset, 1, error_msg);
+      const bool ok = MoeExperts(l, x + offset, out + offset, 1, error_msg,
+                                 false, false, lookahead);
       UseScratch(base);
       return ok;
     } catch (...) {
@@ -2734,26 +3689,48 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
       throw;
     }
   }
-  return MoeExperts(l, x, out, n_tokens, error_msg);
+  const bool ok =
+      MoeExperts(l, x, out, n_tokens, error_msg, false, false, lookahead);
+  if (expert_cache_ != nullptr) {
+    expert_cache_->FinishPrefetch(l.layer_index);
+    if (!ok)
+      cancel_future_prefetch();
+  }
+  return ok;
 }
 
 bool Executor::WmmaExperts(const DeviceLayer& l, std::uint32_t n_tokens) const {
-  const Config& c = config();
-  return ExpertMatrixRows(n_tokens) &&
-         (l.ffn_gate_exps.type == GgmlType::kQ4_K ||
-          l.ffn_gate_exps.type == GgmlType::kQ5_K) &&
-         l.ffn_up_exps.type == l.ffn_gate_exps.type &&
-         (l.ffn_down_exps.type == GgmlType::kQ5_1 ||
-          l.ffn_down_exps.type == GgmlType::kQ8_0) &&
-         c.hidden_size % 256 == 0 && c.expert_ff % 64 == 0;
+  return UsesRoutedF16Experts(l, config(), n_tokens);
 }
 
-bool Executor::MoeExperts(const DeviceLayer& l, const float* x, float* out,
-                          std::uint32_t n_tokens,
-                          std::string* error_msg) const {
+bool Executor::MoeExperts(
+    const DeviceLayer& l, const float* x, float* out, std::uint32_t n_tokens,
+    std::string* error_msg, bool defer_epilogue, bool recompute_route_counts,
+    std::span<const LookaheadPrediction> lookahead) const {
+  if (l.experts_streamed) {
+    if (defer_epilogue || recompute_route_counts) {
+      AssignError(error_msg,
+                  "streamed experts do not support deferred epilogues or "
+                  "route-count recomputation");
+      return false;
+    }
+    return StreamedMoeRows(l, x, out, n_tokens, error_msg, 0, lookahead);
+  }
   const Config& c = config();
   const std::uint32_t used = c.num_experts_used;
   const std::uint32_t slots = n_tokens * used;
+  if (recompute_route_counts) {
+    ExpertCounts(s_.ids, s_.expert_counts, n_tokens, c.num_experts, used,
+                 stream_);
+    if (!Check(hipMemcpyAsync(counts_host_, s_.expert_counts,
+                              c.num_experts * sizeof(std::uint32_t),
+                              hipMemcpyDeviceToHost, stream_),
+               "remapped expert counts", error_msg) ||
+        !Check(hipEventRecord(counts_ready_, stream_),
+               "remapped expert counts event", error_msg)) {
+      return false;
+    }
+  }
   if (!RouteHints(n_tokens, error_msg)) {
     return false;
   }
@@ -2834,11 +3811,19 @@ bool Executor::MoeExperts(const DeviceLayer& l, const float* x, float* out,
       return false;
     }
   }
-  if (wmma_experts) {
+  return defer_epilogue || MoeEpilogueRows(l, out, n_tokens, error_msg);
+}
+
+bool Executor::MoeEpilogueRows(const DeviceLayer& l, float* out,
+                               std::uint32_t n_tokens,
+                               std::string* error_msg) const {
+  const Config& c = config();
+  const std::uint32_t used = c.num_experts_used;
+  if (UsesRoutedF16Experts(l, c, n_tokens)) {
     // The combine that follows folds this epilogue into its own pass when
     // it takes the F16 route (Combine); otherwise it runs here.
-    moe_pending_ = out == s_.block_out;
-    if (!moe_pending_) {
+    moe_pending_.SetForOutput(out, s_.block_out);
+    if (!moe_pending_.pending()) {
       MoeEpilogueVec4F16(reinterpret_cast<const __half*>(s_.down_e), s_.weights,
                          s_.shexp_out, s_.router + c.num_experts,
                          c.num_experts + 1, out, n_tokens, used, c.hidden_size,
@@ -2852,7 +3837,7 @@ bool Executor::MoeExperts(const DeviceLayer& l, const float* x, float* out,
     MoeEpilogue(s_.down_e, s_.weights, s_.shexp_out, s_.router + c.num_experts,
                 c.num_experts + 1, out, n_tokens, used, c.hidden_size, stream_);
   }
-  return true;
+  return Check(hipGetLastError(), "MoE epilogue", error_msg);
 }
 
 bool Executor::CopyTrunkHidden(const Session& session, std::span<float> hidden,
@@ -3104,8 +4089,8 @@ bool Executor::Forward(Session& session, std::span<const std::int32_t> tokens,
   // Decode-sized batches replay as graphs; a pooling backlog (the first
   // batch past the budget) needs the wider eager grid.
   const std::uint32_t graph_pool_grid = n / std::max(c.compress_ratio, 1u) + 1;
-  const bool graph = !prefill_phase && n <= kVecBatch &&
-                     pool_grid <= graph_pool_grid &&
+  const bool graph = expert_cache_ == nullptr && !prefill_phase &&
+                     n <= kVecBatch && pool_grid <= graph_pool_grid &&
                      session.position_ >= session.VisionLayout().PrefixLength();
   const std::uint64_t key = static_cast<std::uint64_t>(n) |
                             (static_cast<std::uint64_t>(n_logits) << 16) |
@@ -3186,12 +4171,11 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
     session.vision_input_.Inject(s_.res, start_pos, n, c.hidden_size,
                                  c.hc_count, stream_);
   }
-  const auto& layers = model_->layers();
   bool normed = false;  ///< xn holds the next mixer's grouped norm of res
   for (std::uint32_t il = first_layer; il < end_layer; ++il) {
     if (!session.CheckCancellation(error_msg))
       return false;
-    const DeviceLayer& l = layers[il];
+    const DeviceLayer& l = Layer(il);
     if (c.IsPleLayer(il) && !Ple(l, session, n, s_.res, speculative, error_msg,
                                  embeddings_ready, checkpoint)) {
       return false;
@@ -3233,10 +4217,10 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
     const float* next_norm =
         il + 1 < c.num_layers
             ? (c.IsPleLayer(il + 1) ? nullptr
-                                    : layers[il + 1].hc_attn.norm.f32())
+                                    : Layer(il + 1).hc_attn.norm.f32())
             : nullptr;
     const float* next_inject =
-        next_norm != nullptr ? InjectWeights(layers[il + 1].hc_attn) : nullptr;
+        next_norm != nullptr ? InjectWeights(Layer(il + 1).hc_attn) : nullptr;
     // Cache updates precede the FFN. Without MTP, only requested head rows
     // and the checkpoint frontier consume the final layer's residual.
     // Keep aligned tiles and at least 96 rows to retain the wide arithmetic.
@@ -3247,11 +4231,11 @@ bool Executor::ForwardBody(Session& session, std::uint32_t n,
                              ? (n - needed) / 128 * 128
                              : 0U;
     const auto finish = [&](std::uint32_t rows) {
-      defer_residual_ = WmmaExperts(l, rows);
+      defer_residual_ = !l.experts_streamed && WmmaExperts(l, rows);
       // The wide FFN reads the mix only through its F16 rows (router, routed
       // experts) and tiled Q8 rows (shared expert).
-      const bool no_f32 = prefill_phase && defer_residual_ &&
-                          rows <= options_.max_batch &&
+      const bool no_f32 = !l.experts_streamed && prefill_phase &&
+                          defer_residual_ && rows <= options_.max_batch &&
                           l.router.type == GgmlType::kF16 &&
                           l.shexp_gate.type == GgmlType::kQ8_0 &&
                           l.shexp_up.type == GgmlType::kQ8_0;
@@ -3650,6 +4634,8 @@ bool Executor::SaveSnapshot(const Session& session, std::uint32_t hidden_rows,
                 "snapshot with a pending speculative batch; roll back first");
     return false;
   }
+  if (expert_cache_ != nullptr)
+    expert_cache_->FinishAllPrefetch();
   if (hidden_rows > session.position_ ||
       hidden_rows > options_.max_speculative) {
     AssignError(error_msg, "kept trunk rows exceed the position or batch");
@@ -3817,6 +4803,8 @@ bool Executor::RestoreSnapshot(Session& session,
     AssignError(error_msg, "session belongs to another executor");
     return false;
   }
+  if (expert_cache_ != nullptr)
+    expert_cache_->FinishAllPrefetch();
   if (payload.size() < sizeof(SnapshotHeader)) {
     AssignError(error_msg, "snapshot payload is truncated");
     return false;
@@ -4543,7 +5531,8 @@ bool Executor::MtpBody(Session& session, std::uint32_t n, std::uint32_t pos,
   }
   // The discarded padding row shares the final row's routed experts, so
   // preserving multi-row arithmetic does not reread another expert set.
-  if (!Moe(l, s_.mixed, s_.block_out, tail_rows, error_msg, last_only)) {
+  if (!Moe(l, s_.mixed, s_.block_out, tail_rows, error_msg, last_only,
+           s_.mtp_res)) {
     return false;
   }
   Combine(s_.mtp_res, nullptr, tail_rows);
