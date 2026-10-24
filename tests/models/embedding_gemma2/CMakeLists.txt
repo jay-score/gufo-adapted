@@ -62,7 +62,7 @@ endif()
 
 add_executable(embedding_gemma2_tokenizer_test tokenizer_test.cpp)
 target_link_libraries(embedding_gemma2_tokenizer_test PRIVATE
-  gufo_embedding_gemma2)
+  gufo_embedding_gemma2 gufo_platform)
 target_compile_definitions(embedding_gemma2_tokenizer_test PRIVATE
   GUFO_EMBEDDING_GEMMA2_TOKENIZER_GOLDEN="${PROJECT_SOURCE_DIR}/tests/fixtures/embedding_gemma2/tokenizer_golden.json")
 add_test(NAME embedding_gemma2_tokenizer_test

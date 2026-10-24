@@ -379,4 +379,8 @@ bool OwnerOnly(const FileInfo& info, std::uint32_t forbidden) noexcept {
   return info.user_id == ::geteuid() && (info.permissions & forbidden) == 0;
 }
 
+bool RestrictToOwner(const std::filesystem::path& path) noexcept {
+  return ::chmod(path.c_str(), 0700) == 0;
+}
+
 }  // namespace gufo::platform

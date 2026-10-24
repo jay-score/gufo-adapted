@@ -466,4 +466,9 @@ bool OwnerOnly(const FileInfo&, std::uint32_t) noexcept {
   return true;
 }
 
+bool RestrictToOwner(const std::filesystem::path&) noexcept {
+  // No-op: access follows the directory's inherited ACLs.
+  return true;
+}
+
 }  // namespace gufo::platform

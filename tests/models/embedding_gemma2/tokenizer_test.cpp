@@ -1,7 +1,5 @@
 #include "src/models/embedding_gemma2/tokenizer.hpp"
 
-#include <unistd.h>
-
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -16,6 +14,7 @@
 #include <vector>
 
 #include "src/core/json.hpp"
+#include "src/core/platform/os_info.hpp"
 
 namespace embedding_gemma2 = gufo::models::embedding_gemma2;
 
@@ -74,7 +73,8 @@ std::string Format(const std::vector<std::uint32_t>& ids) {
 void CheckMalformedInputs() {
   const std::filesystem::path dir =
       std::filesystem::temp_directory_path() /
-      ("embedding_gemma2_tokenizer_" + std::to_string(::getpid()));
+      ("embedding_gemma2_tokenizer_" +
+       std::to_string(gufo::platform::ProcessId()));
   std::filesystem::create_directories(dir);
   std::string error;
   Check(!embedding_gemma2::Tokenizer::Load((dir / "missing").string(), &error)
