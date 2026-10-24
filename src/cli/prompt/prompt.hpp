@@ -49,6 +49,7 @@ struct PromptOptions {
   std::string cache_policy{"lru"};
   bool ple_shelf{false};
   bool ssd_stats{false};
+  bool prompt_lookup{false};
 };
 
 /// Prints help for `gufo prompt`.

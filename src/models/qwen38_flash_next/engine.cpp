@@ -1162,7 +1162,8 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   // a peer must not change a sampled request's proposals or RNG sequence.
   // A request's first speculative step copies nothing (see
   // speculative::PromptLookup<>).
-  pending->lookup_cap = lookup_.Step(base) ? cap : 0;
+  pending->lookup_cap =
+      model_->options_.prompt_lookup && lookup_.Step(base) ? cap : 0;
   if (pending->lookup_cap != 0) {
     lookup_.Extend(tokens_, sampled);
   }
