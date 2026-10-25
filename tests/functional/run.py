@@ -188,6 +188,17 @@ def compare_runs(baseline_dir, candidate_dir):
     return comparison
 
 
+# Windows Popen cannot deliver SIGINT. A server started in its own process
+# group receives CTRL_BREAK_EVENT instead, which gufo handles like SIGINT.
+SERVER_POPEN = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+                if os.name == "nt" else {})
+
+
+def interrupt_server(process):
+    """Requests the graceful shutdown that Ctrl+C starts."""
+    process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGINT)
+
+
 @contextlib.contextmanager
 def server(command, log_path, startup_timeout, environment=None):
     def interrupt(signum, frame):
@@ -203,7 +214,7 @@ def server(command, log_path, startup_timeout, environment=None):
             previous_handlers = {signum: signal.signal(signum, interrupt)
                                  for signum in stop_signals}
             process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
-                                       env=environment)
+                                       env=environment, **SERVER_POPEN)
             deadline = time.monotonic() + startup_timeout
             while time.monotonic() < deadline:
                 if process.poll() is not None:
@@ -224,13 +235,7 @@ def server(command, log_path, startup_timeout, environment=None):
             yield process
         finally:
             if process is not None and process.poll() is None:
-                try:
-                    process.send_signal(signal.SIGINT)
-                except ValueError:
-                    # Windows Popen cannot deliver SIGINT; TerminateProcess
-                    # still reaps the server, but graceful shutdown is never
-                    # exercised there.
-                    process.terminate()
+                interrupt_server(process)
                 try:
                     process.wait(timeout=30)
                 except subprocess.TimeoutExpired:
