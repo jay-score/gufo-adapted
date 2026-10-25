@@ -125,7 +125,3 @@ for the bundle ([#789](https://github.com/gufo-org/gufo/issues/789)).
   `hipblaslt\`).
 - After reinstalling or upgrading the SDK, rerun the patch in step 2 and
   rebuild into a fresh build directory so the runtime stages again.
-- `gufo serve llm` with Qwen3.8-27B can fail with `std::bad_alloc` on
-  machines whose OS memory pool is small next to the GPU carve-out: the serve
-  path holds a second host copy of the weights. `gufo bench` and
-  `gufo prompt` load the weights once.
