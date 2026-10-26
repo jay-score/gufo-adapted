@@ -290,12 +290,38 @@ Qwen27 Q8 remains an explicit manual functional qualification outside this bound
 CI selection. Numerical and agent-replay obligations outside the selected suites
 remain separate; representative coverage is not all-model qualification.
 
-An ephemeral GPU runner needs the documented native build dependencies, GPU
-access and enough temporary disk space for its selected checkpoints. It does not
-need mounted models or audio. `devlab_models.py` downloads only selected model
-assets and necessary drafts/projectors/evaluator weights from fixed Hugging Face
-revisions while both production binaries build. Optional `$GUFO_CI_CACHE`
-(default `$RUNNER_TOOL_CACHE/gufo`) reuse is an optimization, not a prerequisite.
+GitHub-hosted Linux runners build the candidate and main production packages
+with Nix, signed public binary caches, Cachix and a shared C/C++/HIP compiler cache.
+Both timing arms use the candidate's lock file. The binary artifact records the
+authorized revisions and executable checksums. A compressed portable bundle
+contains both executables, their pinned ELF loader, shared libraries and gfx1151
+BLAS kernel data. The GPU runner downloads directly from Actions artifacts.
+A bounded range probe
+measures the direct route; when slow, the downloader tests a rootless Cloudflare
+WARP MASQUE proxy (`usque` v4.2.1, checksum pinned) and uses it when faster.
+Only the binary transfer uses the proxy; runner control and model mirror traffic
+keep their existing routes. Temporary credentials and the loopback proxy are
+removed after transfer. The original Actions artifact SHA-256 is mandatory.
+No release relay or privileged publishing workflow is needed.
+The large Linux runtime is archived separately and cached under
+`$HF_HOME/gufo/runtimes` by SHA-256. Cache hits are hash-checked and unpacked
+locally; changed toolchains get a new content hash. Ordinary builds transfer
+only the two small executable packages. Windows PRs and manual dispatches use
+the same adaptive downloader and run device and per-family model smoke checks.
+The GPU runner unpacks and executes the verified bundle directly;
+it needs neither Nix nor administrator access and never compiles. Both binaries
+share one bundled runtime. Hosted jobs restore dependencies from signed binary
+caches; fork PRs need no cache write credentials.
+
+An ephemeral GPU runner needs GPU access and enough disk space for its selected
+checkpoints. It does not need mounted models or audio. `devlab_models.py`
+downloads only selected assets and necessary drafts/projectors/evaluator weights
+from fixed Hugging Face revisions while the hosted bundle builds and downloads.
+Linux and Windows inherit the runner's Hugging Face mirror and transfer settings.
+Model files and download metadata live under `$HF_HOME/gufo/models`, keyed by
+asset and revision, outside the disposable runner workspace. Without `HF_HOME`,
+the workflows use the user's standard `.cache/huggingface` directory. Cleanup
+preserves the models; logs report existing required files and download duration.
 The authorized controller checkout contains the English voice fixture. TTS uses
 the main Gufo binary and a pinned ASR checkpoint as its intelligibility
 evaluator. Missing downloads or fixtures fail visibly.
