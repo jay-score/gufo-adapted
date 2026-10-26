@@ -27,7 +27,7 @@ struct EmbeddingBatch {
 };
 
 struct EmbeddingPart {
-  enum class Type { kText, kImage };
+  enum class Type { kText, kImage, kAudio };
   Type type{Type::kText};
   std::string value;
 };
@@ -40,6 +40,7 @@ enum class EmbeddingStatus {
   kCancelled,
   kInputTooLong,
   kInvalidInput,
+  kInvalidAudioInput,
   kFailed,
   /// The device failed a probe after an error. The service stays lost.
   kDeviceLost,
@@ -74,7 +75,7 @@ struct EmbeddingServiceOptions {
                                          std::size_t max_tokens,
                                          std::uint32_t image_token);
 
-/// Native HIP EmbeddingGemma 2 text and image embedding service.
+/// Native HIP EmbeddingGemma 2 text, image and audio embedding service.
 class EmbeddingService {
 public:
   /// Longest accepted input in tokens, including the surrounding markers.
@@ -82,6 +83,7 @@ public:
       models::embedding_gemma2::hip::kMaxSequenceTokens;
 
   static constexpr std::size_t kMaxImages = 32;
+  static constexpr std::size_t kMaxAudio = 32;
 
   explicit EmbeddingService(EmbeddingServiceOptions options);
   ~EmbeddingService();
