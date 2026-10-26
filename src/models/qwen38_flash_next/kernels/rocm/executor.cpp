@@ -1721,7 +1721,7 @@ bool Executor::StreamedMoeRows(
     const auto* future_experts = window_experts + window_ids;
     auto* window_slots =
         expert_slot_ids_host_ + static_cast<std::size_t>(first) * used;
-    storage::ExpertResolveTelemetry demand_telemetry;
+    storage::ExpertCacheManager::ExpertResolveTelemetry demand_telemetry;
     const bool track_demand = verify_telemetry_rows_ != 0 && !prefill_phase &&
                               first + rows_per_window <= verify_telemetry_rows_;
     if (track_demand) {

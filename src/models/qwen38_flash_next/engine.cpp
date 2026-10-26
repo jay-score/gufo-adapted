@@ -1318,7 +1318,10 @@ bool Session::FinishDecode(const DecodeRequest& request,
   }
   sampler.Accept(static_cast<sampling::TokenId>(anchor));
   std::array<rocm::ArgmaxCandidate, kMaxMtpDraftTokens> greedy{};
-  if (gpu_greedy &&
+  // An anchor-only gated cycle (every draft below the floor) has no GPU
+  // prediction rows to fetch; the verify loop below is a no-op and the next
+  // token comes from the harvested anchor row.
+  if (gpu_greedy && verify_rows > 1 &&
       !exec.GreedyMtpPredictions(
           std::span(greedy).first(verify_rows - 1), sampler,
           std::span(chain).subspan(1, verify_rows - 1), error_msg)) {
@@ -1341,7 +1344,11 @@ bool Session::FinishDecode(const DecodeRequest& request,
   if (gpu_verification && !gpu_greedy) {
     // Accepting the anchor may activate a tool grammar, reasoning budget,
     // or exceed the bounded penalty workspace. Keep the complete-row path.
-    if (!rocm::Executor::CanCompactMtpVerification(sampler)) {
+    // An anchor-only gated cycle (every draft below the floor) needs the
+    // full anchor row: the compact path samples top-k candidates, which
+    // would bias the free next-token draw.
+    if (!rocm::Executor::CanCompactMtpVerification(sampler) ||
+        verify_rows == 1) {
       if (!download_remaining(0))
         return false;
     } else if (!exec.SampledMtpCandidates(
