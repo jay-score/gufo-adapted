@@ -205,9 +205,18 @@ struct TextDecodeStep {
   std::size_t draft_rounds{0};
   std::size_t draft_tokens{0};
   std::size_t draft_accepted_tokens{0};
+  /// Of draft_tokens: proposals inside the verified prefix (Stage 1;
+  /// equals draft_tokens when the verification floor is off).
+  std::size_t draft_verified_tokens{0};
   /// Of draft_tokens: proposals copied from the context (prompt lookup).
   std::size_t lookup_tokens{0};
   std::size_t lookup_accepted_tokens{0};
+  /// Stage 0: cold demand expert reads and hard-stall nanoseconds during
+  /// speculative verification, split at the accepted prefix.
+  std::uint64_t prefix_cold_misses{0};
+  std::uint64_t tail_cold_misses{0};
+  std::uint64_t prefix_stall_nanoseconds{0};
+  std::uint64_t tail_stall_nanoseconds{0};
   bool stop{false};
   /// Execution actually used for this request, including model-owned subgroup
   /// dispatch. A runner's advertised maximum is not evidence of batching.

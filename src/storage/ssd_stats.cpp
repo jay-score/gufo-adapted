@@ -278,6 +278,17 @@ void SsdStats::RecordSessionWrite(std::uint64_t bytes) noexcept {
     session_bytes_written_.fetch_add(bytes, std::memory_order_relaxed);
 }
 
+void SsdStats::RecordVerifyTailWaste(std::uint64_t cold_misses,
+                                     std::uint64_t bytes,
+                                     std::uint64_t stall_nanoseconds) noexcept {
+  if (!enabled_.load(std::memory_order_relaxed))
+    return;
+  wasted_tail_cold_misses_.fetch_add(cold_misses, std::memory_order_relaxed);
+  wasted_tail_bytes_read_.fetch_add(bytes, std::memory_order_relaxed);
+  wasted_tail_stall_nanoseconds_.fetch_add(stall_nanoseconds,
+                                           std::memory_order_relaxed);
+}
+
 SsdStatsSnapshot SsdStats::Snapshot() const noexcept {
   if (enabled_.load(std::memory_order_relaxed))
     const_cast<SsdStats*>(this)->SampleMemory();
@@ -308,6 +319,12 @@ SsdStatsSnapshot SsdStats::Snapshot() const noexcept {
           late_prefetch_requests_.load(std::memory_order_relaxed),
       .hard_stall_nanoseconds =
           hard_stall_nanoseconds_.load(std::memory_order_relaxed),
+      .wasted_tail_cold_misses =
+          wasted_tail_cold_misses_.load(std::memory_order_relaxed),
+      .wasted_tail_bytes_read =
+          wasted_tail_bytes_read_.load(std::memory_order_relaxed),
+      .wasted_tail_stall_nanoseconds =
+          wasted_tail_stall_nanoseconds_.load(std::memory_order_relaxed),
       .ple_requests = ple_requests_.load(std::memory_order_relaxed),
       .ple_hits = ple_hits_.load(std::memory_order_relaxed),
       .ssd_bytes_read = ssd_bytes_read_.load(std::memory_order_relaxed),
@@ -356,6 +373,11 @@ std::string SsdStats::Format() const {
       << '\n'
       << "  hard_stall_ms:            "
       << static_cast<double>(stats.hard_stall_nanoseconds) / 1.0e6 << '\n'
+      << "  wasted_tail_cold_misses:  " << stats.wasted_tail_cold_misses << '\n'
+      << "  wasted_tail_bytes_read:   " << stats.wasted_tail_bytes_read << '\n'
+      << "  wasted_tail_stall_ms:     "
+      << static_cast<double>(stats.wasted_tail_stall_nanoseconds) / 1.0e6
+      << '\n'
       << "  ple_shelf_requests:       " << stats.ple_requests << '\n'
       << "  ple_shelf_bytes_read:     " << stats.ple_bytes_read << '\n'
       << "  ple_shelf_read_ms:        "

@@ -101,6 +101,14 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     AssignError(error_msg, "cache prior bias must be finite and non-negative");
     return nullptr;
   }
+  if (!std::isfinite(options.mtp_verify_acceptance_floor) ||
+      options.mtp_verify_acceptance_floor < 0.0F ||
+      options.mtp_verify_acceptance_floor > 1.0F) {
+    AssignError(error_msg,
+                "MTP verification acceptance floor must be finite and in "
+                "[0, 1]");
+    return nullptr;
+  }
   const auto cache_policy =
       storage::ExpertCacheManager::ParseVictimPolicy(options.cache_policy);
   if (!cache_policy.has_value()) {
@@ -410,6 +418,13 @@ std::size_t Model::DeferredScratchBytes() const {
 
 std::string Model::SsdStatsReport() const {
   return ssd_stats_ != nullptr ? ssd_stats_->Format() : std::string{};
+}
+
+void Model::RecordVerifyTailWaste(std::uint64_t cold_experts,
+                                  std::uint64_t bytes,
+                                  std::uint64_t stall_nanoseconds) noexcept {
+  if (ssd_stats_ != nullptr)
+    ssd_stats_->RecordVerifyTailWaste(cold_experts, bytes, stall_nanoseconds);
 }
 
 std::size_t Session::AllocatedBytes() const noexcept {
@@ -769,7 +784,8 @@ bool Session::DraftReplay(std::int32_t next_token,
 
 bool Session::DraftCatchUp(std::int32_t next_token, bool propose,
                            std::string* error_msg,
-                           MtpCandidateLogits* candidates, bool draft_subset) {
+                           MtpCandidateLogits* candidates, bool draft_subset,
+                           bool token_output) {
   std::vector<std::int32_t> replay;
   std::int32_t hidden_row = 0;
   if (!DraftReplay(next_token, &replay, &hidden_row, error_msg))
@@ -779,7 +795,9 @@ bool Session::DraftCatchUp(std::int32_t next_token, bool propose,
   auto& exec = *model_->executor_;
   if (!exec.MtpForward(
           *session_, replay, hidden_row,
-          {.token = propose && candidates == nullptr ? &draft_token_ : nullptr,
+          {.token = propose && (candidates == nullptr || token_output)
+                        ? &draft_token_
+                        : nullptr,
            .candidates = candidates,
            .kv_only = !propose,
            .draft_subset = draft_subset},
@@ -1015,6 +1033,13 @@ struct Session::PendingDecode {
   /// request's first speculative step.
   std::size_t lookup_cap{0};
   std::uint32_t policy_concurrency{0};
+  /// Stage 1: live per-draft acceptance confidence for the neural drafts,
+  /// aligned with chain[1 + i]. Lookup-copied tokens are excluded; cycles
+  /// that use them keep the full verification width.
+  std::vector<float> draft_conf;
+  /// Stage 1: rows the gated cycle verifies (anchor plus the confident
+  /// draft prefix); zero keeps the whole chain.
+  std::uint32_t verify_rows{0};
 };
 
 void Session::AppendDraft(PendingDecode& pending) {
@@ -1023,6 +1048,11 @@ void Session::AppendDraft(PendingDecode& pending) {
         pending.candidates, *pending.draft_sampler, &pending.draft_rng));
     pending.draft = static_cast<std::int32_t>(pending.proposals.back().token);
     pending.draft_sampler->Accept(pending.proposals.back().token);
+    pending.draft_conf.push_back(pending.proposals.back().probability);
+  } else {
+    // The greedy drafter exports top-candidate logits only while the
+    // verification floor is armed; without them the mass is 1 (no gate).
+    pending.draft_conf.push_back(TopCandidateMass(pending.candidates));
   }
   pending.chain.push_back(pending.draft);
 }
@@ -1140,6 +1170,16 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   const bool gpu_greedy = sampler.config().temperature == 0.0F;
   const bool gpu_verification =
       gpu_greedy || rocm::Executor::CanCompactMtpVerification(sampler);
+  // Stage 1: with the verification floor armed on an out-of-core cache, a
+  // cycle verifies only the draft prefix whose live per-draft acceptance
+  // confidence meets the floor. A fully resident model has no SSD reads to
+  // save, batched drafting keeps its legacy widths.
+  const bool verify_floor_active =
+      model_->options_.mtp_verify_acceptance_floor > 0.0F &&
+      exec.MoeStreamingActive() && !batch_drafts;
+  // Greedy drafts carry no proposal distribution: while the floor is armed
+  // they also export top-candidate logits, the live per-draft confidence.
+  const bool draft_confidence = !sampled && verify_floor_active;
   // A cycle-local proposal stream needs no pending RNG state in snapshots.
   // Target verification keeps its own draws after this independent seed.
   pending->draft_rng =
@@ -1194,9 +1234,11 @@ bool Session::PrepareDecode(const DecodeRequest& request,
         1 + draft_length_.Choose(static_cast<std::uint32_t>(cap - 1), base,
                                  pending->policy_concurrency, true);
   }
-  if (!defer_head && !DraftCatchUp(anchor, true, error_msg,
-                                   sampled ? &pending->candidates : nullptr,
-                                   pending->draft_subset)) {
+  if (!defer_head &&
+      !DraftCatchUp(
+          anchor, true, error_msg,
+          sampled || draft_confidence ? &pending->candidates : nullptr,
+          pending->draft_subset, draft_confidence)) {
     return false;
   }
   pending->draft = draft_token_;
@@ -1214,13 +1256,24 @@ bool Session::PrepareDecode(const DecodeRequest& request,
           !exec.MtpForward(
               *session_, std::span<const std::int32_t>(&pending->draft, 1), -1,
               {.token = sampled ? nullptr : &pending->draft,
-               .candidates = sampled ? &pending->candidates : nullptr,
+               .candidates =
+                   sampled || draft_confidence ? &pending->candidates : nullptr,
                .draft_subset = pending->draft_subset},
               error_msg)) {
         return false;
       }
     }
     if (pending->speculative) {
+      // Stage 1: the verified prefix follows the live confidence of the
+      // drafts actually made (sampled: the exact proposal probabilities;
+      // greedy: the draft head's candidate mass). Prefetching keeps the
+      // full drafted chain.
+      if (verify_floor_active && pending->lookup == 0) {
+        pending->verify_rows =
+            ChooseVerified(pending->draft_conf,
+                           static_cast<std::uint32_t>(pending->chain.size()),
+                           model_->options_.mtp_verify_acceptance_floor);
+      }
       std::string prefetch_error;
       if (!exec.PrefetchCandidates(pending->chain, &prefetch_error) &&
           !prefetch_error.empty()) {
@@ -1246,6 +1299,11 @@ bool Session::FinishDecode(const DecodeRequest& request,
   const bool gpu_verification = pending.gpu_verification;
   const auto anchor = chain.front();
   const auto k = static_cast<std::uint32_t>(chain.size());
+  // Stage 1: a gated cycle forwarded only the confident prefix; the
+  // censored tail was drafted (and prefetched) but never verified.
+  const auto verify_rows = pending.verify_rows != 0 && pending.verify_rows < k
+                               ? pending.verify_rows
+                               : k;
   const auto vocab = model_->VocabSize();
   const auto is_stop = [&](std::int32_t token) {
     return request.stop_at_eos && model_->IsStopToken(token);
@@ -1261,8 +1319,9 @@ bool Session::FinishDecode(const DecodeRequest& request,
   sampler.Accept(static_cast<sampling::TokenId>(anchor));
   std::array<rocm::ArgmaxCandidate, kMaxMtpDraftTokens> greedy{};
   if (gpu_greedy &&
-      !exec.GreedyMtpPredictions(std::span(greedy).first(k - 1), sampler,
-                                 std::span(chain).subspan(1), error_msg)) {
+      !exec.GreedyMtpPredictions(
+          std::span(greedy).first(verify_rows - 1), sampler,
+          std::span(chain).subspan(1, verify_rows - 1), error_msg)) {
     return false;
   }
   std::uint32_t keep = 1;
@@ -1270,8 +1329,8 @@ bool Session::FinishDecode(const DecodeRequest& request,
   bool cpu_rows = false;
   const auto download_remaining = [&](std::uint32_t first) {
     verify_logits_.resize(exec.max_speculative() * vocab);
-    auto rows =
-        std::span(verify_logits_).subspan(first * vocab, (k - first) * vocab);
+    auto rows = std::span(verify_logits_)
+                    .subspan(first * vocab, (verify_rows - first) * vocab);
     if (!exec.ReadVerificationRows(first, rows, error_msg))
       return false;
     cpu_rows = true;
@@ -1285,13 +1344,13 @@ bool Session::FinishDecode(const DecodeRequest& request,
     if (!rocm::Executor::CanCompactMtpVerification(sampler)) {
       if (!download_remaining(0))
         return false;
-    } else if (!exec.SampledMtpCandidates(std::span(candidates).first(k - 1),
-                                          sampler, std::span(chain).subspan(1),
-                                          error_msg)) {
+    } else if (!exec.SampledMtpCandidates(
+                   std::span(candidates).first(verify_rows - 1), sampler,
+                   std::span(chain).subspan(1, verify_rows - 1), error_msg)) {
       return false;
     }
   }
-  while (keep < k) {
+  while (keep < verify_rows) {
     if (gpu_greedy && !cpu_rows) {
       const auto& prediction = greedy[keep - 1];
       if (!std::isfinite(prediction.value)) {
@@ -1367,8 +1426,21 @@ bool Session::FinishDecode(const DecodeRequest& request,
   result->tokens.assign(chain.begin(), chain.begin() + keep);
   stats_.cycles += 1;
   stats_.drafted += k - 1;
+  stats_.verified += verify_rows - 1;
   stats_.accepted += keep - 1;
   stats_.small_head_cycles += pending.draft_subset;
+  if (pending.speculative) {
+    const auto demand = exec.TakeSpeculativeDemandTotals(keep);
+    stats_.prefix_cold_experts += demand.prefix_cold_experts;
+    stats_.prefix_cold_bytes += demand.prefix_cold_bytes;
+    stats_.prefix_stall_nanoseconds += demand.prefix_stall_nanoseconds;
+    stats_.tail_cold_experts += demand.tail_cold_experts;
+    stats_.tail_cold_bytes += demand.tail_cold_bytes;
+    stats_.tail_stall_nanoseconds += demand.tail_stall_nanoseconds;
+    model_->RecordVerifyTailWaste(demand.tail_cold_experts,
+                                  demand.tail_cold_bytes,
+                                  demand.tail_stall_nanoseconds);
+  }
   // Copied proposals trail the MTP drafts. After a fully accepted MTP part,
   // the length controller also counts the accepted copied tokens as accepted
   // drafts: a copy that ended drafting early would otherwise make a perfect
@@ -1384,11 +1456,17 @@ bool Session::FinishDecode(const DecodeRequest& request,
   }
   const bool mtp_all = mtp_accepted == mtp_drafts;
   const std::uint32_t observed = mtp_all ? keep - 1 : mtp_accepted;
+  // Stage 1: a gated cycle that accepted every verified draft censored the
+  // tail; it did not fail it. Observing the verified depth as a fully
+  // accepted chain keeps the controller's probe ladder raising the drafting
+  // and prefetch budget back to the configured width. A true rejection
+  // inside the verified prefix shrinks the budget as usual.
+  const bool censored = verify_rows < k && keep == verify_rows;
   // A target stop ends the request; it does not classify the remaining
   // proposals as failed predictions.
   draft_length_.Observe(
-      observed, result->stop || mtp_all ? observed : mtp_drafts, base,
-      pending.policy_concurrency, pending.sampled_subset_cost);
+      observed, result->stop || mtp_all || censored ? observed : mtp_drafts,
+      base, pending.policy_concurrency, pending.sampled_subset_cost);
 
   // The next call knows the next sampled anchor. Defer draft catch-up until
   // then, retaining this session's target hidden rows across interleaving.
@@ -1428,8 +1506,13 @@ bool Session::DecodeStep(std::size_t max_tokens,
   float* logits = !pending.speculative       ? logits_.data()
                   : pending.gpu_verification ? nullptr
                                              : verify_logits_.data();
+  const auto verify_rows =
+      pending.verify_rows != 0 && pending.verify_rows < pending.chain.size()
+          ? pending.verify_rows
+          : static_cast<std::uint32_t>(pending.chain.size());
   if (!model_->executor_->Forward(
-          *session_, pending.chain, pending.chain.size(), logits,
+          *session_, std::span(pending.chain).first(verify_rows), verify_rows,
+          logits,
           pending.speculative ? rocm::Executor::ForwardMode::kVerify
                               : rocm::Executor::ForwardMode::kDecode,
           error_msg)) {

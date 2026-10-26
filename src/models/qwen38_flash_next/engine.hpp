@@ -53,6 +53,10 @@ struct ModelOptions {
   float cache_prior_bias{0.0F};
   /// Expert-cache victim policy: lru, hotness, or decayed (default lru).
   std::string cache_policy{"lru"};
+  /// Truncate MTP verification to the longest draft prefix whose live
+  /// per-draft acceptance confidence reaches this floor. Zero (default)
+  /// keeps the full chain verified.
+  float mtp_verify_acceptance_floor{0.0F};
   /// Opt into a 128 MiB compressed-row PLE cache; off preserves the legacy
   /// 8 MiB row cache.
   bool ple_shelf{false};
@@ -124,6 +128,10 @@ public:
     return memory_budget_;
   }
   [[nodiscard]] std::string SsdStatsReport() const;
+  /// Stage 0: folds a verification cycle's rejected-tail cold demand reads
+  /// (expert count, bytes, hard-stall nanoseconds) into the SSD stats.
+  void RecordVerifyTailWaste(std::uint64_t cold_experts, std::uint64_t bytes,
+                             std::uint64_t stall_nanoseconds) noexcept;
   [[nodiscard]] std::shared_ptr<storage::SsdStats> SsdStatsHandle()
       const noexcept {
     return ssd_stats_;
@@ -249,12 +257,24 @@ public:
   struct SpeculativeStats {
     std::uint64_t cycles{0};
     std::uint64_t drafted{0};
+    /// Draft rows inside the verified prefix (Stage 1; equals drafted when
+    /// the verification floor is off).
+    std::uint64_t verified{0};
     std::uint64_t accepted{0};
     /// Cycles whose draft scored the small head (draft_vocab.hpp).
     std::uint64_t small_head_cycles{0};
     /// Of drafted/accepted: proposals copied by prompt lookup.
     std::uint64_t lookup{0};
     std::uint64_t lookup_accepted{0};
+    /// Stage 0: cold demand expert reads and hard-stall time during
+    /// verification, split at the accepted prefix. Rows past the committed
+    /// prefix are the rejected tail.
+    std::uint64_t prefix_cold_experts{0};
+    std::uint64_t prefix_cold_bytes{0};
+    std::uint64_t prefix_stall_nanoseconds{0};
+    std::uint64_t tail_cold_experts{0};
+    std::uint64_t tail_cold_bytes{0};
+    std::uint64_t tail_stall_nanoseconds{0};
   };
   [[nodiscard]] const SpeculativeStats& Statistics() const noexcept {
     return stats_;
@@ -321,7 +341,7 @@ private:
   bool DraftCatchUp(std::int32_t next_token, bool propose,
                     std::string* error_msg,
                     MtpCandidateLogits* candidates = nullptr,
-                    bool draft_subset = false);
+                    bool draft_subset = false, bool token_output = false);
   bool DraftReplay(std::int32_t next_token, std::vector<std::int32_t>* replay,
                    std::int32_t* hidden_row, std::string* error_msg) const;
   static bool DraftCatchUpBatch(std::span<const AdvanceRequest> requests,

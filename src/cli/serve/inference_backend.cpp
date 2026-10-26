@@ -2770,9 +2770,18 @@ public:
     step.draft_rounds = stats_after.cycles - stats_before.cycles;
     step.draft_tokens = stats_after.drafted - stats_before.drafted;
     step.draft_accepted_tokens = stats_after.accepted - stats_before.accepted;
+    step.draft_verified_tokens = stats_after.verified - stats_before.verified;
     step.lookup_tokens = stats_after.lookup - stats_before.lookup;
     step.lookup_accepted_tokens =
         stats_after.lookup_accepted - stats_before.lookup_accepted;
+    step.prefix_cold_misses =
+        stats_after.prefix_cold_experts - stats_before.prefix_cold_experts;
+    step.tail_cold_misses =
+        stats_after.tail_cold_experts - stats_before.tail_cold_experts;
+    step.prefix_stall_nanoseconds = stats_after.prefix_stall_nanoseconds -
+                                    stats_before.prefix_stall_nanoseconds;
+    step.tail_stall_nanoseconds = stats_after.tail_stall_nanoseconds -
+                                  stats_before.tail_stall_nanoseconds;
     return step;
   }
 
@@ -3151,6 +3160,8 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
             .ssd_stats = speculative_config.ssd_stats,
             .cache_prior_bias = speculative_config.cache_prior_bias,
             .cache_policy = speculative_config.cache_policy,
+            .mtp_verify_acceptance_floor =
+                speculative_config.mtp_verify_acceptance_floor,
             .ple_shelf = speculative_config.ple_shelf,
             .mtp_model_path =
                 speculative_config.backend == TextSpeculativeBackend::kMtp

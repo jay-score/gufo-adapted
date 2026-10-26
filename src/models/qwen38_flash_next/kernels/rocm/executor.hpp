@@ -5,6 +5,7 @@
 #include <hip/hip_runtime.h>
 #include <hipblas/hipblas.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -274,6 +275,27 @@ public:
       float cache_prior_bias,
       gufo::storage::ExpertCacheManager::VictimPolicy victim_policy,
       std::string* error_msg);
+  /// Stage 0 wasted-tail telemetry. Active only for a kVerify forward; the
+  /// engine arms it at forward entry and takes the prefix/tail split once the
+  /// accepted prefix length is known. Rows index the verify chain
+  /// ([anchor, d1..dD]); rows [0, keep) are useful, rows [keep, rows) wasted.
+  struct SpeculativeDemandTotals {
+    std::uint64_t prefix_cold_experts{0};
+    std::uint64_t prefix_cold_bytes{0};
+    std::uint64_t prefix_stall_nanoseconds{0};
+    std::uint64_t tail_cold_experts{0};
+    std::uint64_t tail_cold_bytes{0};
+    std::uint64_t tail_stall_nanoseconds{0};
+  };
+  void BeginSpeculativeDemandTelemetry(std::uint32_t rows) const;
+  [[nodiscard]] SpeculativeDemandTotals TakeSpeculativeDemandTotals(
+      std::uint32_t keep) const;
+  /// True when routed experts stream through the out-of-core cache. A fully
+  /// resident model keeps no cache manager, so a wasted speculative row
+  /// costs no SSD reads there and verification stays full-width.
+  [[nodiscard]] bool MoeStreamingActive() const noexcept {
+    return expert_cache_ != nullptr;
+  }
   [[nodiscard]] bool PrefetchCandidates(
       std::span<const std::int32_t> candidate_tokens,
       std::string* error_msg) const;
@@ -792,6 +814,17 @@ private:
   /// Allocated only when concurrent decoding is first requested.
   mutable float* batch_logits_{nullptr};
   std::unique_ptr<gufo::storage::ExpertCacheManager> expert_cache_;
+  /// Stage 0 per-row verify telemetry (7 drafts + anchor).
+  static constexpr std::uint32_t kVerifyTelemetryRows = 8;
+  mutable std::array<std::uint64_t, kVerifyTelemetryRows>
+      verify_row_cold_experts_{};
+  mutable std::array<std::uint64_t, kVerifyTelemetryRows>
+      verify_row_cold_bytes_{};
+  mutable std::array<std::uint64_t, kVerifyTelemetryRows>
+      verify_row_late_join_ns_{};
+  mutable std::array<std::uint64_t, kVerifyTelemetryRows>
+      verify_row_demand_read_ns_{};
+  mutable std::uint32_t verify_telemetry_rows_{0};
   std::int32_t* expert_ids_host_{nullptr};
   std::int32_t* expert_slot_ids_host_{nullptr};
   std::int32_t* expert_id_to_slot_host_{nullptr};

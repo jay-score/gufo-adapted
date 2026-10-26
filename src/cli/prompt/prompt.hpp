@@ -47,6 +47,9 @@ struct PromptOptions {
   double memory_budget_gb{0.0};
   float cache_prior_bias{0.0F};
   std::string cache_policy{"lru"};
+  /// Truncate MTP verification to the draft prefix whose live per-draft
+  /// acceptance confidence reaches this floor; 0 verifies the full chain.
+  float mtp_verify_acceptance_floor{0.0F};
   bool ple_shelf{false};
   bool ssd_stats{false};
   bool prompt_lookup{false};

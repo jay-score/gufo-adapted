@@ -173,7 +173,13 @@ inline std::string GenerationLogDetails(
       << " plan=" << result.execution_plan
       << " draft_accepted=" << result.draft_accepted_tokens
       << " draft_proposed=" << result.draft_tokens
-      << " draft_rounds=" << result.draft_rounds;
+      << " draft_verified=" << result.draft_verified_tokens
+      << " draft_rounds=" << result.draft_rounds
+      << " prefix_cold_misses=" << result.prefix_cold_misses
+      << " tail_cold_misses=" << result.tail_cold_misses << " prefix_stall_ms="
+      << static_cast<double>(result.prefix_stall_nanoseconds) / 1.0e6
+      << " tail_stall_ms="
+      << static_cast<double>(result.tail_stall_nanoseconds) / 1.0e6;
   if (result.component_cache)
     out << " cache_schema=component-cache-v1 cache_reuse="
         << result.component_cache->reuse

@@ -1132,21 +1132,27 @@ int RunQwen38FlashNextBenchmark(
         runs.push_back(static_cast<double>(generation_length) / seconds);
         if (options.verbose) {
           const auto stats = session->Statistics();
-          std::cerr << "Qwen3.8-Flash-Next tg depth=" << depth
-                    << " cycles=" << stats.cycles
-                    << " drafted=" << stats.drafted
-                    << " accepted=" << stats.accepted
-                    << " lookup_proposed=" << stats.lookup
-                    << " lookup_accepted=" << stats.lookup_accepted
-                    << " output_sha256="
-                    << crypto::Sha256Hex(
-                           std::span(reinterpret_cast<const std::uint8_t*>(
-                                         generated.data()),
-                                     generated.size() * sizeof(std::int32_t)))
-                    << " text="
-                    << model->Decode(std::span(generated).first(
-                           std::min<std::size_t>(generated.size(), 48)))
-                    << '\n';
+          std::cerr
+              << "Qwen3.8-Flash-Next tg depth=" << depth
+              << " cycles=" << stats.cycles << " drafted=" << stats.drafted
+              << " accepted=" << stats.accepted
+              << " lookup_proposed=" << stats.lookup
+              << " lookup_accepted=" << stats.lookup_accepted
+              << " prefix_cold_misses=" << stats.prefix_cold_experts
+              << " tail_cold_misses=" << stats.tail_cold_experts
+              << " tail_cold_bytes=" << stats.tail_cold_bytes
+              << " prefix_stall_ms="
+              << static_cast<double>(stats.prefix_stall_nanoseconds) / 1.0e6
+              << " tail_stall_ms="
+              << static_cast<double>(stats.tail_stall_nanoseconds) / 1.0e6
+              << " output_sha256="
+              << crypto::Sha256Hex(std::span(
+                     reinterpret_cast<const std::uint8_t*>(generated.data()),
+                     generated.size() * sizeof(std::int32_t)))
+              << " text="
+              << model->Decode(std::span(generated).first(
+                     std::min<std::size_t>(generated.size(), 48)))
+              << '\n';
         }
       }
       print_result(MakeTestName("tg", generation_length, depth),
