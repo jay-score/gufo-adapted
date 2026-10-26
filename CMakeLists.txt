@@ -68,6 +68,11 @@ if (GUFO_PLATFORM_ONLY)
   endif()
   return()
 endif()
+# Linux libstdc++ must be parsed before HIP defines its __noinline__ macro.
+if (NOT WIN32)
+  add_compile_options(
+    "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include \"${CMAKE_SOURCE_DIR}/src/core/hip/libstdcxx_noinline.hpp\">")
+endif()
 find_package(ICU REQUIRED COMPONENTS uc i18n)
 find_package(Threads REQUIRED)
 find_package(CURL REQUIRED)
