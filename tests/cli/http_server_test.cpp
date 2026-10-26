@@ -2949,6 +2949,8 @@ std::shared_ptr<gufo::server::EmbeddingService> MakeEmbeddingService(
           .model_root = "/nonexistent/embeddinggemma",
           .validate_model = !ready,  // Validation fails without a checkpoint.
           .model_id = "embedding-test",
+          .prompts = {},
+          .default_prompt_name = {},
           .runner =
               [](const std::vector<gufo::server::EmbeddingInput>& texts,
                  const gufo::server::EmbeddingRequestOptions&,
@@ -3084,6 +3086,8 @@ void TestEmbeddingService() {
             .model_root = "/nonexistent/embeddinggemma",
             .validate_model = false,
             .model_id = "embedding-test",
+            .prompts = {},
+            .default_prompt_name = {},
             .runner =
                 [](const std::vector<gufo::server::EmbeddingInput>&,
                    const gufo::server::EmbeddingRequestOptions&,
