@@ -1479,6 +1479,36 @@ bool Executor::PrefetchCandidates(
   return ok;
 }
 
+void Executor::BeginSpeculativeDemandTelemetry(std::uint32_t rows) const {
+  verify_telemetry_rows_ = std::min(rows, kVerifyTelemetryRows);
+  for (std::uint32_t row = 0; row < kVerifyTelemetryRows; ++row) {
+    verify_row_cold_experts_[row] = 0;
+    verify_row_cold_bytes_[row] = 0;
+    verify_row_late_join_ns_[row] = 0;
+    verify_row_demand_read_ns_[row] = 0;
+  }
+}
+
+Executor::SpeculativeDemandTotals Executor::TakeSpeculativeDemandTotals(
+    std::uint32_t keep) const {
+  SpeculativeDemandTotals totals;
+  for (std::uint32_t row = 0; row < verify_telemetry_rows_; ++row) {
+    const std::uint64_t stall =
+        verify_row_late_join_ns_[row] + verify_row_demand_read_ns_[row];
+    if (row >= keep) {
+      totals.tail_cold_experts += verify_row_cold_experts_[row];
+      totals.tail_cold_bytes += verify_row_cold_bytes_[row];
+      totals.tail_stall_nanoseconds += stall;
+    } else {
+      totals.prefix_cold_experts += verify_row_cold_experts_[row];
+      totals.prefix_cold_bytes += verify_row_cold_bytes_[row];
+      totals.prefix_stall_nanoseconds += stall;
+    }
+  }
+  verify_telemetry_rows_ = 0;
+  return totals;
+}
+
 const DeviceLayer& Executor::Layer(std::uint32_t index) const noexcept {
   if (expert_cache_ != nullptr && index < expert_cache_->device_layers().size())
     return expert_cache_->device_layers()[index];
@@ -1691,12 +1721,27 @@ bool Executor::StreamedMoeRows(
     const auto* future_experts = window_experts + window_ids;
     auto* window_slots =
         expert_slot_ids_host_ + static_cast<std::size_t>(first) * used;
+    storage::ExpertResolveTelemetry demand_telemetry;
+    const bool track_demand = verify_telemetry_rows_ != 0 && !prefill_phase &&
+                              first + rows_per_window <= verify_telemetry_rows_;
+    if (track_demand) {
+      demand_telemetry.rows = rows_per_window;
+      demand_telemetry.row_cold_experts =
+          std::span(verify_row_cold_experts_).subspan(first, rows_per_window);
+      demand_telemetry.row_cold_bytes =
+          std::span(verify_row_cold_bytes_).subspan(first, rows_per_window);
+      demand_telemetry.row_late_join_nanoseconds =
+          std::span(verify_row_late_join_ns_).subspan(first, rows_per_window);
+      demand_telemetry.row_demand_read_nanoseconds =
+          std::span(verify_row_demand_read_ns_).subspan(first, rows_per_window);
+    }
     if (!expert_cache_->Resolve(
             layer.layer_index,
             std::span<const std::int32_t>(window_experts, window_ids),
             std::span<std::int32_t>(window_slots, window_ids), error_msg,
             std::span<const std::int32_t>(future_experts, future_id_count),
-            nullptr, true, prefill_phase)) {
+            nullptr, true, prefill_phase, true, rows_per_window, true,
+            track_demand ? &demand_telemetry : nullptr)) {
       UseScratch(base);
       return false;
     }
@@ -4004,6 +4049,8 @@ bool Executor::Forward(Session& session, std::span<const std::int32_t> tokens,
     AssignError(error_msg, "token batch is empty or exceeds the batch limit");
     return false;
   }
+  if (speculative)
+    BeginSpeculativeDemandTelemetry(n);
   if (n_logits > n || n_logits > options_.max_logit_rows) {
     AssignError(error_msg, "requested logit rows exceed the batch or limit");
     return false;

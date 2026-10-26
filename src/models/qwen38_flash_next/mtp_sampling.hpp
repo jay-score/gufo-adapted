@@ -68,6 +68,26 @@ inline MtpProposal SampleMtpProposal(const MtpCandidateLogits& candidates,
   return proposal;
 }
 
+/// The top-1 mass of the top-candidate restriction: 1 / sum exp(l_i - max).
+/// Greedy drafts carry no proposal distribution, so the verification floor
+/// gates on this live head confidence. An empty candidate set (the floor is
+/// off and the drafter requested only a token) reports 1: the full chain
+/// stays verified.
+[[nodiscard]] inline float TopCandidateMass(
+    const MtpCandidateLogits& candidates) noexcept {
+  if (candidates.size == 0)
+    return 1.0F;
+  auto max_logit = candidates.logits[0];
+  for (std::size_t i = 1; i < candidates.size; ++i)
+    max_logit =
+        candidates.logits[i] > max_logit ? candidates.logits[i] : max_logit;
+  double total = 0.0;
+  for (std::size_t i = 0; i < candidates.size; ++i)
+    total += std::exp(static_cast<double>(candidates.logits[i]) -
+                      static_cast<double>(max_logit));
+  return static_cast<float>(1.0 / total);
+}
+
 struct MtpVerification {
   sampling::TokenId token;
   bool accepted;

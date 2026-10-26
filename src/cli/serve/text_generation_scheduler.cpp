@@ -1502,8 +1502,13 @@ struct TextGenerationScheduler::Impl {
       request->result.draft_rounds += step.draft_rounds;
       request->result.draft_tokens += step.draft_tokens;
       request->result.draft_accepted_tokens += step.draft_accepted_tokens;
+      request->result.draft_verified_tokens += step.draft_verified_tokens;
       request->result.lookup_tokens += step.lookup_tokens;
       request->result.lookup_accepted_tokens += step.lookup_accepted_tokens;
+      request->result.prefix_cold_misses += step.prefix_cold_misses;
+      request->result.tail_cold_misses += step.tail_cold_misses;
+      request->result.prefix_stall_nanoseconds += step.prefix_stall_nanoseconds;
+      request->result.tail_stall_nanoseconds += step.tail_stall_nanoseconds;
 
       CheckPreviewResult(request, step);
       for (const auto& selection : step.selections) {
@@ -1808,9 +1813,16 @@ struct TextGenerationScheduler::Impl {
       item.request->result.draft_rounds += step.draft_rounds;
       item.request->result.draft_tokens += step.draft_tokens;
       item.request->result.draft_accepted_tokens += step.draft_accepted_tokens;
+      item.request->result.draft_verified_tokens += step.draft_verified_tokens;
       item.request->result.lookup_tokens += step.lookup_tokens;
       item.request->result.lookup_accepted_tokens +=
           step.lookup_accepted_tokens;
+      item.request->result.prefix_cold_misses += step.prefix_cold_misses;
+      item.request->result.tail_cold_misses += step.tail_cold_misses;
+      item.request->result.prefix_stall_nanoseconds +=
+          step.prefix_stall_nanoseconds;
+      item.request->result.tail_stall_nanoseconds +=
+          step.tail_stall_nanoseconds;
 
       bool published = true;
       try {

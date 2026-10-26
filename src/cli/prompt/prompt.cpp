@@ -119,6 +119,11 @@ static void RegisterTextOptions(ArgParser& parser, PromptOptions& opt,
       "", "--cache-policy", "POLICY",
       "Expert cache victim policy: lru, hotness, or decayed (default: lru)",
       "Memory", &opt.cache_policy);
+  parser.AddOption(
+      "", "--mtp-verify-acceptance-floor", "FLOAT",
+      "Verify MTP drafts only while each draft's live acceptance "
+      "confidence reaches FLOAT; 0 verifies the full chain (default: 0)",
+      "Memory", &opt.mtp_verify_acceptance_floor);
   if (command == "prompt") {
     parser.AddInverseFlag("", "--raw",
                           "Disable chat template framing and pass raw tokens",
@@ -693,6 +698,7 @@ std::shared_ptr<models::qwen38_flash_next::Model> LoadFlashNextModel(
        .ssd_stats = opt.ssd_stats,
        .cache_prior_bias = opt.cache_prior_bias,
        .cache_policy = opt.cache_policy,
+       .mtp_verify_acceptance_floor = opt.mtp_verify_acceptance_floor,
        .ple_shelf = opt.ple_shelf,
        .mtp_model_path =
            opt.speculative_backend == "mtp" ? opt.mtp_model_path : "",
@@ -768,7 +774,20 @@ int GenerateFlashNextResponse(const PromptOptions& opt,
                 << " accepted=" << stats.accepted - stats_before.accepted
                 << " lookup_proposed=" << stats.lookup - stats_before.lookup
                 << " lookup_accepted="
-                << stats.lookup_accepted - stats_before.lookup_accepted << '\n';
+                << stats.lookup_accepted - stats_before.lookup_accepted
+                << " prefix_cold_misses="
+                << stats.prefix_cold_experts - stats_before.prefix_cold_experts
+                << " tail_cold_misses="
+                << stats.tail_cold_experts - stats_before.tail_cold_experts
+                << " prefix_stall_ms="
+                << static_cast<double>(stats.prefix_stall_nanoseconds -
+                                       stats_before.prefix_stall_nanoseconds) /
+                       1.0e6
+                << " tail_stall_ms="
+                << static_cast<double>(stats.tail_stall_nanoseconds -
+                                       stats_before.tail_stall_nanoseconds) /
+                       1.0e6
+                << '\n';
     }
     PrintTokenTrace(generated);
   }

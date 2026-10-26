@@ -40,6 +40,11 @@ struct SsdStatsSnapshot {
   std::uint64_t cold_misses{0};
   std::uint64_t late_prefetch_requests{0};
   std::uint64_t hard_stall_nanoseconds{0};
+  /// Stage 0: cold demand reads and hard-stall time the rejected tail rows
+  /// of speculative verification cycles forced.
+  std::uint64_t wasted_tail_cold_misses{0};
+  std::uint64_t wasted_tail_bytes_read{0};
+  std::uint64_t wasted_tail_stall_nanoseconds{0};
   std::uint64_t ple_requests{0};
   std::uint64_t ple_hits{0};
   std::uint64_t ssd_bytes_read{0};
@@ -84,6 +89,11 @@ public:
   void RecordStorageRead(std::uint64_t bytes, std::chrono::nanoseconds elapsed,
                          bool prefill = false, bool prefetch = false) noexcept;
   void RecordSessionWrite(std::uint64_t bytes) noexcept;
+
+  /// Cold demand reads and hard-stall time that a speculative cycle's
+  /// rejected tail rows forced; recorded once per verification cycle.
+  void RecordVerifyTailWaste(std::uint64_t cold_misses, std::uint64_t bytes,
+                             std::uint64_t stall_nanoseconds) noexcept;
 
   [[nodiscard]] SsdStatsSnapshot Snapshot() const noexcept;
   [[nodiscard]] std::string Format() const;
@@ -133,6 +143,9 @@ private:
   std::atomic<std::uint64_t> ssd_read_nanoseconds_{0};
   std::atomic<std::uint64_t> ple_read_nanoseconds_{0};
   std::atomic<std::uint64_t> session_bytes_written_{0};
+  std::atomic<std::uint64_t> wasted_tail_cold_misses_{0};
+  std::atomic<std::uint64_t> wasted_tail_bytes_read_{0};
+  std::atomic<std::uint64_t> wasted_tail_stall_nanoseconds_{0};
   std::array<PhaseCounters, 2> phase_counters_{};
 };
 

@@ -25,6 +25,24 @@ inline constexpr std::uint32_t kMaxMtpDraftTokens = 7;
   return (sampled && seeded) || planned_batch ? 0 : occupancy;
 }
 
+/// Stage 1: the verified prefix rows for a drafted chain given live
+/// per-draft acceptance confidence. Draft d (chain index d, conf index
+/// d - 1) joins the verified set while every draft up to it meets `floor`;
+/// the first draft below the floor ends the set. The anchor row is always
+/// verified, so the result is in [1, chain_size]. Callers exclude lookup
+/// cycles: copied tokens carry no neural draft confidence.
+[[nodiscard]] inline std::uint32_t ChooseVerified(std::span<const float> conf,
+                                                  std::uint32_t chain_size,
+                                                  float floor) noexcept {
+  std::uint32_t rows = 1;
+  for (std::size_t depth = 0;
+       depth < conf.size() && depth + 1 < chain_size && conf[depth] >= floor;
+       ++depth) {
+    ++rows;
+  }
+  return rows;
+}
+
 struct MtpLengthState {
   std::array<float, kMaxMtpDraftTokens> successes;
   std::array<float, kMaxMtpDraftTokens> failures;

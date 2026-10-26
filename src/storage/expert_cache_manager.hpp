@@ -39,6 +39,21 @@ public:
     std::chrono::nanoseconds elapsed{0};
   };
 
+  /// Optional demand-resolve telemetry. Each cold demand read's count and
+  /// bytes are attributed to the expert's first routed occurrence within the
+  /// window; each late prefetch join charges its observed join wall time to
+  /// the same row; this call's demand-batch wall time is distributed across
+  /// rows proportional to this call's cold bytes only. The row spans are
+  /// accumulators: callers pass spans shared across layers.
+  struct ExpertResolveTelemetry {
+    std::uint32_t rows{0};
+    std::span<std::uint64_t> row_cold_experts{};
+    std::span<std::uint64_t> row_cold_bytes{};
+    std::span<std::uint64_t> row_late_join_nanoseconds{};
+    std::span<std::uint64_t> row_demand_read_nanoseconds{};
+    std::uint64_t demand_read_nanoseconds{0};
+  };
+
   ~ExpertCacheManager();
   ExpertCacheManager(const ExpertCacheManager&) = delete;
   ExpertCacheManager& operator=(const ExpertCacheManager&) = delete;
@@ -102,7 +117,8 @@ public:
       std::span<const std::int32_t> future_expert_ids = {},
       std::uint64_t* bytes_read = nullptr, bool record_stats = true,
       bool prefill = false, bool record_demand_stats = true,
-      std::uint32_t routed_tokens = 0, bool count_route_hotness = true);
+      std::uint32_t routed_tokens = 0, bool count_route_hotness = true,
+      ExpertResolveTelemetry* telemetry = nullptr);
   void Release(std::uint32_t layer) noexcept;
 
 private:

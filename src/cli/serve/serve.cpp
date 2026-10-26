@@ -606,6 +606,7 @@ void PrintServeHelp(std::string_view program_name,
     std::uint32_t max_context = 0;
     double memory_budget_gb = 0.0;
     float cache_prior_bias = 0.0F;
+    float mtp_verify_acceptance_floor = 0.0F;
     std::string cache_policy = "lru";
     bool ple_shelf = false;
     bool ssd_stats = false;
@@ -732,6 +733,11 @@ void PrintServeHelp(std::string_view program_name,
         "", "--cache-prior-bias", "FLOAT",
         "Weight learned expert priors in cache retention (default: 0)",
         "Memory", &cache_prior_bias);
+    parser.AddOption(
+        "", "--mtp-verify-acceptance-floor", "FLOAT",
+        "Verify MTP drafts only while each draft's live acceptance "
+        "confidence reaches FLOAT; 0 verifies the full chain (default: 0)",
+        "Memory", &mtp_verify_acceptance_floor);
     parser.AddOption(
         "", "--cache-policy", "POLICY",
         "Expert cache victim policy: lru, hotness, or decayed (default: lru)",
@@ -1234,6 +1240,7 @@ int RunServe(std::span<const char* const> args) {
     std::uint32_t max_context = 0;
     double memory_budget_gb = 0.0;
     float cache_prior_bias = 0.0F;
+    float mtp_verify_acceptance_floor = 0.0F;
     std::string cache_policy = "lru";
     bool ple_shelf = false;
     bool ssd_stats = false;
@@ -1356,6 +1363,11 @@ int RunServe(std::span<const char* const> args) {
         "", "--cache-prior-bias", "FLOAT",
         "Weight learned expert priors in cache retention (default: 0)",
         "Memory", &cache_prior_bias);
+    llm_parser.AddOption(
+        "", "--mtp-verify-acceptance-floor", "FLOAT",
+        "Verify MTP drafts only while each draft's live acceptance "
+        "confidence reaches FLOAT; 0 verifies the full chain (default: 0)",
+        "Memory", &mtp_verify_acceptance_floor);
     llm_parser.AddOption(
         "", "--cache-policy", "POLICY",
         "Expert cache victim policy: lru, hotness, or decayed (default: lru)",
@@ -1487,6 +1499,13 @@ int RunServe(std::span<const char* const> args) {
           << "Error: --cache-prior-bias must be finite and non-negative\n";
       return 2;
     }
+    if (!std::isfinite(mtp_verify_acceptance_floor) ||
+        mtp_verify_acceptance_floor < 0.0F ||
+        mtp_verify_acceptance_floor > 1.0F) {
+      std::cerr << "Error: --mtp-verify-acceptance-floor must be finite and "
+                   "in [0, 1]\n";
+      return 2;
+    }
     if (!storage::ParseExpertCacheVictimPolicy(cache_policy)) {
       std::cerr << "Error: --cache-policy must be lru, hotness, or decayed\n";
       return 2;
@@ -1550,6 +1569,8 @@ int RunServe(std::span<const char* const> args) {
         static_cast<std::uint32_t>(min_draft_tokens);
     speculative_config.memory_budget_gb = memory_budget_gb;
     speculative_config.cache_prior_bias = cache_prior_bias;
+    speculative_config.mtp_verify_acceptance_floor =
+        mtp_verify_acceptance_floor;
     speculative_config.cache_policy = cache_policy;
     speculative_config.ple_shelf = ple_shelf;
     speculative_config.ssd_stats = ssd_stats;

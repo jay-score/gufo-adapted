@@ -1071,7 +1071,8 @@ bool ExpertCacheManager::Resolve(
     std::span<std::int32_t> slot_ids, std::string* error_msg,
     std::span<const std::int32_t> future_expert_ids, std::uint64_t* bytes_read,
     bool record_stats, bool prefill, bool record_demand_stats,
-    std::uint32_t routed_tokens, bool count_route_hotness) {
+    std::uint32_t routed_tokens, bool count_route_hotness,
+    ExpertResolveTelemetry* telemetry) {
   if (error_msg != nullptr)
     error_msg->clear();
   if (bytes_read != nullptr)
@@ -1092,6 +1093,18 @@ bool ExpertCacheManager::Resolve(
     cache.has_route_phase = true;
     cache.last_route_was_prefill = prefill;
   }
+  if (telemetry != nullptr) {
+    const std::size_t used = std::max<std::size_t>(impl_->experts_used, 1);
+    if (telemetry->rows == 0 || expert_ids.size() % used != 0 ||
+        telemetry->rows != expert_ids.size() / used ||
+        telemetry->row_cold_experts.size() < telemetry->rows ||
+        telemetry->row_cold_bytes.size() < telemetry->rows ||
+        telemetry->row_late_join_nanoseconds.size() < telemetry->rows ||
+        telemetry->row_demand_read_nanoseconds.size() < telemetry->rows) {
+      SetError(error_msg, "resolve telemetry does not match the window");
+      return false;
+    }
+  }
   impl_->ReapPrefetchJobs(cache);
   if (!cache.pinned_slots.empty()) {
     SetError(error_msg, "expert cache layer still has pinned slots");
@@ -1101,6 +1114,7 @@ bool ExpertCacheManager::Resolve(
   std::vector<std::int32_t> unique;
   unique.reserve(expert_ids.size());
   std::vector<std::uint8_t> seen(cache.num_experts, 0);
+  std::vector<std::int32_t> first_row(cache.num_experts, -1);
   std::vector<std::uint32_t> route_hits(cache.num_experts, 0);
   std::vector<std::uint32_t> future_hits(cache.num_experts, 0);
   for (const auto id : future_expert_ids) {
@@ -1112,7 +1126,8 @@ bool ExpertCacheManager::Resolve(
     if (hits != std::numeric_limits<std::uint32_t>::max())
       ++hits;
   }
-  for (const auto id : expert_ids) {
+  for (std::size_t i = 0; i < expert_ids.size(); ++i) {
+    const auto id = expert_ids[i];
     if (id < 0 || static_cast<std::uint32_t>(id) >= cache.num_experts) {
       SetError(error_msg, "router selected an out-of-range expert ID");
       return false;
@@ -1122,6 +1137,9 @@ bool ExpertCacheManager::Resolve(
       ++hits;
     if (!seen[static_cast<std::uint32_t>(id)]) {
       seen[static_cast<std::uint32_t>(id)] = 1;
+      if (telemetry != nullptr)
+        first_row[static_cast<std::uint32_t>(id)] =
+            static_cast<std::int32_t>(i / impl_->experts_used);
       unique.push_back(id);
     }
   }
@@ -1138,9 +1156,11 @@ bool ExpertCacheManager::Resolve(
   }
 
   std::vector<std::pair<std::int32_t, std::uint32_t>> misses;
+  std::vector<std::int32_t> miss_rows;
   std::vector<std::int32_t> missing_experts;
   std::vector<std::uint32_t> newly_reserved;
   misses.reserve(unique.size());
+  miss_rows.reserve(unique.size());
   missing_experts.reserve(unique.size());
   newly_reserved.reserve(unique.size());
   cache.pinned_slots.reserve(unique.size());
@@ -1195,6 +1215,10 @@ bool ExpertCacheManager::Resolve(
         waited_for_prefetch = waited.count() != 0;
         if (waited_for_prefetch) {
           prefetch_wait += waited;
+          if (telemetry != nullptr)
+            telemetry->row_late_join_nanoseconds[static_cast<std::size_t>(
+                first_row[static_cast<std::uint32_t>(expert)])] +=
+                static_cast<std::uint64_t>(waited.count());
         }
       }
       if (state == SlotState::kFree) {
@@ -1269,6 +1293,8 @@ bool ExpertCacheManager::Resolve(
                              static_cast<std::uint32_t>(expert)] = victim;
     cache.pinned_slots.push_back(static_cast<std::uint32_t>(victim));
     misses.emplace_back(expert, static_cast<std::uint32_t>(victim));
+    if (telemetry != nullptr)
+      miss_rows.push_back(first_row[static_cast<std::uint32_t>(expert)]);
     newly_reserved.push_back(static_cast<std::uint32_t>(victim));
     if (count_route_hotness)
       cache.route_hotness[static_cast<std::uint32_t>(expert)] +=
@@ -1281,9 +1307,18 @@ bool ExpertCacheManager::Resolve(
     SsdReadRequest request;
   };
   std::map<std::filesystem::path, std::vector<PendingRead>> grouped;
-  for (const auto [expert, slot] : misses) {
+  std::vector<std::uint64_t> layer_cold_bytes;
+  if (telemetry != nullptr)
+    layer_cold_bytes.assign(telemetry->rows, 0);
+  for (std::size_t m = 0; m < misses.size(); ++m) {
+    const auto [expert, slot] = misses[m];
+    if (telemetry != nullptr)
+      ++telemetry->row_cold_experts[static_cast<std::size_t>(miss_rows[m])];
     for (std::size_t weight = 0; weight < cache.expert_bytes.size(); ++weight) {
       const auto& source = cache.view.expert_sources[weight];
+      if (telemetry != nullptr)
+        layer_cold_bytes[static_cast<std::size_t>(miss_rows[m])] +=
+            source.expert_bytes;
       if (static_cast<std::uint64_t>(expert) >
           (std::numeric_limits<std::uint64_t>::max() - source.file_offset) /
               source.expert_bytes) {
@@ -1369,16 +1404,40 @@ bool ExpertCacheManager::Resolve(
   }
   if (bytes_read != nullptr)
     *bytes_read = total_bytes_read;
+  std::chrono::nanoseconds demand_elapsed{0};
+  if (!misses.empty())
+    demand_elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - stall_start);
+  if (telemetry != nullptr && !misses.empty()) {
+    telemetry->demand_read_nanoseconds =
+        static_cast<std::uint64_t>(demand_elapsed.count());
+    std::uint64_t window_cold_bytes = 0;
+    std::uint32_t widest_row = 0;
+    for (std::uint32_t row = 0; row < telemetry->rows; ++row) {
+      window_cold_bytes += layer_cold_bytes[row];
+      if (layer_cold_bytes[row] > layer_cold_bytes[widest_row])
+        widest_row = row;
+    }
+    if (window_cold_bytes != 0) {
+      const std::uint64_t demand_ns =
+          static_cast<std::uint64_t>(demand_elapsed.count());
+      std::uint64_t assigned = 0;
+      for (std::uint32_t row = 0; row < telemetry->rows; ++row) {
+        const std::uint64_t share =
+            demand_ns * layer_cold_bytes[row] / window_cold_bytes;
+        telemetry->row_demand_read_nanoseconds[row] += share;
+        assigned += share;
+      }
+      telemetry->row_demand_read_nanoseconds[widest_row] +=
+          demand_ns - assigned;
+    }
+    for (std::uint32_t row = 0; row < telemetry->rows; ++row)
+      telemetry->row_cold_bytes[row] += layer_cold_bytes[row];
+  }
   if (record_stats && record_demand_stats && impl_->stats != nullptr) {
     impl_->stats->RecordExpertDemand(
         unique.size(), resident_hits, prefetched_in_time, misses.size(),
-        late_prefetch_requests,
-        prefetch_wait +
-            (misses.empty()
-                 ? std::chrono::nanoseconds{0}
-                 : std::chrono::duration_cast<std::chrono::nanoseconds>(
-                       std::chrono::steady_clock::now() - stall_start)),
-        prefill);
+        late_prefetch_requests, prefetch_wait + demand_elapsed, prefill);
   }
   if (impl_->victim_policy == VictimPolicy::kDecayedHotness &&
       count_route_hotness) {
