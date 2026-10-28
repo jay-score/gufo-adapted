@@ -607,7 +607,12 @@ public:
     if (!frontier_published_) {
       if (!sampler.config().can_use_unmodified_argmax())
         frontier_ = SelectFrontier(sampler);
-      if (!AppendSpeculativeSelection(*frontier_, sampler, result))
+      const auto logprobs =
+          sampler.config().logprobs
+              ? sampling::CollectLogprobs(CopyFrontierLogits(), *frontier_,
+                                          sampler.config().logprobs)
+              : std::nullopt;
+      if (!AppendSpeculativeSelection(*frontier_, sampler, result, logprobs))
         return false;
       frontier_published_ = true;
     }
@@ -647,11 +652,16 @@ public:
                     : TextExecutionPlanKind::kSerial,
         .physical_width = verification.physical_width,
     };
+    std::size_t index = 0;
     for (const TextRunnerToken token : verification.emitted_tokens) {
+      auto logprobs = verification.logprobs.empty()
+                          ? std::nullopt
+                          : std::optional(verification.logprobs.at(index++));
       // Each prediction consumes one input, including a terminal prediction.
       // EOS itself remains the unconsumed frontier and is not published.
       ++position_;
-      if (!AppendSpeculativeSelection(token, sampler, result))
+      if (!AppendSpeculativeSelection(token, sampler, result,
+                                      std::move(logprobs)))
         break;
       rollback_tokens_.push_back(token);
     }
@@ -741,10 +751,12 @@ public:
   }
 
 private:
-  bool AppendSpeculativeSelection(TextRunnerToken token,
-                                  sampling::SamplerState& sampler,
-                                  TextDecodeStep& result) {
+  bool AppendSpeculativeSelection(
+      TextRunnerToken token, sampling::SamplerState& sampler,
+      TextDecodeStep& result,
+      std::optional<sampling::TokenLogprobs> logprobs = {}) {
     if (stop_at_eos() && model_->GetTokenizer().IsStopToken(token)) {
+      result.terminal_logprobs = std::move(logprobs);
       result.stop = true;
       return false;
     }
@@ -752,6 +764,7 @@ private:
         .stop = false,
         .token = token,
         .piece = std::string(model_->GetTokenizer().DecodeToken(token)),
+        .logprobs = std::move(logprobs),
     });
     sequence_.push_back(token);
     set_pending_token(token);
@@ -1360,13 +1373,16 @@ public:
       TextRunnerState& state, sampling::SamplerState& sampler) const override {
     auto& qwen = RequireQwenState(state);
     const TextRunnerToken token = qwen.SelectFrontier(sampler);
-    if (EndsTurn(qwen, model_->GetTokenizer(), token)) {
-      return {
-          .stop = true,
-          .token = 0,
-          .piece = {},
-      };
-    }
+    auto logprobs =
+        sampler.config().logprobs
+            ? sampling::CollectLogprobs(qwen.CopyFrontierLogits(), token,
+                                        sampler.config().logprobs)
+            : std::nullopt;
+    if (EndsTurn(qwen, model_->GetTokenizer(), token))
+      return {.stop = true,
+              .token = token,
+              .piece = {},
+              .logprobs = std::move(logprobs)};
     // Keep the selected token separate from the argmax frontier: sampled
     // cancellation and prompt snapshot restore must not replace that argmax.
     qwen.set_pending_token(token);
@@ -1374,6 +1390,7 @@ public:
         .stop = false,
         .token = token,
         .piece = std::string(model_->GetTokenizer().DecodeToken(token)),
+        .logprobs = std::move(logprobs),
     };
   }
 
@@ -1857,26 +1874,22 @@ public:
       return {.stop = true, .piece = {}};
     // A sampled DSpark cycle may have drawn the next token already.
     int token = deepseek.session().TakePendingDsparkToken();
-    if (token < 0) {
+    std::vector<float> logits;
+    if (token < 0 || sampler.config().logprobs) {
       std::string error;
-      const auto logits = deepseek.session().CopyLogits(&error);
+      logits = deepseek.session().CopyLogits(&error);
       if (logits.empty()) {
         throw std::runtime_error("DeepSeek token selection failed: " + error);
       }
-      token = static_cast<int>(sampler.Sample(logits));
+      if (token < 0)
+        token = static_cast<int>(sampler.Sample(logits));
     }
-    if (deepseek.stop_at_eos() && model_->IsStopToken(token)) {
-      return {
-          .stop = true,
-          .token = 0,
-          .piece = {},
-      };
-    }
-    return {
-        .stop = false,
-        .token = static_cast<TextRunnerToken>(token),
-        .piece = model_->DecodeToken(token),
-    };
+    const bool stop = deepseek.stop_at_eos() && model_->IsStopToken(token);
+    return {.stop = stop,
+            .token = static_cast<TextRunnerToken>(token),
+            .piece = stop ? std::string{} : model_->DecodeToken(token),
+            .logprobs = sampling::CollectLogprobs(logits, token,
+                                                  sampler.config().logprobs)};
   }
 
   void Advance(TextRunnerState& state, TextRunnerToken token) const override {
@@ -1906,6 +1919,8 @@ public:
                 model_->IsStopToken(static_cast<int>(token)),
         .token = token,
         .piece = model_->DecodeToken(static_cast<int>(token)),
+        .logprobs =
+            sampling::CollectLogprobs(logits, token, sampler.config().logprobs),
     };
   }
 
@@ -1925,7 +1940,8 @@ public:
       return {.selections = {}, .stop = true};
     const auto stats_before = deepseek.session().DsparkStatistics();
     std::optional<models::deepseek_v4_flash::DsparkSamplerBridge> bridge;
-    if (!sampler.config().can_use_unmodified_argmax()) {
+    if (!sampler.config().can_use_unmodified_argmax() ||
+        sampler.config().logprobs) {
       bridge.emplace(sampler);
     }
     std::vector<int> emitted;
@@ -1946,7 +1962,12 @@ public:
     deepseek.set_position(deepseek.session().Position());
     step.selections.reserve(emitted.size());
     for (const int token : emitted) {
+      auto logprobs =
+          sampler.config().logprobs
+              ? std::optional(bridge->logprobs().at(step.selections.size()))
+              : std::nullopt;
       if (deepseek.stop_at_eos() && model_->IsStopToken(token)) {
+        step.terminal_logprobs = std::move(logprobs);
         step.stop = true;
         break;
       }
@@ -1954,6 +1975,7 @@ public:
           .stop = false,
           .token = static_cast<TextRunnerToken>(token),
           .piece = model_->DecodeToken(token),
+          .logprobs = std::move(logprobs),
       });
     }
     const auto stats_after = deepseek.session().DsparkStatistics();
@@ -2007,7 +2029,8 @@ public:
       states[index] = &deepseek;
       stats_before[index] = deepseek.session().DsparkStatistics();
       auto& sampler = decodes[index].sampler.get();
-      if (!sampler.config().can_use_unmodified_argmax()) {
+      if (!sampler.config().can_use_unmodified_argmax() ||
+          sampler.config().logprobs) {
         bridges[index].emplace(sampler);
       }
       items[index] = {
@@ -2050,7 +2073,12 @@ public:
       states[index]->set_position(states[index]->session().Position());
       step.selections.reserve(emitted[index].size());
       for (const int token : emitted[index]) {
+        auto logprobs = decodes[index].sampler.get().config().logprobs
+                            ? std::optional(bridges[index]->logprobs().at(
+                                  step.selections.size()))
+                            : std::nullopt;
         if (states[index]->stop_at_eos() && model_->IsStopToken(token)) {
+          step.terminal_logprobs = std::move(logprobs);
           step.stop = true;
           break;
         }
@@ -2058,6 +2086,7 @@ public:
             .stop = false,
             .token = static_cast<TextRunnerToken>(token),
             .piece = model_->DecodeToken(token),
+            .logprobs = std::move(logprobs),
         });
       }
       const auto stats_after = states[index]->session().DsparkStatistics();
@@ -2721,16 +2750,22 @@ public:
 
   // The engine stops before committing EOS when the request enables it.
   // Every returned token is committed work and is emitted exactly once.
-  void ResolveStepTokens(QwenFlashNextTextRunnerState&, bool engine_stopped,
-                         std::span<const std::int32_t> tokens,
-                         TextDecodeStep* step) const {
+  void ResolveStepTokens(
+      QwenFlashNextTextRunnerState&, bool engine_stopped,
+      std::span<const std::int32_t> tokens, TextDecodeStep* step,
+      const QwenFlashNextSession::DecodeResult& decoded) const {
     step->stop = engine_stopped;
+    step->terminal_logprobs = decoded.terminal_logprobs;
     step->selections.reserve(tokens.size());
     for (const std::int32_t token : tokens) {
       step->selections.push_back({
           .stop = false,
           .token = static_cast<TextRunnerToken>(token),
           .piece = model_->TokenText(token),
+          .logprobs =
+              decoded.logprobs.empty()
+                  ? std::nullopt
+                  : std::optional(decoded.logprobs.at(step->selections.size())),
       });
     }
   }
@@ -2747,14 +2782,12 @@ public:
           "Qwen3.8-Flash-Next token selection has no logits");
     }
     const auto token = static_cast<std::int32_t>(sampler.Sample(logits));
-    if (EndsTurn(qfn, *model_, token)) {
-      return {.stop = true, .token = 0, .piece = {}};
-    }
-    return {
-        .stop = false,
-        .token = static_cast<TextRunnerToken>(token),
-        .piece = model_->TokenText(token),
-    };
+    const bool stop = EndsTurn(qfn, *model_, token);
+    return {.stop = stop,
+            .token = static_cast<TextRunnerToken>(token),
+            .piece = stop ? std::string{} : model_->TokenText(token),
+            .logprobs = sampling::CollectLogprobs(logits, token,
+                                                  sampler.config().logprobs)};
   }
 
   void Advance(TextRunnerState& state, TextRunnerToken token) const override {
@@ -2806,7 +2839,7 @@ public:
     // draw so the next batch retains the rejection-conditioned distribution.
     sampler.CopyDrawStateFrom(working_sampler);
     TextDecodeStep step;
-    ResolveStepTokens(qfn, decoded.stop, decoded.tokens, &step);
+    ResolveStepTokens(qfn, decoded.stop, decoded.tokens, &step, decoded);
     qfn.set_position(qfn.session().Position());
     const auto stats_after = qfn.session().Statistics();
     step.draft_rounds = stats_after.cycles - stats_before.cycles;
@@ -2890,7 +2923,8 @@ public:
       decodes[i].sampler.get().CopyDrawStateFrom(samplers[i]);
       state.set_position(state.session().Position());
       auto& step = steps[i];
-      ResolveStepTokens(state, results[i].stop, results[i].tokens, &step);
+      ResolveStepTokens(state, results[i].stop, results[i].tokens, &step,
+                        results[i]);
       if (active_count > 1 && !results[i].tokens.empty()) {
         step.execution_plan = {.kind = TextExecutionPlanKind::kBatched,
                                .physical_width = active_count};

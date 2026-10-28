@@ -998,10 +998,15 @@ bool Session::PrepareDecode(const DecodeRequest& request,
     return true;
   }
   const auto anchor = static_cast<std::int32_t>(sampler.Sample(logits_));
+  auto anchor_logprobs =
+      sampling::CollectLogprobs(logits_, anchor, sampler.config().logprobs);
   if (is_stop(anchor)) {
+    result->terminal_logprobs = std::move(anchor_logprobs);
     result->stop = true;
     return true;
   }
+  if (anchor_logprobs)
+    result->logprobs.push_back(std::move(*anchor_logprobs));
   if (!MtpEnabled() || width < 2) {
     if (MtpEnabled() && !defer_head &&
         !DraftCatchUp(anchor, false, error_msg)) {
@@ -1135,6 +1140,7 @@ bool Session::FinishDecode(const DecodeRequest& request,
   }
   std::uint32_t keep = 1;
   std::optional<std::int32_t> correction;
+  std::optional<std::int32_t> stop_token;
   bool cpu_rows = false;
   const auto download_remaining = [&](std::uint32_t first) {
     verify_logits_.resize(exec.max_speculative() * vocab);
@@ -1177,6 +1183,7 @@ bool Session::FinishDecode(const DecodeRequest& request,
         continue;
       }
       if (is_stop(prediction.index)) {
+        stop_token = prediction.index;
         result->stop = true;
         break;
       }
@@ -1201,6 +1208,7 @@ bool Session::FinishDecode(const DecodeRequest& request,
       const auto token = static_cast<std::int32_t>(verified.token);
       const bool accepted = verified.accepted;
       if (is_stop(token)) {
+        stop_token = token;
         result->stop = true;
         break;
       }
@@ -1217,9 +1225,29 @@ bool Session::FinishDecode(const DecodeRequest& request,
                                       chain[keep], sampler, is_stop);
     if (decision != DraftDecision::kAccept) {
       result->stop = decision == DraftDecision::kStop;
+      if (result->stop && sampler.config().logprobs) {
+        auto copy = sampler;
+        stop_token = static_cast<std::int32_t>(
+            copy.Sample(std::span<const float>(verify_logits_)
+                            .subspan((keep - 1) * vocab, vocab)));
+      }
       break;
     }
     ++keep;
+  }
+  if (sampler.config().logprobs) {
+    const auto rows = keep - 1 + (stop_token ? 1 : 0);
+    std::vector<float> raw(rows * vocab);
+    if (rows && !exec.ReadVerificationRows(0, raw, error_msg))
+      return false;
+    for (std::uint32_t i = 1; i < keep; ++i)
+      result->logprobs.push_back(*sampling::CollectLogprobs(
+          std::span<const float>(raw).subspan((i - 1) * vocab, vocab), chain[i],
+          sampler.config().logprobs));
+    if (stop_token)
+      result->terminal_logprobs = sampling::CollectLogprobs(
+          std::span<const float>(raw).subspan((keep - 1) * vocab, vocab),
+          *stop_token, sampler.config().logprobs);
   }
   if (!exec.Rollback(
           *session_, keep, error_msg,

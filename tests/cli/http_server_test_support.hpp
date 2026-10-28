@@ -214,9 +214,18 @@ public:
       result.finish_reason = FinishReason::kStopSequence;
       result.stop_sequence = forced_stop_sequence;
     }
+    if (sampling.logprobs) {
+      gufo::server::DecodedLogprobs probabilities;
+      probabilities.entries.push_back({3, result.text, -3.0});
+      if (*sampling.logprobs > 0)
+        probabilities.entries.push_back({1, "alternative", -0.5});
+      result.logprobs.push_back(std::move(probabilities));
+    }
     if (token && failure != 8) {
       std::this_thread::sleep_for(token_delay);
-      (void)token(result.text);
+      (void)token(gufo::server::TokenPiece(
+          result.text,
+          result.logprobs.empty() ? nullptr : &result.logprobs.front()));
     }
     if (failure == 6)
       throw std::runtime_error("context exceeded");
