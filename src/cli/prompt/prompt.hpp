@@ -51,6 +51,9 @@ struct PromptOptions {
   /// acceptance confidence reaches this floor; 0 verifies the full chain.
   float mtp_verify_acceptance_floor{0.0F};
   bool ple_shelf{false};
+  bool ple_shelf_mib_set{false};
+  std::uint32_t ple_shelf_mib{0};
+  std::uint32_t prefetch_layers_ahead{2};
   bool ssd_stats{false};
   bool prompt_lookup{false};
 };

@@ -7,9 +7,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <type_traits>
 
 #include "src/core/gguf_reader.hpp"
@@ -38,7 +40,6 @@ constexpr std::uint32_t kPrefillChunkTokens = 4096;
 // tail pass costs about as much as this many more chunk rows.
 constexpr std::uint32_t kPrefillTailTokens = 128;
 // Opt-in --ple-shelf capacity for the compressed PLE row cache.
-constexpr std::size_t kPleShelfBytes = 128ULL * 1024 * 1024;
 
 void AssignError(std::string* error_msg, std::string_view message) {
   if (error_msg != nullptr) {
@@ -163,8 +164,8 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     const auto& t = m->weights_->ple_table;
     m->ngram_ = NgramTable::Open(
         m->reader_->GetMappedRegions()[t.shard].file_descriptor, t.file_offset,
-        t.rows, c.ple_head_dim, t.type, error_msg,
-        options.ple_shelf ? kPleShelfBytes : 0, m->ssd_stats_.get());
+        t.rows, c.ple_head_dim, t.type, error_msg, options.ple_shelf_bytes,
+        m->ssd_stats_.get());
     if (!m->ngram_) {
       return nullptr;
     }
@@ -228,6 +229,7 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
                 exec.max_batch, std::uint64_t{options.max_draft_tokens} + 1))
           : 1;
   exec.max_speculative = exec.max_logit_rows;
+  exec.prefetch_layers_ahead = options.prefetch_layers_ahead;
   m->executor_ =
       rocm::Executor::Create(*m->device_, m->ngram_.get(), exec, error_msg);
   if (!m->executor_) {
@@ -267,7 +269,7 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
         .kv_reserved_bytes = per_session * options.decode_concurrency,
         .scratch_bytes = scratch_bytes,
         .reader_scratch_bytes = reader_scratch_bytes,
-        .continuation_cache_bytes = per_session * options.decode_concurrency,
+        .continuation_cache_bytes = options.continuation_cache_bytes,
         .safety_margin_bytes = memory_safety_margin_bytes,
         .wddm_available_bytes = free_bytes,
         .has_wddm_available = has_available,
@@ -401,10 +403,11 @@ std::size_t Model::ResidentBytes() const noexcept {
 std::size_t Model::SessionBytes(core::SessionMode mode,
                                 std::uint32_t context) const noexcept {
   const std::size_t vision =
-      vision_ ? std::size_t{context} * (config().hidden_size * sizeof(float) +
-                                        3 * sizeof(std::int32_t)) +
-                    64
-              : 0;
+      vision_ && options_.reserve_vision_session_bytes
+          ? std::size_t{context} * (config().hidden_size * sizeof(float) +
+                                    3 * sizeof(std::int32_t)) +
+                64
+          : 0;
   return executor_->SessionBytes(mode, context,
                                  mode == core::SessionMode::kSpeculative
                                      ? executor_->max_speculative() - 1
@@ -417,7 +420,44 @@ std::size_t Model::DeferredScratchBytes() const {
 }
 
 std::string Model::SsdStatsReport() const {
-  return ssd_stats_ != nullptr ? ssd_stats_->Format() : std::string{};
+  std::string report =
+      ssd_stats_ != nullptr ? ssd_stats_->Format() : std::string{};
+  if (!memory_budget_)
+    return report;
+  std::size_t free_bytes = 0;
+  std::size_t total_bytes = 0;
+  const bool has_hip = hipMemGetInfo(&free_bytes, &total_bytes) == hipSuccess;
+  const auto mode = HasMtp() ? core::SessionMode::kSpeculative
+                             : core::SessionMode::kAutoregressive;
+  const auto per_session = SessionBytes(mode, options_.max_context);
+  std::ostringstream out;
+  constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+  out << std::fixed << std::setprecision(3) << "memory_accounting\n"
+      << "  continuation_reserve_gib: "
+      << static_cast<double>(memory_budget_->continuation_cache_bytes) / kGiB
+      << '\n'
+      << "  session_reserve_gib:      "
+      << static_cast<double>(per_session * options_.decode_concurrency) / kGiB
+      << '\n'
+      << "  vision_session_reserve:   "
+      << (vision_ && options_.reserve_vision_session_bytes ? "yes" : "no")
+      << '\n'
+      << "  expert_cache_planned_gib: "
+      << static_cast<double>(memory_budget_->expert_cache_bytes) / kGiB << '\n'
+      << "  expert_cache_actual_gib:  "
+      << static_cast<double>(executor_->ExpertCacheBytes()) / kGiB << '\n'
+      << "  expert_cache_slots:       " << executor_->ExpertCacheSlots() << '\n'
+      << "  hip_free_gib:             ";
+  if (has_hip)
+    out << static_cast<double>(free_bytes) / kGiB << '\n';
+  else
+    out << "not reported\n";
+  out << "  hip_total_gib:            ";
+  if (has_hip)
+    out << static_cast<double>(total_bytes) / kGiB << '\n';
+  else
+    out << "not reported\n";
+  return report + out.str();
 }
 
 void Model::RecordVerifyTailWaste(std::uint64_t cold_experts,

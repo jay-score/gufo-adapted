@@ -30,6 +30,9 @@ class GgufReader;
 
 namespace gufo::models::qwen38_flash_next {
 
+inline constexpr std::size_t kDefaultPleShelfBytes =
+    std::size_t{128} * 1024 * 1024;
+
 struct ModelWeights;
 struct MtpWeights;
 struct MtpCandidateLogits;
@@ -57,9 +60,8 @@ struct ModelOptions {
   /// per-draft acceptance confidence reaches this floor. Zero (default)
   /// keeps the full chain verified.
   float mtp_verify_acceptance_floor{0.0F};
-  /// Opt into a 128 MiB compressed-row PLE cache; off preserves the legacy
-  /// 8 MiB row cache.
-  bool ple_shelf{false};
+  /// Compressed-row PLE shelf size in bytes. Zero disables the shelf.
+  std::size_t ple_shelf_bytes{kDefaultPleShelfBytes};
   /// Optional MTP draft sidecar (`mtp-...-shared-*.gguf`). Empty leaves
   /// speculative decoding off.
   std::string mtp_model_path;
@@ -77,6 +79,16 @@ struct ModelOptions {
   /// artifact's own setting, which is always off: no GGUF metadata key sets
   /// it today.
   std::optional<RopeScaling> rope_scaling{};
+  /// Extra device session capacity the caller reserves for continuation-cache
+  /// slots. Text-only callers leave this zero; serve charges cached slots
+  /// through its admission ledger.
+  std::size_t continuation_cache_bytes{0};
+  /// Token-prior prefetch horizon in layers. Two preserves the historical
+  /// lookahead; larger values fan priors out to layers 3..N-1.
+  std::uint32_t prefetch_layers_ahead{2};
+  /// Reserve worst-case per-session image state even before an image request.
+  /// Text-only callers can disable it; serve keeps it enabled.
+  bool reserve_vision_session_bytes{true};
 };
 
 class Session;

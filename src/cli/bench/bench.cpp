@@ -201,6 +201,44 @@ void RegisterBenchOptions(ArgParser& parser, BenchOptions& opt,
   parser.AddOption("", "--dspark-model", "PATH",
                    "DeepSeek V4 Flash DSpark support GGUF", "Speculative",
                    &opt.dspark_model_path);
+  parser.AddFlag("", "--ple-shelf",
+                 "Cache PLE rows in a 128 MiB bounded RAM shelf", "Model",
+                 &opt.ple_shelf);
+  parser.AddCustomOption(
+      "", "--ple-shelf-mib", "MIB",
+      "PLE shelf size in MiB (0 disables; default: 128)", "Model",
+      [&opt](std::string_view, std::string_view value,
+             std::string* error) -> bool {
+        std::uint32_t mib = 0;
+        const auto [ptr, ec] =
+            std::from_chars(value.data(), value.data() + value.size(), mib);
+        if (ec != std::errc{} || ptr != value.data() + value.size()) {
+          if (error != nullptr)
+            *error = "Invalid integer for ple-shelf-mib: " + std::string(value);
+          return false;
+        }
+        opt.ple_shelf_mib = mib;
+        opt.ple_shelf_mib_set = true;
+        return true;
+      });
+  parser.AddCustomOption(
+      "", "--prefetch-layers-ahead", "N",
+      "Token-prior prefetch horizon in layers (default: 2)", "Model",
+      [&opt](std::string_view, std::string_view value,
+             std::string* error) -> bool {
+        std::uint32_t layers = 0;
+        const auto [ptr, ec] =
+            std::from_chars(value.data(), value.data() + value.size(), layers);
+        if (ec != std::errc{} || ptr != value.data() + value.size() ||
+            layers == 0 || layers > 64) {
+          if (error != nullptr)
+            *error = "Invalid integer for prefetch-layers-ahead: " +
+                     std::string(value);
+          return false;
+        }
+        opt.prefetch_layers_ahead = layers;
+        return true;
+      });
   parser.AddOption("", "--mtp-model", "PATH",
                    "Path to quantized Qwen MTP draft head GGUF file",
                    "Speculative", &opt.mtp_model_path);
@@ -938,9 +976,16 @@ int RunQwen38FlashNextBenchmark(
       options.model_path,
       qfn::ModelOptions{
           .max_context = static_cast<std::uint32_t>(required_context),
+          .ple_shelf_bytes =
+              options.ple_shelf_mib_set
+                  ? static_cast<std::size_t>(options.ple_shelf_mib) * 1024 *
+                        1024
+                  : qfn::kDefaultPleShelfBytes,
           .mtp_model_path = mtp ? options.mtp_model_path : "",
           .max_draft_tokens = std::max<std::uint32_t>(1, options.draft_tokens),
           .rope_scaling = rope_scaling,
+          .prefetch_layers_ahead = options.prefetch_layers_ahead,
+          .reserve_vision_session_bytes = false,
       },
       &error);
   if (model == nullptr) {
@@ -1226,6 +1271,11 @@ std::optional<BenchOptions> ParseBenchOptions(std::span<const char* const> args,
     return std::nullopt;
   }
   if (parser.IsHelpRequested()) {
+    return std::nullopt;
+  }
+  if (opt.ple_shelf && opt.ple_shelf_mib_set) {
+    if (error_msg != nullptr)
+      *error_msg = "--ple-shelf and --ple-shelf-mib are mutually exclusive";
     return std::nullopt;
   }
 

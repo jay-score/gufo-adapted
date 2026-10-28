@@ -29,6 +29,10 @@ struct BenchOptions {
   std::string dspark_model_path;
   std::uint32_t draft_tokens{7};
   std::uint32_t min_draft_tokens{1};
+  bool ple_shelf{false};
+  bool ple_shelf_mib_set{false};
+  std::uint32_t ple_shelf_mib{0};
+  std::uint32_t prefetch_layers_ahead{2};
   sampling::SamplingConfig sampling{.seed = 0};
   bool enable_yarn{false};
   bool verbose{false};
