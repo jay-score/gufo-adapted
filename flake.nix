@@ -78,18 +78,19 @@
       # dependency of the server (see tools/README.md for the offline toolchain).
       # Unified python313 + torchWithRocm: every Strix Halo box ships ROCm, so
       # the single toolchain serves CPU flows and the --device cuda
-      # reference forward alike. gfx1151 verified on this host.
+      # reference forward alike. Built from plain nixos-unstable, without the
+      # ROCm 10.1 overlay, so torchWithRocm and its ROCm closure come from
+      # cache.nixos.org.
       pythonTools = system:
-        let pt = pkgs.${system}.python313; in
+        let pt = nixpkgs.legacyPackages.${system}.python313; in
         pt.withPackages (
           ps:
           let
             # Nixpkgs' default torchvision/lpips closures use CPU torch.
             # Override both edges so evaluation has one ROCm torch derivation.
-            # Torch's supported-target filter omits gfx1151; select it explicitly.
-            torchRocm = ps.torchWithRocm.override {
-              gpuTargets = [ "gfx1151" ];
-            };
+            # The default target list includes gfx1151; keep it so the cached
+            # build is used.
+            torchRocm = ps.torchWithRocm;
             torchvisionRocm = ps.torchvision.override {
               torch = torchRocm;
             };
@@ -188,7 +189,7 @@
               pkgs.${system}.clang-tools
               pkgs.${system}.ffmpeg-headless
               pkgs.${system}.sox
-              pkgs.${system}.rocmPackages.rocprofiler-sdk
+              pkgs.${system}.rocmPackages.gfx1151.rocprofiler-sdk
               pkgs.${system}.sqlite
               # Debugging and repository work. The test presets build
               # RelWithDebInfo with assertions, and contributors commit with

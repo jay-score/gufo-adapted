@@ -125,7 +125,7 @@ def verify_dependencies(
                     f"{flake_nix_file.name}"
                 )
         for binding in (
-            "torchRocm = ps.torchWithRocm.override",
+            "torchRocm = ps.torchWithRocm",
             "torch = torchRocm",
             "torchvision = torchvisionRocm",
             "alexnet-owt-7be5be79.pth",
