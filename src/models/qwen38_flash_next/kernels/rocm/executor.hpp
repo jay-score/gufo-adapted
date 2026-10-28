@@ -260,6 +260,8 @@ public:
     bool streamed_experts{false};
     /// Optional JSONL route trace destination for offline cache replay.
     std::string route_trace_path;
+    /// Token-prior prefetch horizon in layers (0..max_context layers).
+    std::uint32_t prefetch_layers_ahead{2};
   };
 
   ~Executor();
@@ -301,6 +303,7 @@ public:
       std::string* error_msg) const;
   void FinishAllExpertPrefetch() const noexcept;
   [[nodiscard]] std::size_t ExpertCacheBytes() const noexcept;
+  [[nodiscard]] std::uint32_t ExpertCacheSlots() const noexcept;
 
   [[nodiscard]] std::unique_ptr<Session> CreateSession(
       core::SessionMode mode, std::uint32_t max_context,

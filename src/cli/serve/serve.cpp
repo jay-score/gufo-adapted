@@ -609,6 +609,9 @@ void PrintServeHelp(std::string_view program_name,
     float mtp_verify_acceptance_floor = 0.0F;
     std::string cache_policy = "lru";
     bool ple_shelf = false;
+    bool ple_shelf_mib_set = false;
+    std::uint32_t ple_shelf_mib = 0;
+    std::uint32_t prefetch_layers_ahead = 2;
     bool ssd_stats = false;
     std::int64_t max_tokens = -1;
     sampling::SamplingConfig sampling_config;
@@ -721,10 +724,45 @@ void PrintServeHelp(std::string_view program_name,
     parser.AddOption("", "--memory-budget-gb", "GB",
                      "Qwen3.8-Flash-Next memory budget in GiB (default: off)",
                      "Memory", &memory_budget_gb);
-    parser.AddFlag(
-        "", "--ple-shelf",
-        "Cache PLE rows in a 128 MiB bounded RAM shelf (default: off)",
-        "Memory", &ple_shelf);
+    parser.AddFlag("", "--ple-shelf",
+                   "Cache PLE rows in a 128 MiB bounded RAM shelf", "Memory",
+                   &ple_shelf);
+    parser.AddCustomOption(
+        "", "--ple-shelf-mib", "MIB",
+        "PLE shelf size in MiB (0 disables; default: 128)", "Memory",
+        [&](std::string_view, std::string_view value,
+            std::string* error) -> bool {
+          std::uint32_t mib = 0;
+          const auto [ptr, ec] =
+              std::from_chars(value.data(), value.data() + value.size(), mib);
+          if (ec != std::errc{} || ptr != value.data() + value.size()) {
+            if (error != nullptr)
+              *error =
+                  "Invalid integer for ple-shelf-mib: " + std::string(value);
+            return false;
+          }
+          ple_shelf_mib = mib;
+          ple_shelf_mib_set = true;
+          return true;
+        });
+    parser.AddCustomOption(
+        "", "--prefetch-layers-ahead", "N",
+        "Token-prior prefetch horizon in layers (default: 2)", "Memory",
+        [&](std::string_view, std::string_view value,
+            std::string* error) -> bool {
+          std::uint32_t layers = 0;
+          const auto [ptr, ec] = std::from_chars(
+              value.data(), value.data() + value.size(), layers);
+          if (ec != std::errc{} || ptr != value.data() + value.size() ||
+              layers == 0 || layers > 64) {
+            if (error != nullptr)
+              *error = "Invalid integer for prefetch-layers-ahead: " +
+                       std::string(value);
+            return false;
+          }
+          prefetch_layers_ahead = layers;
+          return true;
+        });
     parser.AddFlag(
         "", "--ssd-stats",
         "Print SSD, cache, memory and session-write telemetry on shutdown",
@@ -1243,6 +1281,9 @@ int RunServe(std::span<const char* const> args) {
     float mtp_verify_acceptance_floor = 0.0F;
     std::string cache_policy = "lru";
     bool ple_shelf = false;
+    bool ple_shelf_mib_set = false;
+    std::uint32_t ple_shelf_mib = 0;
+    std::uint32_t prefetch_layers_ahead = 2;
     bool ssd_stats = false;
     std::int64_t max_tokens = -1;
     sampling::SamplingConfig sampling_config;
@@ -1351,10 +1392,45 @@ int RunServe(std::span<const char* const> args) {
         "", "--memory-budget-gb", "GB",
         "Qwen3.8-Flash-Next memory budget in GiB (default: off)", "Memory",
         &memory_budget_gb);
-    llm_parser.AddFlag(
-        "", "--ple-shelf",
-        "Cache PLE rows in a 128 MiB bounded RAM shelf (default: off)",
-        "Memory", &ple_shelf);
+    llm_parser.AddFlag("", "--ple-shelf",
+                       "Cache PLE rows in a 128 MiB bounded RAM shelf",
+                       "Memory", &ple_shelf);
+    llm_parser.AddCustomOption(
+        "", "--ple-shelf-mib", "MIB",
+        "PLE shelf size in MiB (0 disables; default: 128)", "Memory",
+        [&](std::string_view, std::string_view value,
+            std::string* error) -> bool {
+          std::uint32_t mib = 0;
+          const auto [ptr, ec] =
+              std::from_chars(value.data(), value.data() + value.size(), mib);
+          if (ec != std::errc{} || ptr != value.data() + value.size()) {
+            if (error != nullptr)
+              *error =
+                  "Invalid integer for ple-shelf-mib: " + std::string(value);
+            return false;
+          }
+          ple_shelf_mib = mib;
+          ple_shelf_mib_set = true;
+          return true;
+        });
+    llm_parser.AddCustomOption(
+        "", "--prefetch-layers-ahead", "N",
+        "Token-prior prefetch horizon in layers (default: 2)", "Memory",
+        [&](std::string_view, std::string_view value,
+            std::string* error) -> bool {
+          std::uint32_t layers = 0;
+          const auto [ptr, ec] = std::from_chars(
+              value.data(), value.data() + value.size(), layers);
+          if (ec != std::errc{} || ptr != value.data() + value.size() ||
+              layers == 0 || layers > 64) {
+            if (error != nullptr)
+              *error = "Invalid integer for prefetch-layers-ahead: " +
+                       std::string(value);
+            return false;
+          }
+          prefetch_layers_ahead = layers;
+          return true;
+        });
     llm_parser.AddFlag(
         "", "--ssd-stats",
         "Print SSD, cache, memory and session-write telemetry on shutdown",
@@ -1506,6 +1582,11 @@ int RunServe(std::span<const char* const> args) {
                    "in [0, 1]\n";
       return 2;
     }
+    if (ple_shelf && ple_shelf_mib_set) {
+      std::cerr << "Error: --ple-shelf and --ple-shelf-mib are mutually "
+                   "exclusive\n";
+      return 2;
+    }
     if (!storage::ParseExpertCacheVictimPolicy(cache_policy)) {
       std::cerr << "Error: --cache-policy must be lru, hotness, or decayed\n";
       return 2;
@@ -1572,7 +1653,11 @@ int RunServe(std::span<const char* const> args) {
     speculative_config.mtp_verify_acceptance_floor =
         mtp_verify_acceptance_floor;
     speculative_config.cache_policy = cache_policy;
-    speculative_config.ple_shelf = ple_shelf;
+    speculative_config.ple_shelf_bytes =
+        ple_shelf_mib_set
+            ? static_cast<std::size_t>(ple_shelf_mib) * 1024 * 1024
+            : std::size_t{128} * 1024 * 1024;
+    speculative_config.prefetch_layers_ahead = prefetch_layers_ahead;
     speculative_config.ssd_stats = ssd_stats;
     print_ssd_stats = ssd_stats;
     if (model.empty()) {

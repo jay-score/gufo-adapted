@@ -106,8 +106,43 @@ static void RegisterTextOptions(ArgParser& parser, PromptOptions& opt,
                    "Qwen3.8-Flash-Next memory budget in GiB (default: off)",
                    "Memory", &opt.memory_budget_gb);
   parser.AddFlag("", "--ple-shelf",
-                 "Cache PLE rows in a 128 MiB bounded RAM shelf (default: off)",
-                 "Memory", &opt.ple_shelf);
+                 "Cache PLE rows in a 128 MiB bounded RAM shelf", "Memory",
+                 &opt.ple_shelf);
+  parser.AddCustomOption(
+      "", "--ple-shelf-mib", "MIB",
+      "PLE shelf size in MiB (0 disables; default: 128)", "Memory",
+      [&opt](std::string_view, std::string_view value,
+             std::string* error) -> bool {
+        std::uint32_t mib = 0;
+        const auto [ptr, ec] =
+            std::from_chars(value.data(), value.data() + value.size(), mib);
+        if (ec != std::errc{} || ptr != value.data() + value.size()) {
+          if (error != nullptr)
+            *error = "Invalid integer for ple-shelf-mib: " + std::string(value);
+          return false;
+        }
+        opt.ple_shelf_mib = mib;
+        opt.ple_shelf_mib_set = true;
+        return true;
+      });
+  parser.AddCustomOption(
+      "", "--prefetch-layers-ahead", "N",
+      "Token-prior prefetch horizon in layers (default: 2)", "Memory",
+      [&opt](std::string_view, std::string_view value,
+             std::string* error) -> bool {
+        std::uint32_t layers = 0;
+        const auto [ptr, ec] =
+            std::from_chars(value.data(), value.data() + value.size(), layers);
+        if (ec != std::errc{} || ptr != value.data() + value.size() ||
+            layers == 0 || layers > 64) {
+          if (error != nullptr)
+            *error = "Invalid integer for prefetch-layers-ahead: " +
+                     std::string(value);
+          return false;
+        }
+        opt.prefetch_layers_ahead = layers;
+        return true;
+      });
   parser.AddFlag("", "--ssd-stats",
                  "Print SSD, cache, memory and session-write telemetry",
                  "Memory", &opt.ssd_stats);
@@ -699,12 +734,18 @@ std::shared_ptr<models::qwen38_flash_next::Model> LoadFlashNextModel(
        .cache_prior_bias = opt.cache_prior_bias,
        .cache_policy = opt.cache_policy,
        .mtp_verify_acceptance_floor = opt.mtp_verify_acceptance_floor,
-       .ple_shelf = opt.ple_shelf,
+       .ple_shelf_bytes =
+           opt.ple_shelf_mib_set
+               ? static_cast<std::size_t>(opt.ple_shelf_mib) * 1024 * 1024
+               : models::qwen38_flash_next::kDefaultPleShelfBytes,
        .mtp_model_path =
            opt.speculative_backend == "mtp" ? opt.mtp_model_path : "",
        .max_draft_tokens = opt.draft_tokens,
        .vision_model_path = opt.vision_model_path,
-       .prompt_lookup = opt.prompt_lookup},
+       .prompt_lookup = opt.prompt_lookup,
+       .prefetch_layers_ahead = opt.prefetch_layers_ahead,
+       .reserve_vision_session_bytes =
+           !opt.image_paths.empty() || !opt.vision_model_path.empty()},
       &error);
   PrintModelLoadTime(load_start, model != nullptr);
   if (!model)
@@ -917,6 +958,11 @@ static std::optional<PromptOptions> ParseTextOptions(
     return std::nullopt;
   }
   opt.sampling_supplied = SamplingOptionsSupplied(parser);
+  if (opt.ple_shelf && opt.ple_shelf_mib_set) {
+    if (error_msg != nullptr)
+      *error_msg = "--ple-shelf and --ple-shelf-mib are mutually exclusive";
+    return std::nullopt;
+  }
   try {
     opt.sampling.Validate();
   } catch (const std::invalid_argument& exception) {

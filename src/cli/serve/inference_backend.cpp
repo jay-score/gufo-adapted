@@ -3162,7 +3162,7 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
             .cache_policy = speculative_config.cache_policy,
             .mtp_verify_acceptance_floor =
                 speculative_config.mtp_verify_acceptance_floor,
-            .ple_shelf = speculative_config.ple_shelf,
+            .ple_shelf_bytes = speculative_config.ple_shelf_bytes,
             .mtp_model_path =
                 speculative_config.backend == TextSpeculativeBackend::kMtp
                     ? speculative_config.draft_model_path
@@ -3177,6 +3177,7 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
                     : static_cast<std::uint32_t>(
                           std::clamp<std::size_t>(session_count, 1, 8)),
             .rope_scaling = rope_scaling,
+            .prefetch_layers_ahead = speculative_config.prefetch_layers_ahead,
         },
         &load_error);
     if (model == nullptr) {

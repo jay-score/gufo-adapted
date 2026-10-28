@@ -340,14 +340,18 @@ void Run() {
   async_manager->Release(0);
   async_manager->FinishPrefetch(0);
 
-  std::array<DeviceLayer, 3> speculative_layers{layer, layer, layer};
+  constexpr std::size_t kSpeculativeLayers =
+      gufo::storage::ExpertCacheManager::kSpeculativeTransactionCap + 1;
+  std::array<DeviceLayer, kSpeculativeLayers> speculative_layers;
+  speculative_layers.fill(layer);
   for (std::uint32_t i = 0; i < speculative_layers.size(); ++i)
     speculative_layers[i].layer_index = i;
-  std::array<std::int32_t, 3 * kExperts> speculative_indirection{};
+  std::array<std::int32_t, kSpeculativeLayers * kExperts>
+      speculative_indirection{};
   speculative_indirection.fill(-1);
-  constexpr std::size_t three_layer_budget = 256 * 1024;
+  constexpr std::size_t speculative_budget = 1024 * 1024;
   auto speculative_manager = gufo::storage::ExpertCacheManager::Create(
-      speculative_layers, three_layer_budget, kExpertsUsed, kExperts,
+      speculative_layers, speculative_budget, kExpertsUsed, kExperts,
       speculative_indirection, &error);
   if (!speculative_manager)
     throw std::runtime_error("speculative cache creation failed: " + error);
@@ -360,25 +364,32 @@ void Run() {
                                error);
     }
   }
-  const std::size_t third_layer_map = 2 * kExperts + 2;
-  if (!speculative_manager->Prefetch(2, speculative_prediction, 1, &error,
-                                     false, true) ||
-      speculative_indirection[third_layer_map] != -1) {
+  const std::size_t capped_layer_map =
+      gufo::storage::ExpertCacheManager::kSpeculativeTransactionCap * kExperts +
+      2;
+  if (!speculative_manager->Prefetch(
+          static_cast<std::uint32_t>(
+              gufo::storage::ExpertCacheManager::kSpeculativeTransactionCap),
+          speculative_prediction, 1, &error, false, true) ||
+      speculative_indirection[capped_layer_map] != -1) {
     throw std::runtime_error(
         "speculative prefetch exceeded its model-wide transaction cap");
   }
-  // Keep k+1 outstanding while retiring k; the rolling horizon must admit k+2.
+  // Keep k+1 outstanding while retiring one; the rolling horizon must admit
+  // the next layer.
   speculative_manager->FinishPrefetch(0);
-  if (!speculative_manager->Prefetch(2, speculative_prediction, 1, &error,
-                                     false, true) ||
-      speculative_indirection[third_layer_map] < 0) {
+  if (!speculative_manager->Prefetch(
+          static_cast<std::uint32_t>(
+              gufo::storage::ExpertCacheManager::kSpeculativeTransactionCap),
+          speculative_prediction, 1, &error, false, true) ||
+      speculative_indirection[capped_layer_map] < 0) {
     throw std::runtime_error(
-        "rolling speculative credit did not admit layer k+2 after finishing "
-        "layer k: " +
+        "rolling speculative credit did not admit the next layer after "
+        "finishing layer 0: " +
         error);
   }
-  speculative_manager->FinishPrefetch(1);
-  speculative_manager->FinishPrefetch(2);
+  for (std::uint32_t i = 1; i < kSpeculativeLayers; ++i)
+    speculative_manager->FinishPrefetch(i);
 
   // A prediction that is already resident submits no I/O batch. Resolve must
   // consume the READY pin without waiting for a nonexistent completion.

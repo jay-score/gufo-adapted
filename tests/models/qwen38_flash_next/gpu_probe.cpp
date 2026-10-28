@@ -275,7 +275,7 @@ int main(int argc, char** argv) {
     const auto& t = weights->ple_table;
     ngram = q::NgramTable::Open(
         reader->GetMappedRegions()[t.shard].file_descriptor, t.file_offset,
-        t.rows, c.ple_head_dim, t.type, &error);
+        t.rows, c.ple_head_dim, t.type, &error, 128 * 1024 * 1024);
     if (!ngram) {
       std::fprintf(stderr, "n-gram table failed: %s\n", error.c_str());
       return 1;

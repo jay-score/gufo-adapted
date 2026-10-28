@@ -260,7 +260,7 @@ void TestQuantizedRows() {
   const auto path =
       std::filesystem::temp_directory_path() / "qwen38_ngram_iq4.bin";
   constexpr std::uint32_t dim = 160;
-  constexpr std::uint32_t rows = 129;
+  constexpr std::uint32_t rows = 256;
   constexpr std::uint64_t offset = 4096 + 90;
   constexpr std::array<int, 16> values{
       -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
@@ -283,8 +283,8 @@ void TestQuantizedRows() {
     Check(file.good(), "IQ4_NL fixture written");
   }
   std::string error;
-  auto table =
-      OpenTable(path, offset, rows, dim, gufo::core::GgmlType::kIQ4_NL, &error);
+  auto table = OpenTable(path, offset, rows, dim, gufo::core::GgmlType::kIQ4_NL,
+                         &error, 128 * 1024 * 1024);
   Check(table != nullptr, error.c_str());
   if (table) {
     const auto gather = [&](std::span<const std::uint32_t> ids) {
@@ -315,6 +315,10 @@ void TestQuantizedRows() {
     gather(mixed);
   }
   table.reset();
+  auto disabled = OpenTable(path, offset, rows, dim,
+                            gufo::core::GgmlType::kIQ4_NL, &error, 0);
+  Check(disabled != nullptr && disabled->CacheBytes() == 0,
+        "zero cache bytes disables the PLE shelf");
   std::filesystem::remove(path);
 }
 

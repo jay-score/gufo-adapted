@@ -1463,20 +1463,43 @@ std::size_t Executor::ExpertCacheBytes() const noexcept {
   return expert_cache_ != nullptr ? expert_cache_->allocated_bytes() : 0;
 }
 
+std::uint32_t Executor::ExpertCacheSlots() const noexcept {
+  return expert_cache_ != nullptr ? expert_cache_->slots_per_layer() : 0;
+}
+
 bool Executor::PrefetchCandidates(
     std::span<const std::int32_t> candidate_tokens,
     std::string* error_msg) const {
   if (expert_cache_ == nullptr || candidate_tokens.empty())
     return true;
-  const std::size_t max_prefetch =
-      std::min<std::size_t>(16, expert_cache_->slots_per_layer() / 3);
+  const std::size_t slots = expert_cache_->slots_per_layer();
+  const std::size_t max_prefetch = std::min<std::size_t>(16, slots / 3);
   if (max_prefetch == 0)
     return true;
-  const bool ok = expert_cache_->PrefetchTokenPriors(0, candidate_tokens,
-                                                     max_prefetch, error_msg);
-  if (!ok)
+  // Keep the historical layer-0 token-prior prefetch for baselines.
+  if (!expert_cache_->PrefetchTokenPriors(0, candidate_tokens, max_prefetch,
+                                          error_msg)) {
     expert_cache_->FinishPrefetch(0);
-  return ok;
+    return false;
+  }
+  // Lookahead already warms the next two layers. Fan token priors out to the
+  // remaining horizon with a small per-layer cap so speculative bytes stay
+  // bounded and demand slots retain their top-k headroom.
+  const std::uint32_t layer_count =
+      static_cast<std::uint32_t>(std::min<std::size_t>(
+          options_.prefetch_layers_ahead, expert_cache_->layer_count()));
+  const std::size_t fanout_slots =
+      std::min<std::size_t>({4, max_prefetch, slots / 4});
+  if (fanout_slots == 0)
+    return true;
+  for (std::uint32_t layer = 3; layer < layer_count; ++layer) {
+    if (!expert_cache_->PrefetchTokenPriors(layer, candidate_tokens,
+                                            fanout_slots, error_msg)) {
+      expert_cache_->FinishPrefetch(layer);
+      return false;
+    }
+  }
+  return true;
 }
 
 void Executor::BeginSpeculativeDemandTelemetry(std::uint32_t rows) const {

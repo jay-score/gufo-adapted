@@ -24,8 +24,6 @@ constexpr std::size_t kPage = 4096;
 constexpr std::size_t kWorkers = 128;
 constexpr std::size_t kReadBatch = 8;
 constexpr std::size_t kBatchJobs = 1024;
-constexpr std::size_t kCacheBytes = 128 * 1024 * 1024;
-
 }  // namespace
 
 void HashNgramRows(const Config& c, NgramHistory& history,
@@ -96,11 +94,11 @@ std::unique_ptr<NgramTable> NgramTable::Open(
   t->stats_ = stats;
   t->row_dim_ = row_dim;
   t->row_bytes_ = row_dim / block * block_bytes;
-  const auto effective_cache_bytes =
-      cache_bytes == 0 ? kCacheBytes : cache_bytes;
-  const auto rows_per_shelf = effective_cache_bytes / t->row_bytes_;
+  // Zero explicitly disables the compressed-row shelf. Callers choose the
+  // default size (128 MiB) or a larger one for repeated PLE rows.
+  const auto rows_per_shelf = cache_bytes / t->row_bytes_;
   const auto shelf_rows = cache_bytes == 0
-                              ? rows_per_shelf
+                              ? std::uint64_t{0}
                               : std::min<std::uint64_t>(rows_per_shelf, rows);
   t->cache_count_ = std::bit_floor(static_cast<std::size_t>(shelf_rows));
   t->cache_entries_ = std::make_unique<CacheEntry[]>(t->cache_count_);

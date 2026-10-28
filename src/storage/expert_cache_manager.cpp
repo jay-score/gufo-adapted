@@ -545,6 +545,10 @@ std::uint32_t ExpertCacheManager::slots_per_layer() const noexcept {
   return impl_->slots_per_layer;
 }
 
+std::size_t ExpertCacheManager::layer_count() const noexcept {
+  return impl_->caches.size();
+}
+
 std::uint32_t ExpertCacheManager::demand_slots_available(
     std::uint32_t layer_id) const noexcept {
   if (layer_id >= impl_->caches.size() || impl_->caches[layer_id] == nullptr)
@@ -688,6 +692,8 @@ bool ExpertCacheManager::Prefetch(std::uint32_t layer_id,
   }
   if (speculative &&
       impl_->pending_speculative_transactions >= kSpeculativeTransactionCap) {
+    if (impl_->stats != nullptr)
+      impl_->stats->RecordPrefetchSkipped(prefill);
 #ifndef NDEBUG
     std::clog << "expert_speculative_prefetch_skipped layer=" << layer_id
               << " reason=transaction_cap\n";
@@ -974,10 +980,14 @@ bool ExpertCacheManager::PrefetchTokenPriors(
 void ExpertCacheManager::RecordTokenRouting(
     std::uint32_t layer_id, std::span<const std::int32_t> tokens,
     std::span<const std::int32_t> expert_ids) {
-  if (layer_id != 0 || layer_id >= impl_->caches.size() ||
-      impl_->caches[layer_id] == nullptr ||
+  if (layer_id >= impl_->caches.size() || impl_->caches[layer_id] == nullptr ||
       expert_ids.size() < tokens.size() * impl_->experts_used)
     return;
+  // A prefill chunk can insert thousands of rows per layer. Keep eviction
+  // amortized: prune to half the cap only when the cap is exceeded instead of
+  // scanning the whole table for every insert.
+  constexpr std::size_t kPriorCap = 8192;
+  constexpr std::size_t kPriorTarget = 4096;
   const std::lock_guard<std::mutex> lock(impl_->mutex);
   CacheLayer& cache = *impl_->caches[layer_id];
   for (std::size_t row = 0; row < tokens.size(); ++row) {
@@ -995,14 +1005,21 @@ void ExpertCacheManager::RecordTokenRouting(
         score = std::min(1000.0F, score + 1.0F);
       }
     }
-    if (cache.token_priors.size() > 4096) {
-      const auto oldest =
-          std::min_element(cache.token_priors.begin(), cache.token_priors.end(),
-                           [](const auto& a, const auto& b) {
-                             return a.second.last_used < b.second.last_used;
-                           });
-      if (oldest != cache.token_priors.end() && oldest->first != tokens[row])
-        cache.token_priors.erase(oldest);
+    if (cache.token_priors.size() > kPriorCap) {
+      std::vector<decltype(cache.token_priors.begin())> entries;
+      entries.reserve(cache.token_priors.size());
+      for (auto it = cache.token_priors.begin(); it != cache.token_priors.end();
+           ++it) {
+        entries.push_back(it);
+      }
+      const auto first_erase =
+          entries.begin() + (entries.size() - kPriorTarget);
+      std::nth_element(entries.begin(), first_erase, entries.end(),
+                       [](const auto& a, const auto& b) {
+                         return a->second.last_used < b->second.last_used;
+                       });
+      for (auto it = first_erase; it != entries.end(); ++it)
+        cache.token_priors.erase(*it);
     }
   }
 }
@@ -1467,6 +1484,7 @@ void ExpertCacheManager::FinishPrefetch(std::uint32_t layer_id) noexcept {
     return;
   const std::lock_guard<std::mutex> lock(impl_->mutex);
   CacheLayer& cache = *impl_->caches[layer_id];
+  std::uint64_t unused = 0;
   for (const auto& job : cache.prefetch_jobs) {
     if (!job->finalized && job->reader != nullptr)
       (void)job->reader->CancelPrefetch(job->batch_id);
@@ -1475,6 +1493,8 @@ void ExpertCacheManager::FinishPrefetch(std::uint32_t layer_id) noexcept {
     Slot& slot = cache.slot_state[slot_id];
     if (!slot.prefetch_pinned)
       continue;
+    if (slot.prefetch_origin)
+      ++unused;
     slot.prefetch_pinned = false;
     slot.prefetch_origin = false;
     const std::uint32_t previous =
@@ -1484,6 +1504,8 @@ void ExpertCacheManager::FinishPrefetch(std::uint32_t layer_id) noexcept {
       slot.state.store(SlotState::kCachedUnpinned, std::memory_order_release);
     }
   }
+  if (unused != 0 && impl_->stats != nullptr)
+    impl_->stats->RecordPrefetchUnused(unused, cache.last_route_was_prefill);
   cache.prefetch_slots.clear();
   impl_->RetireSpeculativeTransaction(cache);
   impl_->ReapPrefetchJobs(cache);

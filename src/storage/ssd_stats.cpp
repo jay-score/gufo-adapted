@@ -180,6 +180,23 @@ void SsdStats::RecordPrefetchRequests(std::uint64_t requests,
   }
 }
 
+void SsdStats::RecordPrefetchUnused(std::uint64_t requests,
+                                    bool prefill) noexcept {
+  if (enabled_.load(std::memory_order_relaxed)) {
+    prefetch_unused_.fetch_add(requests, std::memory_order_relaxed);
+    phase_counters_[prefill ? 0 : 1].prefetch_unused.fetch_add(
+        requests, std::memory_order_relaxed);
+  }
+}
+
+void SsdStats::RecordPrefetchSkipped(bool prefill) noexcept {
+  if (enabled_.load(std::memory_order_relaxed)) {
+    prefetch_skipped_cap_.fetch_add(1, std::memory_order_relaxed);
+    phase_counters_[prefill ? 0 : 1].prefetch_skipped_cap.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+}
+
 void SsdStats::RecordPleLookup(bool cache_hit, bool prefill) noexcept {
   if (!enabled_.load(std::memory_order_relaxed))
     return;
@@ -255,6 +272,9 @@ SsdPhaseStatsSnapshot SsdStats::PhaseSnapshot(bool prefill) const noexcept {
           phase.prefetch_requests.load(std::memory_order_relaxed),
       .late_prefetch_requests =
           phase.late_prefetch_requests.load(std::memory_order_relaxed),
+      .prefetch_unused = phase.prefetch_unused.load(std::memory_order_relaxed),
+      .prefetch_skipped_cap =
+          phase.prefetch_skipped_cap.load(std::memory_order_relaxed),
       .hard_stall_nanoseconds =
           phase.hard_stall_nanoseconds.load(std::memory_order_relaxed),
       .demand_bytes_read =
@@ -317,6 +337,9 @@ SsdStatsSnapshot SsdStats::Snapshot() const noexcept {
       .cold_misses = cold_misses_.load(std::memory_order_relaxed),
       .late_prefetch_requests =
           late_prefetch_requests_.load(std::memory_order_relaxed),
+      .prefetch_unused = prefetch_unused_.load(std::memory_order_relaxed),
+      .prefetch_skipped_cap =
+          prefetch_skipped_cap_.load(std::memory_order_relaxed),
       .hard_stall_nanoseconds =
           hard_stall_nanoseconds_.load(std::memory_order_relaxed),
       .wasted_tail_cold_misses =
@@ -366,6 +389,8 @@ std::string SsdStats::Format() const {
       << Percent(stats.prefetched_hits_in_time, stats.prefetch_requests) << '\n'
       << "  prefetched_hit_async:     " << stats.prefetched_hits_in_time << '\n'
       << "  prefetch_late_waits:      " << stats.late_prefetch_requests << '\n'
+      << "  prefetch_unused:          " << stats.prefetch_unused << '\n'
+      << "  prefetch_skipped_cap:     " << stats.prefetch_skipped_cap << '\n'
       << "  cold_misses_sync:         " << stats.cold_misses << '\n'
       << "  hard_stall_pct:           "
       << Percent(stats.cold_misses + stats.late_prefetch_requests,
@@ -399,6 +424,8 @@ std::string SsdStats::Format() const {
         << "    prefetch_requests:      " << phase.prefetch_requests << '\n'
         << "    prefetch_late_waits:    " << phase.late_prefetch_requests
         << '\n'
+        << "    prefetch_unused:        " << phase.prefetch_unused << '\n'
+        << "    prefetch_skipped_cap:   " << phase.prefetch_skipped_cap << '\n'
         << "    hard_stall_ms:          "
         << static_cast<double>(phase.hard_stall_nanoseconds) / 1.0e6 << '\n'
         << "    demand_bytes_read:      " << phase.demand_bytes_read << '\n'

@@ -24,7 +24,9 @@ class SsdStats;
 class ExpertCacheManager {
 public:
   static constexpr std::size_t kSharedScratchBufferCount = 32;
-  static constexpr std::size_t kSpeculativeTransactionCap = 2;
+  // A bounded prefetch horizon needs more than two outstanding layers; the
+  // three-tier reader still prioritizes demand and Room reads.
+  static constexpr std::size_t kSpeculativeTransactionCap = 8;
 
   using VictimPolicy = ExpertCacheVictimPolicy;
 
@@ -70,6 +72,7 @@ public:
   [[nodiscard]] const std::vector<models::qwen38_flash_next::rocm::DeviceLayer>&
   device_layers() const noexcept;
   [[nodiscard]] std::uint32_t slots_per_layer() const noexcept;
+  [[nodiscard]] std::size_t layer_count() const noexcept;
   [[nodiscard]] std::uint32_t demand_slots_available(
       std::uint32_t layer) const noexcept;
   [[nodiscard]] std::uint32_t room_slots_available(

@@ -17,6 +17,8 @@ struct SsdPhaseStatsSnapshot {
   std::uint64_t cold_misses{0};
   std::uint64_t prefetch_requests{0};
   std::uint64_t late_prefetch_requests{0};
+  std::uint64_t prefetch_unused{0};
+  std::uint64_t prefetch_skipped_cap{0};
   std::uint64_t hard_stall_nanoseconds{0};
   std::uint64_t demand_bytes_read{0};
   std::uint64_t prefetch_bytes_read{0};
@@ -39,6 +41,8 @@ struct SsdStatsSnapshot {
   std::uint64_t prefetch_requests{0};
   std::uint64_t cold_misses{0};
   std::uint64_t late_prefetch_requests{0};
+  std::uint64_t prefetch_unused{0};
+  std::uint64_t prefetch_skipped_cap{0};
   std::uint64_t hard_stall_nanoseconds{0};
   /// Stage 0: cold demand reads and hard-stall time the rejected tail rows
   /// of speculative verification cycles forced.
@@ -76,6 +80,9 @@ public:
                           bool prefill = false) noexcept;
   void RecordPrefetchRequests(std::uint64_t requests,
                               bool prefill = false) noexcept;
+  void RecordPrefetchUnused(std::uint64_t requests,
+                            bool prefill = false) noexcept;
+  void RecordPrefetchSkipped(bool prefill = false) noexcept;
   void RecordPleLookup(bool cache_hit, bool prefill = false) noexcept;
   void RecordStorageBytes(std::uint64_t bytes, bool prefill = false,
                           bool prefetch = false) noexcept;
@@ -105,6 +112,8 @@ private:
     std::atomic<std::uint64_t> cold_misses{0};
     std::atomic<std::uint64_t> prefetch_requests{0};
     std::atomic<std::uint64_t> late_prefetch_requests{0};
+    std::atomic<std::uint64_t> prefetch_unused{0};
+    std::atomic<std::uint64_t> prefetch_skipped_cap{0};
     std::atomic<std::uint64_t> hard_stall_nanoseconds{0};
     std::atomic<std::uint64_t> demand_bytes_read{0};
     std::atomic<std::uint64_t> prefetch_bytes_read{0};
@@ -135,6 +144,8 @@ private:
   std::atomic<std::uint64_t> prefetch_requests_{0};
   std::atomic<std::uint64_t> cold_misses_{0};
   std::atomic<std::uint64_t> late_prefetch_requests_{0};
+  std::atomic<std::uint64_t> prefetch_unused_{0};
+  std::atomic<std::uint64_t> prefetch_skipped_cap_{0};
   std::atomic<std::uint64_t> hard_stall_nanoseconds_{0};
   std::atomic<std::uint64_t> ple_requests_{0};
   std::atomic<std::uint64_t> ple_hits_{0};
