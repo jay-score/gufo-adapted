@@ -162,6 +162,13 @@ static void RegisterTextOptions(ArgParser& parser, PromptOptions& opt,
       "", "--cache-router-bonus", "LAMBDA",
       "Raw-logit residency bonus for router selection (default: 0)", "Memory",
       &opt.cache_router_bonus);
+  parser.AddOption("", "--cache-router-bonus-core", "N",
+                   "Keep the N highest-logit experts unbiased (default: 0)",
+                   "Memory", &opt.cache_router_bonus_core);
+  parser.AddOption(
+      "", "--cache-router-bonus-skip-layers", "N",
+      "Skip the residency bonus for the first N layers (default: 0)", "Memory",
+      &opt.cache_router_bonus_skip_layers);
   parser.AddOption("", "--dump-routing", "PATH",
                    "Write a binary GURT expert-routing trace", "Memory",
                    &opt.dump_routing_path);
@@ -746,6 +753,8 @@ std::shared_ptr<models::qwen38_flash_next::Model> LoadFlashNextModel(
        .cache_policy = opt.cache_policy,
        .cache_slot_profile = opt.cache_slot_profile,
        .cache_router_bonus = opt.cache_router_bonus,
+       .cache_router_bonus_core = opt.cache_router_bonus_core,
+       .cache_router_bonus_skip_layers = opt.cache_router_bonus_skip_layers,
        .mtp_verify_acceptance_floor = opt.mtp_verify_acceptance_floor,
        .ple_shelf_bytes =
            opt.ple_shelf_mib_set

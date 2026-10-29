@@ -31,6 +31,8 @@
 #include "src/models/qwen38_flash_next/ngram.hpp"
 #include "src/models/qwen38_flash_next/reference.hpp"
 #include "src/models/qwen38_flash_next/weights.hpp"
+#include "src/storage/expert_cache_manager.hpp"
+#include "src/storage/ssd_stats.hpp"
 
 namespace q = gufo::models::qwen38_flash_next;
 
@@ -52,6 +54,44 @@ struct Stats {
   double kl;
   double max_abs;
 };
+
+bool LoadSlotProfile(const std::string& path, std::size_t layers,
+                     std::vector<std::uint32_t>* profile, std::string* error) {
+  std::ifstream input(path);
+  if (!input) {
+    *error = "cannot open cache slot profile: " + path;
+    return false;
+  }
+  std::string text((std::istreambuf_iterator<char>(input)),
+                   std::istreambuf_iterator<char>());
+  const auto key = text.find("\"slots\"");
+  const auto begin = text.find('[', key == std::string::npos ? 0 : key);
+  const auto end = text.find(']', begin == std::string::npos ? 0 : begin);
+  if (begin == std::string::npos || end == std::string::npos) {
+    *error = "cache slot profile has no slots array: " + path;
+    return false;
+  }
+  profile->clear();
+  std::size_t cursor = begin + 1;
+  while (cursor < end) {
+    while (cursor < end && (text[cursor] < '0' || text[cursor] > '9'))
+      ++cursor;
+    if (cursor >= end)
+      break;
+    std::uint32_t value = 0;
+    while (cursor < end && text[cursor] >= '0' && text[cursor] <= '9') {
+      value = value * 10 + static_cast<std::uint32_t>(text[cursor] - '0');
+      ++cursor;
+    }
+    profile->push_back(value);
+  }
+  if (profile->size() != layers) {
+    *error = "cache slot profile must list exactly " + std::to_string(layers) +
+             " layers";
+    return false;
+  }
+  return true;
+}
 
 Stats Compare(const float* a, const float* b, std::size_t n) {
   std::vector<double> pa(n);
@@ -99,6 +139,12 @@ int main(int argc, char** argv) {
   std::uint32_t context = 4096;
   std::uint32_t requested_logit_rows = 0;
   std::size_t expert_cache_bytes = 0;
+  std::string cache_slot_profile;
+  std::string cache_policy = "lru";
+  float cache_prior_bias = 0.0F;
+  float cache_router_bonus = 0.0F;
+  std::uint32_t cache_router_bonus_core = 0;
+  std::uint32_t cache_router_bonus_skip_layers = 0;
   float yarn_factor = 1.0F;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -164,6 +210,36 @@ int main(int argc, char** argv) {
       decode |= arg == "--decode-file";
     } else if (arg == "--decode-ids") {
       decode_ids_path = next();
+    } else if (arg == "--cache-slot-profile") {
+      cache_slot_profile = next();
+    } else if (arg == "--cache-policy") {
+      cache_policy = next();
+    } else if (arg == "--cache-prior-bias" || arg == "--cache-router-bonus") {
+      const auto value = next();
+      float parsed = 0.0F;
+      const auto [end, ec] =
+          std::from_chars(value.data(), value.data() + value.size(), parsed);
+      if (ec != std::errc{} || end != value.data() + value.size() ||
+          !std::isfinite(parsed) || parsed < 0.0F) {
+        std::fprintf(stderr, "%s requires a nonnegative number\n", arg.c_str());
+        return 2;
+      }
+      (arg == "--cache-router-bonus" ? cache_router_bonus : cache_prior_bias) =
+          parsed;
+    } else if (arg == "--cache-router-bonus-core" ||
+               arg == "--cache-router-bonus-skip-layers") {
+      const auto value = next();
+      std::uint32_t parsed = 0;
+      const auto [end, ec] =
+          std::from_chars(value.data(), value.data() + value.size(), parsed);
+      if (ec != std::errc{} || end != value.data() + value.size()) {
+        std::fprintf(stderr, "%s requires a nonnegative integer\n",
+                     arg.c_str());
+        return 2;
+      }
+      (arg == "--cache-router-bonus-core" ? cache_router_bonus_core
+                                          : cache_router_bonus_skip_layers) =
+          parsed;
     } else if (arg == "--reference") {
       reference = true;
     } else if (arg == "--batch" || arg == "--context") {
@@ -317,6 +393,9 @@ int main(int argc, char** argv) {
   options.max_logit_rows = std::min<std::uint32_t>(
       batch, requested_logit_rows == 0 ? 64 : requested_logit_rows);
   options.streamed_experts = expert_cache_bytes != 0;
+  options.cache_router_bonus = cache_router_bonus;
+  options.cache_router_bonus_core = cache_router_bonus_core;
+  options.cache_router_bonus_skip_layers = cache_router_bonus_skip_layers;
   if (mtp_audit || cost_audit)
     options.max_speculative = 8;
 
@@ -330,12 +409,30 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "executor failed: %s\n", error.c_str());
     return 1;
   }
-  if (expert_cache_bytes != 0 &&
-      !executor->EnableExpertCache(
-          expert_cache_bytes, nullptr, 0.0F,
-          gufo::storage::ExpertCacheManager::VictimPolicy::kLru, &error)) {
-    std::fprintf(stderr, "expert cache enable failed: %s\n", error.c_str());
-    return 1;
+  std::unique_ptr<gufo::storage::SsdStats> ssd_stats;
+  if (expert_cache_bytes != 0) {
+    const auto victim_policy =
+        gufo::storage::ExpertCacheManager::ParseVictimPolicy(cache_policy);
+    if (!victim_policy) {
+      std::fprintf(stderr, "--cache-policy must be lru, hotness, or decayed\n");
+      return 2;
+    }
+    std::vector<std::uint32_t> slot_profile;
+    if (!cache_slot_profile.empty() && cache_slot_profile != "uniform") {
+      if (!LoadSlotProfile(cache_slot_profile, device->layers().size(),
+                           &slot_profile, &error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 2;
+      }
+    }
+    ssd_stats = std::make_unique<gufo::storage::SsdStats>();
+    if (!executor->EnableExpertCache(expert_cache_bytes, ssd_stats.get(),
+                                     cache_prior_bias, *victim_policy, &error,
+                                     slot_profile)) {
+      std::fprintf(stderr, "expert cache enable failed: %s\n", error.c_str());
+      return 1;
+    }
+    ssd_stats->Start(expert_cache_bytes);
   }
   if (cost_audit) {
     try {
@@ -458,6 +555,8 @@ int main(int argc, char** argv) {
     }
     std::printf("decode steps %zu after %zu prompt tokens\n", steps,
                 tokens.size());
+    if (ssd_stats)
+      std::fprintf(stderr, "%s", ssd_stats->Format().c_str());
     return 0;
   }
   if (dump.is_open()) {
@@ -470,6 +569,8 @@ int main(int argc, char** argv) {
     }
   }
 
+  if (ssd_stats)
+    std::fprintf(stderr, "%s", ssd_stats->Format().c_str());
   if (reference) {
     q::ReferenceModel ref(*weights, ngram.get(),
                           static_cast<std::uint32_t>(tokens.size()));

@@ -2342,12 +2342,14 @@ bool Executor::PredictLookahead(const DeviceLayer& layer, const float* residual,
     }
     const std::int32_t* residency = nullptr;
     if (options_.cache_router_bonus != 0.0F &&
-        expert_id_to_slot_device_ != nullptr)
+        expert_id_to_slot_device_ != nullptr &&
+        target_index >= options_.cache_router_bonus_skip_layers)
       residency = expert_id_to_slot_device_ +
                   static_cast<std::size_t>(target_index) * c.num_experts;
     RouterTopK(lookahead_router_, c.num_experts + 1, lookahead_ids_,
                lookahead_weights_, rows, c.num_experts, c.num_experts_used,
-               stream_, residency, options_.cache_router_bonus);
+               stream_, residency, options_.cache_router_bonus,
+               options_.cache_router_bonus_core);
     if (!Check(hipGetLastError(), "lookahead router", error_msg) ||
         !CaptureExpertIds(lookahead_ids_, id_count, error_msg)) {
       restore_scratch();
@@ -3829,12 +3831,13 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
   }
   const std::int32_t* residency = nullptr;
   if (options_.cache_router_bonus != 0.0F &&
-      expert_id_to_slot_device_ != nullptr)
+      expert_id_to_slot_device_ != nullptr &&
+      l.layer_index >= options_.cache_router_bonus_skip_layers)
     residency = expert_id_to_slot_device_ +
                 static_cast<std::size_t>(l.layer_index) * c.num_experts;
   RouterTopK(s_.router, c.num_experts + 1, s_.ids, s_.weights, n_tokens,
              c.num_experts, used, stream_, residency,
-             options_.cache_router_bonus);
+             options_.cache_router_bonus, options_.cache_router_bonus_core);
   std::vector<LookaheadPrediction> lookahead;
   if (!PredictLookahead(
           l, lookahead_residual != nullptr ? lookahead_residual : s_.res,

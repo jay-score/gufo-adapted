@@ -518,10 +518,14 @@ void ExpertCounts(const std::int32_t* ids, std::uint32_t* counts,
 
 /// Softmax over `n_experts` logits per token (rows `stride` apart), top-k
 /// selection, renormalized weights. ids [t][k] int32, weights [t][k] f32.
+/// When `core` is nonzero, the first `core` selected experts are ranked by
+/// their unbiased probabilities; the residency bonus then applies only to the
+/// remaining tail slots.
 void RouterTopK(const float* logits, std::uint32_t stride, std::int32_t* ids,
                 float* weights, std::uint32_t n_tokens, std::uint32_t n_experts,
                 std::uint32_t k, hipStream_t stream,
-                const std::int32_t* residency = nullptr, float bonus = 0.0F);
+                const std::int32_t* residency = nullptr, float bonus = 0.0F,
+                std::uint32_t core = 0);
 
 /// out[t][i] = sum_s weights[t][s] * expert_out[t*k + s][i]
 ///           + sigmoid(gate[t * gate_stride]) * shared[t][i].
