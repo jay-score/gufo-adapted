@@ -33,6 +33,9 @@ void Run() {
   stats.RecordPleStorageBytes(8192, true);
   stats.RecordPleStorageElapsed(std::chrono::milliseconds(200), true);
   stats.RecordSessionWrite(1234);
+  stats.RecordLayerDemand(0, 2, 1);
+  stats.RecordLayerDemand(5, 7, 3);
+  stats.RecordLayerDemand(1, 9, 0, true);
 
   const auto snapshot = stats.Snapshot();
   Require(snapshot.budget_bytes == 32 * gib, "budget counter");
@@ -71,6 +74,14 @@ void Run() {
               snapshot.decode.ple_read_nanoseconds == 100'000'000,
           "decode phase counters are independent of prefill");
   Require(snapshot.session_bytes_written == 1234, "session write counter");
+  Require(snapshot.decode_layer_count == 6 &&
+              snapshot.decode_layer_cold_misses[0] == 1 &&
+              snapshot.decode_layer_resident_hits[0] == 2 &&
+              snapshot.decode_layer_cold_misses[1] == 0 &&
+              snapshot.decode_layer_resident_hits[1] == 0 &&
+              snapshot.decode_layer_cold_misses[5] == 3 &&
+              snapshot.decode_layer_resident_hits[5] == 7,
+          "per-layer decode demand counters");
 
   const std::string report = stats.Format();
   Require(report.find("cache_hit_pct:            82.727") != std::string::npos,
@@ -90,6 +101,9 @@ void Run() {
   Require(report.find("prefill_phase:") != std::string::npos &&
               report.find("decode_phase:") != std::string::npos,
           "report includes per-phase summaries");
+  Require(report.find("decode_layer_cold_miss_skew:") != std::string::npos &&
+              report.find("L5=3/7") != std::string::npos,
+          "report includes per-layer decode skew");
   std::cout << "ssd_stats_test: telemetry counters and formatting passed\n";
 }
 

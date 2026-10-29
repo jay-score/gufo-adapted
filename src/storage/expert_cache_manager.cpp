@@ -28,7 +28,9 @@ using qwenrocm::DeviceLayer;
 using qwenrocm::DeviceTensor;
 
 constexpr std::size_t kTailMargin = 4096;
-constexpr std::size_t kReaderThreads = 8;
+// Three GGUF shards leave ~11 workers per shard, enough to saturate the
+// shared 32-buffer scratch pool without oversubscribing the CPU.
+constexpr std::size_t kReaderThreads = 32;
 constexpr std::size_t kReaderInflight = 32;
 
 enum class SlotState : std::uint8_t {
@@ -1455,6 +1457,8 @@ bool ExpertCacheManager::Resolve(
     impl_->stats->RecordExpertDemand(
         unique.size(), resident_hits, prefetched_in_time, misses.size(),
         late_prefetch_requests, prefetch_wait + demand_elapsed, prefill);
+    impl_->stats->RecordLayerDemand(static_cast<std::uint32_t>(layer_id),
+                                    resident_hits, misses.size(), prefill);
   }
   if (impl_->victim_policy == VictimPolicy::kDecayedHotness &&
       count_route_hotness) {
