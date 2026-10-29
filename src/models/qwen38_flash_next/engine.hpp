@@ -57,7 +57,8 @@ struct ModelOptions {
   /// Expert-cache victim policy: lru, hotness, or decayed (default lru).
   std::string cache_policy{"lru"};
   /// Per-layer expert-cache slots: uniform, skewed, or a JSON profile path.
-  std::string cache_slot_profile{"uniform"};
+  /// `skewed` is scaled to the budget-derived slot total.
+  std::string cache_slot_profile{"skewed"};
   /// Raw-logit residency bonus for router selection (default off).
   float cache_router_bonus{0.0F};
   /// Keep this many highest-logit experts unbiased by the residency bonus.

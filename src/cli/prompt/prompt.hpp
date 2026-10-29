@@ -54,7 +54,7 @@ struct PromptOptions {
   bool ple_shelf_mib_set{false};
   std::uint32_t ple_shelf_mib{0};
   std::uint32_t prefetch_layers_ahead{2};
-  std::string cache_slot_profile{"uniform"};
+  std::string cache_slot_profile{"skewed"};
   float cache_router_bonus{0.0F};
   std::uint32_t cache_router_bonus_core{0};
   std::uint32_t cache_router_bonus_skip_layers{0};

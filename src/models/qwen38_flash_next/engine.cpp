@@ -25,6 +25,7 @@
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
 #include "src/models/qwen38_flash_next/ngram.hpp"
+#include "src/models/qwen38_flash_next/slot_profile.hpp"
 #include "src/models/qwen38_flash_next/weights.hpp"
 #include "src/storage/expert_cache_manager.hpp"
 #include "src/storage/memory_budget_planner.hpp"
@@ -32,16 +33,6 @@
 
 namespace gufo::models::qwen38_flash_next {
 namespace {
-
-// Validated by tools/prof/routing_replay.py on a 1,024-token trace and
-// installed as the default skewed profile. Kept in source so `skewed` does not
-// depend on a sidecar file at serving time.
-constexpr std::array<std::uint32_t, 48> kSkewedSlotProfile = {
-    460, 436, 456, 264, 312, 356, 380, 388, 332, 248, 312, 224,
-    288, 304, 264, 156, 184, 296, 340, 240, 272, 364, 408, 276,
-    292, 252, 272, 260, 284, 268, 284, 184, 220, 280, 288, 240,
-    248, 300, 364, 228, 220, 260, 244, 276, 276, 288, 244, 288,
-};
 
 bool LoadSlotProfileFile(const std::string& path, std::size_t layers,
                          std::vector<std::uint32_t>* profile,
@@ -387,7 +378,8 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     if (!m->executor_->EnableExpertCache(
             plan.expert_cache_bytes, m->ssd_stats_.get(),
             options.cache_prior_bias, *cache_policy, error_msg,
-            std::span<const std::uint32_t>(exec.cache_slot_profile)))
+            std::span<const std::uint32_t>(exec.cache_slot_profile),
+            options.cache_slot_profile == "skewed"))
       return nullptr;
   }
   if (m->ssd_stats_ != nullptr) {

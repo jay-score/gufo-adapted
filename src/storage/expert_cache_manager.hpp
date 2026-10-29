@@ -60,6 +60,9 @@ public:
   ExpertCacheManager(const ExpertCacheManager&) = delete;
   ExpertCacheManager& operator=(const ExpertCacheManager&) = delete;
 
+  /// When `scale_slot_profile` is set, `slot_profile` is rescaled to the
+  /// budget-derived total slot count; if the requested floor cannot fit, the
+  /// cache falls back to the uniform allocation.
   [[nodiscard]] static std::unique_ptr<ExpertCacheManager> Create(
       std::span<const models::qwen38_flash_next::rocm::DeviceLayer> layers,
       std::size_t budget_bytes, std::uint32_t experts_used,
@@ -68,7 +71,17 @@ public:
       float cache_prior_bias = 0.0F,
       VictimPolicy victim_policy = VictimPolicy::kLru,
       std::uint32_t hotness_decay_tokens = 1024,
-      std::span<const std::uint32_t> slot_profile = {});
+      std::span<const std::uint32_t> slot_profile = {},
+      bool scale_slot_profile = false);
+
+  /// Scales a non-uniform slot profile to exactly `total_slots` while keeping
+  /// its relative shape above `floor` and respecting `cap`. A zero entry is a
+  /// dense layer and stays zero. Returns an empty vector when the profile is
+  /// invalid or `total_slots` cannot fit the requested floor/cap; callers then
+  /// fall back to the uniform allocation.
+  [[nodiscard]] static std::vector<std::uint32_t> ScaleSlotProfile(
+      std::span<const std::uint32_t> slot_profile, std::uint32_t total_slots,
+      std::uint32_t floor, std::uint32_t cap);
 
   [[nodiscard]] const std::vector<models::qwen38_flash_next::rocm::DeviceLayer>&
   device_layers() const noexcept;

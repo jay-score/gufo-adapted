@@ -10,9 +10,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include "src/models/qwen38_flash_next/slot_profile.hpp"
 
 namespace {
 
@@ -64,7 +67,55 @@ void CheckExpertBytes(
   }
 }
 
+void CheckSlotProfileScaling() {
+  using gufo::storage::ExpertCacheManager;
+  const auto& base = gufo::models::qwen38_flash_next::kSkewedSlotProfile;
+  const std::uint64_t base_sum =
+      std::accumulate(base.begin(), base.end(), std::uint64_t{0});
+  if (base_sum != 13920)
+    throw std::runtime_error("skewed base profile total changed");
+
+  const auto exact =
+      ExpertCacheManager::ScaleSlotProfile(base, 13920, 128, 512);
+  if (exact.size() != base.size() ||
+      !std::equal(exact.begin(), exact.end(), base.begin())) {
+    throw std::runtime_error(
+        "13,920-slot skewed profile was not reproduced exactly");
+  }
+
+  const auto scaled =
+      ExpertCacheManager::ScaleSlotProfile(base, 10000, 128, 512);
+  if (scaled.size() != base.size())
+    throw std::runtime_error("scaled profile has the wrong layer count");
+  const std::uint64_t scaled_sum =
+      std::accumulate(scaled.begin(), scaled.end(), std::uint64_t{0});
+  const auto [scaled_min, scaled_max] =
+      std::minmax_element(scaled.begin(), scaled.end());
+  if (scaled_sum != 10000 || *scaled_min < 128 || *scaled_max > 512 ||
+      std::equal(scaled.begin(), scaled.end(), base.begin())) {
+    throw std::runtime_error(
+        "lower-budget skewed profile did not scale into [128, 512]");
+  }
+
+  const auto larger =
+      ExpertCacheManager::ScaleSlotProfile(base, 18000, 128, 512);
+  const std::uint64_t larger_sum =
+      std::accumulate(larger.begin(), larger.end(), std::uint64_t{0});
+  const auto [larger_min, larger_max] =
+      std::minmax_element(larger.begin(), larger.end());
+  if (larger_sum != 18000 || *larger_min < 128 || *larger_max > 512) {
+    throw std::runtime_error(
+        "larger-budget skewed profile did not scale into [128, 512]");
+  }
+
+  // 48 * 128 = 6,144. Below that the caller must use the uniform allocation.
+  if (!ExpertCacheManager::ScaleSlotProfile(base, 6143, 128, 512).empty()) {
+    throw std::runtime_error("ultra-low-budget profile did not fall back");
+  }
+}
+
 void Run() {
+  CheckSlotProfileScaling();
   const auto file_bytes =
       static_cast<std::size_t>(kTensorOffsets.back() + kExperts * kExpertBytes);
   std::vector<std::uint8_t> contents(file_bytes);
@@ -437,7 +488,8 @@ void Run() {
   std::cout
       << "expert_cache_manager_test: packed GTT arenas, asynchronous and empty "
          "prefetch batches, speculative cap, scratch reads, pin release, "
-         "non-uniform slots, and LRU indirection passed\n";
+         "non-uniform slots, adaptive profile scaling, and LRU indirection "
+         "passed\n";
 }
 
 }  // namespace

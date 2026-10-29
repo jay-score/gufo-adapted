@@ -156,7 +156,8 @@ static void RegisterTextOptions(ArgParser& parser, PromptOptions& opt,
       "Memory", &opt.cache_policy);
   parser.AddOption(
       "", "--cache-slot-profile", "PROFILE",
-      "Per-layer cache slots: uniform, skewed, or a JSON profile path",
+      "Per-layer cache slots: uniform, skewed, or a JSON profile path "
+      "(default: skewed)",
       "Memory", &opt.cache_slot_profile);
   parser.AddOption(
       "", "--cache-router-bonus", "LAMBDA",

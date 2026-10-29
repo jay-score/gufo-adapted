@@ -608,7 +608,7 @@ void PrintServeHelp(std::string_view program_name,
     float cache_prior_bias = 0.0F;
     float mtp_verify_acceptance_floor = 0.0F;
     std::string cache_policy = "lru";
-    std::string cache_slot_profile = "uniform";
+    std::string cache_slot_profile = "skewed";
     float cache_router_bonus = 0.0F;
     std::string dump_routing_path;
     bool ple_shelf = false;
@@ -785,7 +785,8 @@ void PrintServeHelp(std::string_view program_name,
         "Memory", &cache_policy);
     parser.AddOption(
         "", "--cache-slot-profile", "PROFILE",
-        "Per-layer cache slots: uniform, skewed, or a JSON profile path",
+        "Per-layer cache slots: uniform, skewed, or a JSON profile path "
+        "(default: skewed)",
         "Memory", &cache_slot_profile);
     parser.AddOption(
         "", "--cache-router-bonus", "LAMBDA",
@@ -1294,7 +1295,7 @@ int RunServe(std::span<const char* const> args) {
     float cache_prior_bias = 0.0F;
     float mtp_verify_acceptance_floor = 0.0F;
     std::string cache_policy = "lru";
-    std::string cache_slot_profile = "uniform";
+    std::string cache_slot_profile = "skewed";
     float cache_router_bonus = 0.0F;
     std::string dump_routing_path;
     bool ple_shelf = false;
@@ -1467,7 +1468,8 @@ int RunServe(std::span<const char* const> args) {
         "Memory", &cache_policy);
     llm_parser.AddOption(
         "", "--cache-slot-profile", "PROFILE",
-        "Per-layer cache slots: uniform, skewed, or a JSON profile path",
+        "Per-layer cache slots: uniform, skewed, or a JSON profile path "
+        "(default: skewed)",
         "Memory", &cache_slot_profile);
     llm_parser.AddOption(
         "", "--cache-router-bonus", "LAMBDA",

@@ -28,6 +28,7 @@ using qwenrocm::DeviceLayer;
 using qwenrocm::DeviceTensor;
 
 constexpr std::size_t kTailMargin = 4096;
+constexpr std::uint32_t kAdaptiveSlotFloor = 128;
 // Three GGUF shards leave ~11 workers per shard, enough to saturate the
 // shared 32-buffer scratch pool without oversubscribing the CPU.
 constexpr std::size_t kReaderThreads = 32;
@@ -393,13 +394,79 @@ ExpertCacheManager::~ExpertCacheManager() {
     impl_->DrainPrefetch();
 }
 
+std::vector<std::uint32_t> ExpertCacheManager::ScaleSlotProfile(
+    std::span<const std::uint32_t> slot_profile, std::uint32_t total_slots,
+    std::uint32_t floor, std::uint32_t cap) {
+  if (slot_profile.empty() || floor == 0 || cap < floor || total_slots == 0)
+    return {};
+  std::vector<std::uint32_t> scaled(slot_profile.size(), 0);
+  std::size_t active = 0;
+  std::uint64_t base_sum = 0;
+  for (std::size_t layer = 0; layer < slot_profile.size(); ++layer) {
+    const std::uint32_t slots = slot_profile[layer];
+    if (slots == 0)
+      continue;
+    if (slots < floor || slots > cap)
+      return {};
+    scaled[layer] = slots;
+    ++active;
+    base_sum += slots;
+  }
+  if (active == 0)
+    return {};
+  if (base_sum == total_slots)
+    return scaled;
+
+  const std::uint64_t floor_total = static_cast<std::uint64_t>(floor) * active;
+  if (total_slots < floor_total ||
+      total_slots > static_cast<std::uint64_t>(cap) * active) {
+    return {};
+  }
+  const std::uint64_t target = total_slots;
+  const std::uint64_t weight_sum = base_sum - floor_total;
+  std::vector<std::uint64_t> remainders(slot_profile.size(), 0);
+  std::uint64_t assigned = floor_total;
+  for (std::size_t layer = 0; layer < slot_profile.size(); ++layer) {
+    if (scaled[layer] == 0)
+      continue;
+    const std::uint64_t weight = weight_sum == 0 ? 1 : scaled[layer] - floor;
+    const std::uint64_t numerator = (target - floor_total) * weight;
+    const std::uint64_t denominator = weight_sum == 0 ? active : weight_sum;
+    std::uint64_t extra = numerator / denominator;
+    remainders[layer] = numerator % denominator;
+    const std::uint64_t room = cap - floor;
+    if (extra > room)
+      extra = room;
+    scaled[layer] = floor + static_cast<std::uint32_t>(extra);
+    assigned += extra;
+  }
+  while (assigned < target) {
+    std::size_t best = slot_profile.size();
+    for (std::size_t layer = 0; layer < slot_profile.size(); ++layer) {
+      if (scaled[layer] == 0 || scaled[layer] >= cap)
+        continue;
+      if (best == slot_profile.size() || remainders[layer] > remainders[best] ||
+          (remainders[layer] == remainders[best] &&
+           slot_profile[layer] > slot_profile[best])) {
+        best = layer;
+      }
+    }
+    if (best == slot_profile.size())
+      return {};
+    ++scaled[best];
+    ++assigned;
+    remainders[best] = 0;
+  }
+  return scaled;
+}
+
 std::unique_ptr<ExpertCacheManager> ExpertCacheManager::Create(
     std::span<const DeviceLayer> layers, std::size_t budget_bytes,
     std::uint32_t experts_used, std::uint32_t num_experts,
     std::span<std::int32_t> expert_id_to_slot, std::string* error_msg,
     SsdStats* stats, float cache_prior_bias, VictimPolicy victim_policy,
     std::uint32_t hotness_decay_tokens,
-    std::span<const std::uint32_t> slot_profile) {
+    std::span<const std::uint32_t> slot_profile, bool scale_slot_profile) {
   auto manager = std::unique_ptr<ExpertCacheManager>(new ExpertCacheManager());
   auto& impl = *manager->impl_;
   impl.views.assign(layers.begin(), layers.end());
@@ -465,6 +532,32 @@ std::unique_ptr<ExpertCacheManager> ExpertCacheManager::Create(
     return nullptr;
   }
   impl.layer_slots.resize(layers.size(), 0);
+  const std::size_t possible_slots =
+      (budget_bytes - tail_bytes) / bytes_per_all_layer_slot;
+  const std::uint32_t uniform_slots = static_cast<std::uint32_t>(
+      std::min<std::size_t>(num_experts, possible_slots));
+  if (uniform_slots < experts_used) {
+    SetError(error_msg,
+             "expert cache budget cannot hold the active layer's top-k set");
+    return nullptr;
+  }
+  std::vector<std::uint32_t> scaled_profile;
+  if (scale_slot_profile && !slot_profile.empty()) {
+    const std::uint64_t target_slots =
+        static_cast<std::uint64_t>(uniform_slots) * streamed_layers;
+    scaled_profile = ScaleSlotProfile(slot_profile, target_slots,
+                                      kAdaptiveSlotFloor, num_experts);
+    if (scaled_profile.empty()) {
+      std::clog << "expert_cache_profile_fallback reason=floor_exceeds_budget"
+                << " target_slots=" << target_slots << " floor_slots="
+                << static_cast<std::uint64_t>(kAdaptiveSlotFloor) *
+                       streamed_layers
+                << '\n';
+      slot_profile = {};
+    } else {
+      slot_profile = scaled_profile;
+    }
+  }
   if (!slot_profile.empty()) {
     if (slot_profile.size() != layers.size()) {
       SetError(error_msg,
@@ -504,19 +597,10 @@ std::unique_ptr<ExpertCacheManager> ExpertCacheManager::Create(
     }
     impl.slots_per_layer = max_slots;
   } else {
-    const std::size_t possible_slots =
-        (budget_bytes - tail_bytes) / bytes_per_all_layer_slot;
-    const std::uint32_t slots = static_cast<std::uint32_t>(
-        std::min<std::size_t>(num_experts, possible_slots));
-    if (slots < experts_used) {
-      SetError(error_msg,
-               "expert cache budget cannot hold the active layer's top-k set");
-      return nullptr;
-    }
-    impl.slots_per_layer = slots;
+    impl.slots_per_layer = uniform_slots;
     for (std::size_t layer_id = 0; layer_id < layers.size(); ++layer_id)
       if (layers[layer_id].experts_streamed)
-        impl.layer_slots[layer_id] = slots;
+        impl.layer_slots[layer_id] = uniform_slots;
   }
 
   try {
