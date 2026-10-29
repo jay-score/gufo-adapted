@@ -118,6 +118,16 @@ if (ENGINE_ENABLE_HIP)
     set(CMAKE_HIP_DEPFILE_FORMAT msvc)
     message(STATUS "gufo: compiling HIP through ${GUFO_CCACHE_PROGRAM}")
   endif()
+  # clang-cl maps the MSVC RelWithDebInfo /Ob1 to -finline-hint-functions for
+  # the device compile too, which marks every __device__ helper without
+  # inline/__forceinline__ noinline: the kernels then call them. Linux builds
+  # inline them; /Ob2 restores the normal inliner for HIP sources.
+  if (WIN32)
+    string(REPLACE "/Ob1" "/Ob2" CMAKE_HIP_FLAGS_RELWITHDEBINFO
+      "${CMAKE_HIP_FLAGS_RELWITHDEBINFO}")
+    string(REPLACE "/Ob1" "/Ob2" CMAKE_HIP_FLAGS_MINSIZEREL
+      "${CMAKE_HIP_FLAGS_MINSIZEREL}")
+  endif()
   find_package(hip REQUIRED)
   find_package(hipblas REQUIRED)
   find_package(hipblaslt REQUIRED)
