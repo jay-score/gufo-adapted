@@ -50,7 +50,11 @@ same preprocessing; see [Embeddings](../../SERVER.md#embeddings).
 
 The oracle is [`reference_images.py`](../../../tools/models/embedding_gemma2/reference_images.py),
 using official transformers commit `50e35cc0ca18ec19b80653690de553e6decf74f5`
-(`5.21.0.dev0`), Torch 2.12.0, and the checkpoint's processor configuration.
+(`5.21.0.dev0`), Torch 2.14.1, and the checkpoint's processor configuration.
+It covers the default 280-token budget and, for three shapes each, the
+processor's other `max_soft_tokens` budgets (70, 140, 560 and 1120). The
+280-token cases kept their patch hashes and token IDs from the earlier Torch
+2.12.0 run, and their reference values moved by at most 3.4e-7.
 It loads the multimodal model in float32 with unused audio disabled and
 mean-pools/L2-normalizes its outputs independently of Gufo. The script records
 processor patch hashes, token IDs, full reference vectors and library versions
@@ -67,13 +71,42 @@ python3 tools/models/embedding_gemma2/reference_images.py \
   --model models/embeddinggemma-2 \
   --transformers-revision 50e35cc0ca18ec19b80653690de553e6decf74f5 \
   --output tests/fixtures/embedding_gemma2/image_golden.json
+python3 tools/models/embedding_gemma2/reference_image_boundaries.py \
+  --model models/embeddinggemma-2 \
+  --transformers-revision 50e35cc0ca18ec19b80653690de553e6decf74f5 \
+  --output tests/fixtures/embedding_gemma2/image_boundaries.json
 ```
+
+The processor-only boundary oracle records exact 8,192/8,193-token interleaved
+inputs for every budget, plus 32/33 square images at budget 70 (2,114/2,180
+tokens). It uses the official processor without a Gufo implementation or model
+forward. These counts qualify expansion and the deliberate server image cap;
+they are not additional final-vector reference fixtures.
 
 `embedding_gemma2_image_processor_test` checks every resized byte without a GPU
 or weights. `embedding_gemma2_image_golden_hip_test` additionally runs the native
 vision/text encoders. [`embedding_images.py`](../../../tests/functional/embedding_images.py)
 checks the HTTP path. Raw request evidence is retained with the
 [review qualification record](artifacts/gfx1151-pr759-review.json).
+
+Requalified October 29, 2026, after rebasing the image-budget PR onto video
+support in main `a3edb56f`, on gfx1151 with the pinned ROCm 10.1 / GCC 16.2.0
+toolchain. All 19 patch/vector fixtures pass the retained 0.9999 cosine bound;
+the HTTP fixture minimum is 0.9999569. Four focused native tests pass without
+skips (API, image processor, image HIP golden and video processor).
+
+The final image HTTP suite passes 89 requests: all budgets with mixed batches,
+128/256/512/768 dimensions, exact usage, interleaved 8,192/8,193-token inputs,
+whole-image truncation, concurrent scratch growth/reuse, 32-small-budget-image
+acceptance, 33-image rejection within and across inputs, malformed inputs and
+recovery. Six video smoke requests retain independent joint multimodal parity
+and verify that image-budget options leave the 140-token video default intact.
+Both HTTP runs, source/binary/fixture hashes, native results and every timing
+arm are retained in local review evidence.
+The initial mixed-media timing flags remain inconclusive; the affected-history
+follow-up and unchanged-main controls are documented in
+[benchmarks](BENCHMARKS.md#image-budget-rebase-controls). This is Linux
+qualification; Windows runtime checks remain the CI workflow's responsibility.
 
 ## Audio and interleaved input parity
 
