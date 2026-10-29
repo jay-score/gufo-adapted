@@ -1406,7 +1406,8 @@ bool Executor::EnableExpertCache(
     std::size_t budget_bytes, gufo::storage::SsdStats* stats,
     float cache_prior_bias,
     gufo::storage::ExpertCacheManager::VictimPolicy victim_policy,
-    std::string* error_msg, std::span<const std::uint32_t> slot_profile) {
+    std::string* error_msg, std::span<const std::uint32_t> slot_profile,
+    bool scale_slot_profile) {
   if (expert_cache_ != nullptr || budget_bytes == 0) {
     AssignError(error_msg, "expert cache is already enabled or has no budget");
     return false;
@@ -1453,7 +1454,8 @@ bool Executor::EnableExpertCache(
   expert_cache_ = gufo::storage::ExpertCacheManager::Create(
       layers, budget_bytes, config().num_experts_used, config().num_experts,
       std::span<std::int32_t>(expert_id_to_slot_host_, map_count), error_msg,
-      stats, cache_prior_bias, victim_policy, 1024, slot_profile);
+      stats, cache_prior_bias, victim_policy, 1024, slot_profile,
+      scale_slot_profile);
   if (expert_cache_ == nullptr)
     return false;
   if (!CreateLayerReleaseEvents(layers.size(), error_msg))
