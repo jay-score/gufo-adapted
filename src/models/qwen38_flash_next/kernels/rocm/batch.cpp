@@ -762,8 +762,14 @@ bool Executor::MoeBatch(const DeviceLayer& l, const float* x, float* out,
   const Scratch base = s_;
   if (!DenseBatch(l.router, x, base.router, rows, error))
     return false;
+  const std::int32_t* residency = nullptr;
+  if (options_.cache_router_bonus != 0.0F &&
+      expert_id_to_slot_device_ != nullptr)
+    residency = expert_id_to_slot_device_ +
+                static_cast<std::size_t>(l.layer_index) * c.num_experts;
   RouterTopK(base.router, c.num_experts + 1, base.ids, base.weights, rows,
-             c.num_experts, c.num_experts_used, stream_);
+             c.num_experts, c.num_experts_used, stream_, residency,
+             options_.cache_router_bonus);
   std::vector<LookaheadPrediction> lookahead;
   if (!PredictLookahead(
           l, lookahead_residual != nullptr ? lookahead_residual : base.res,
@@ -883,6 +889,7 @@ bool Executor::ForwardBatch(std::span<const BatchItem> items,
   if (rows > options_.max_batch) {
     return Fail(error, "decode batch exceeds executor capacity");
   }
+  ++route_forward_seq_;
   if (!AnyActive(items))
     return true;
   for (const auto& item : items) {

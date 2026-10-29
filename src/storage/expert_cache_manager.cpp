@@ -136,6 +136,7 @@ struct ExpertCacheManager::Impl {
   std::uint32_t num_experts{0};
   std::uint32_t experts_used{0};
   std::uint32_t slots_per_layer{0};
+  std::vector<std::uint32_t> layer_slots;
   std::size_t allocated_bytes{0};
   std::size_t max_expert_bytes{0};
   std::size_t reader_count{1};
@@ -397,7 +398,8 @@ std::unique_ptr<ExpertCacheManager> ExpertCacheManager::Create(
     std::uint32_t experts_used, std::uint32_t num_experts,
     std::span<std::int32_t> expert_id_to_slot, std::string* error_msg,
     SsdStats* stats, float cache_prior_bias, VictimPolicy victim_policy,
-    std::uint32_t hotness_decay_tokens) {
+    std::uint32_t hotness_decay_tokens,
+    std::span<const std::uint32_t> slot_profile) {
   auto manager = std::unique_ptr<ExpertCacheManager>(new ExpertCacheManager());
   auto& impl = *manager->impl_;
   impl.views.assign(layers.begin(), layers.end());
@@ -420,6 +422,7 @@ std::unique_ptr<ExpertCacheManager> ExpertCacheManager::Create(
   std::size_t bytes_per_all_layer_slot = 0;
   std::size_t tail_bytes = 0;
   std::size_t streamed_layers = 0;
+  std::vector<std::size_t> layer_slot_bytes(layers.size(), 0);
   std::set<std::filesystem::path> source_paths;
   for (std::size_t layer_id = 0; layer_id < layers.size(); ++layer_id) {
     const auto& layer = layers[layer_id];
@@ -438,11 +441,14 @@ std::unique_ptr<ExpertCacheManager> ExpertCacheManager::Create(
           layer_experts != num_experts ||
           source.expert_bytes > std::numeric_limits<std::size_t>::max() -
                                     bytes_per_all_layer_slot ||
+          layer_slot_bytes[layer_id] >
+              std::numeric_limits<std::size_t>::max() - source.expert_bytes ||
           tail_bytes > std::numeric_limits<std::size_t>::max() - kTailMargin) {
         SetError(error_msg, "streamed expert source has invalid geometry");
         return nullptr;
       }
       bytes_per_all_layer_slot += source.expert_bytes;
+      layer_slot_bytes[layer_id] += source.expert_bytes;
       tail_bytes += kTailMargin;
       impl.max_expert_bytes =
           std::max(impl.max_expert_bytes, source.expert_bytes);
@@ -458,16 +464,60 @@ std::unique_ptr<ExpertCacheManager> ExpertCacheManager::Create(
     SetError(error_msg, "expert cache budget cannot hold one slot per tensor");
     return nullptr;
   }
-  const std::size_t possible_slots =
-      (budget_bytes - tail_bytes) / bytes_per_all_layer_slot;
-  const std::uint32_t slots = static_cast<std::uint32_t>(
-      std::min<std::size_t>(num_experts, possible_slots));
-  if (slots < experts_used) {
-    SetError(error_msg,
-             "expert cache budget cannot hold the active layer's top-k set");
-    return nullptr;
+  impl.layer_slots.resize(layers.size(), 0);
+  if (!slot_profile.empty()) {
+    if (slot_profile.size() != layers.size()) {
+      SetError(error_msg,
+               "expert cache slot profile has the wrong layer count");
+      return nullptr;
+    }
+    std::size_t total_bytes = tail_bytes;
+    std::uint32_t max_slots = 0;
+    for (std::size_t layer_id = 0; layer_id < layers.size(); ++layer_id) {
+      const std::uint32_t slots = slot_profile[layer_id];
+      if (!layers[layer_id].experts_streamed) {
+        if (slots != 0) {
+          SetError(error_msg, "slot profile assigns slots to a dense layer");
+          return nullptr;
+        }
+        continue;
+      }
+      if (slots < experts_used || slots > num_experts) {
+        SetError(error_msg,
+                 "slot profile violates the per-layer expert-cache bounds");
+        return nullptr;
+      }
+      if (layer_slot_bytes[layer_id] >
+              std::numeric_limits<std::size_t>::max() / slots ||
+          total_bytes > std::numeric_limits<std::size_t>::max() -
+                            layer_slot_bytes[layer_id] * slots) {
+        SetError(error_msg, "expert cache slot profile size overflows");
+        return nullptr;
+      }
+      total_bytes += layer_slot_bytes[layer_id] * slots;
+      max_slots = std::max(max_slots, slots);
+      impl.layer_slots[layer_id] = slots;
+    }
+    if (total_bytes > budget_bytes) {
+      SetError(error_msg, "expert cache slot profile exceeds the budget");
+      return nullptr;
+    }
+    impl.slots_per_layer = max_slots;
+  } else {
+    const std::size_t possible_slots =
+        (budget_bytes - tail_bytes) / bytes_per_all_layer_slot;
+    const std::uint32_t slots = static_cast<std::uint32_t>(
+        std::min<std::size_t>(num_experts, possible_slots));
+    if (slots < experts_used) {
+      SetError(error_msg,
+               "expert cache budget cannot hold the active layer's top-k set");
+      return nullptr;
+    }
+    impl.slots_per_layer = slots;
+    for (std::size_t layer_id = 0; layer_id < layers.size(); ++layer_id)
+      if (layers[layer_id].experts_streamed)
+        impl.layer_slots[layer_id] = slots;
   }
-  impl.slots_per_layer = slots;
 
   try {
     const std::size_t shared_scratch_bytes = SharedScratchBytes(layers);
@@ -478,6 +528,7 @@ std::unique_ptr<ExpertCacheManager> ExpertCacheManager::Create(
     for (std::size_t layer_id = 0; layer_id < layers.size(); ++layer_id) {
       if (!layers[layer_id].experts_streamed)
         continue;
+      const std::uint32_t slots = impl.layer_slots[layer_id];
       auto cache = std::make_unique<CacheLayer>();
       cache->view = layers[layer_id];
       cache->num_experts = num_experts;
@@ -544,6 +595,13 @@ const std::vector<DeviceLayer>& ExpertCacheManager::device_layers()
 }
 
 std::uint32_t ExpertCacheManager::slots_per_layer() const noexcept {
+  return impl_->slots_per_layer;
+}
+
+std::uint32_t ExpertCacheManager::slots_for_layer(
+    std::uint32_t layer_id) const noexcept {
+  if (layer_id < impl_->layer_slots.size())
+    return impl_->layer_slots[layer_id];
   return impl_->slots_per_layer;
 }
 

@@ -54,6 +54,9 @@ struct PromptOptions {
   bool ple_shelf_mib_set{false};
   std::uint32_t ple_shelf_mib{0};
   std::uint32_t prefetch_layers_ahead{2};
+  std::string cache_slot_profile{"uniform"};
+  float cache_router_bonus{0.0F};
+  std::string dump_routing_path;
   bool ssd_stats{false};
   bool prompt_lookup{false};
 };

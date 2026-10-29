@@ -950,6 +950,13 @@ void Session::Reset(bool reuse_mtp) {
 }
 
 Executor::~Executor() {
+  if (route_trace_binary_.is_open()) {
+    const std::uint64_t records = route_record_seq_;
+    route_trace_binary_.seekp(24, std::ios::beg);
+    route_trace_binary_.write(reinterpret_cast<const char*>(&records),
+                              sizeof(records));
+    route_trace_binary_.flush();
+  }
   if (stream_ != nullptr) {
     (void)hipStreamSynchronize(stream_);
   }
@@ -1028,6 +1035,16 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
     if (!e->route_trace_) {
       AssignError(error_msg, "failed to open expert route trace: " +
                                  options.route_trace_path);
+      return nullptr;
+    }
+  }
+  if (!options.dump_routing_path.empty()) {
+    e->route_trace_binary_.open(
+        options.dump_routing_path,
+        std::ios::out | std::ios::binary | std::ios::trunc);
+    if (!e->route_trace_binary_) {
+      AssignError(error_msg, "failed to open binary routing trace: " +
+                                 options.dump_routing_path);
       return nullptr;
     }
   }
@@ -1386,7 +1403,7 @@ bool Executor::EnableExpertCache(
     std::size_t budget_bytes, gufo::storage::SsdStats* stats,
     float cache_prior_bias,
     gufo::storage::ExpertCacheManager::VictimPolicy victim_policy,
-    std::string* error_msg) {
+    std::string* error_msg, std::span<const std::uint32_t> slot_profile) {
   if (expert_cache_ != nullptr || budget_bytes == 0) {
     AssignError(error_msg, "expert cache is already enabled or has no budget");
     return false;
@@ -1419,8 +1436,13 @@ bool Executor::EnableExpertCache(
                  expert_ids_capacity_ * sizeof(std::int32_t)),
              "pinned expert slot IDs", error_msg) ||
       !Check(host_allocations_.Allocate(&expert_id_to_slot_host_,
-                                        map_count * sizeof(std::int32_t)),
-             "pinned expert indirection table", error_msg) ||
+                                        map_count * sizeof(std::int32_t),
+                                        hipHostMallocMapped),
+             "mapped expert indirection table", error_msg) ||
+      !Check(hipHostGetDevicePointer(
+                 reinterpret_cast<void**>(&expert_id_to_slot_device_),
+                 expert_id_to_slot_host_, 0),
+             "mapped expert indirection device pointer", error_msg) ||
       !Check(hipEventCreateWithFlags(&expert_ids_ready_, hipEventDisableTiming),
              "expert IDs ready event", error_msg)) {
     return false;
@@ -1428,7 +1450,7 @@ bool Executor::EnableExpertCache(
   expert_cache_ = gufo::storage::ExpertCacheManager::Create(
       layers, budget_bytes, config().num_experts_used, config().num_experts,
       std::span<std::int32_t>(expert_id_to_slot_host_, map_count), error_msg,
-      stats, cache_prior_bias, victim_policy);
+      stats, cache_prior_bias, victim_policy, 1024, slot_profile);
   if (expert_cache_ == nullptr)
     return false;
   gufo::storage::ExpertCacheManager::WarmupResult warmup;
@@ -1443,6 +1465,36 @@ bool Executor::EnableExpertCache(
                  << "}\n";
     if (!route_trace_) {
       AssignError(error_msg, "failed to write expert route trace header");
+      return false;
+    }
+  }
+  if (route_trace_binary_.is_open()) {
+    const std::lock_guard<std::mutex> lock(route_trace_mutex_);
+    const std::uint16_t version = 1;
+    const std::uint16_t header_bytes = 32;
+    const std::uint32_t num_experts = config().num_experts;
+    const std::uint32_t experts_used = config().num_experts_used;
+    const std::uint32_t num_layers = static_cast<std::uint32_t>(layers.size());
+    const std::uint32_t flags = 0x3;  // forward_seq and per-record slots
+    const std::uint64_t record_count = 0;
+    route_trace_binary_.write("GURT", 4);
+    route_trace_binary_.write(reinterpret_cast<const char*>(&version),
+                              sizeof(version));
+    route_trace_binary_.write(reinterpret_cast<const char*>(&header_bytes),
+                              sizeof(header_bytes));
+    route_trace_binary_.write(reinterpret_cast<const char*>(&num_experts),
+                              sizeof(num_experts));
+    route_trace_binary_.write(reinterpret_cast<const char*>(&experts_used),
+                              sizeof(experts_used));
+    route_trace_binary_.write(reinterpret_cast<const char*>(&num_layers),
+                              sizeof(num_layers));
+    route_trace_binary_.write(reinterpret_cast<const char*>(&flags),
+                              sizeof(flags));
+    route_trace_binary_.write(reinterpret_cast<const char*>(&record_count),
+                              sizeof(record_count));
+    route_trace_binary_.flush();
+    if (!route_trace_binary_) {
+      AssignError(error_msg, "failed to write binary routing trace header");
       return false;
     }
   }
@@ -1472,7 +1524,7 @@ bool Executor::PrefetchCandidates(
     std::string* error_msg) const {
   if (expert_cache_ == nullptr || candidate_tokens.empty())
     return true;
-  const std::size_t slots = expert_cache_->slots_per_layer();
+  const std::size_t slots = expert_cache_->slots_for_layer(0);
   const std::size_t max_prefetch = std::min<std::size_t>(16, slots / 3);
   if (max_prefetch == 0)
     return true;
@@ -1563,7 +1615,7 @@ bool Executor::WriteRouteTrace(std::uint32_t layer, bool prefill,
                                std::span<const std::int32_t> desk_experts,
                                std::span<const std::int32_t> resident_experts,
                                std::string* error_msg) const {
-  if (!route_trace_.is_open())
+  if (!route_trace_.is_open() && !route_trace_binary_.is_open())
     return true;
   if (experts_used == 0 ||
       static_cast<std::size_t>(rows) >
@@ -1581,50 +1633,110 @@ bool Executor::WriteRouteTrace(std::uint32_t layer, bool prefill,
   }
 
   const std::lock_guard<std::mutex> lock(route_trace_mutex_);
-  route_trace_ << "{\"layer\":" << layer << ",\"phase\":\""
-               << (prefill ? "prefill" : "decode") << "\",\"rows\":" << rows
-               << ",\"used\":" << experts_used << ",\"windows\":[";
-  for (std::size_t i = 0; i < windows.size(); ++i) {
-    if (i != 0)
-      route_trace_ << ',';
-    route_trace_ << windows[i];
-  }
-  route_trace_ << "],\"ids\":[";
-  for (std::size_t i = 0; i < expert_ids.size(); ++i) {
-    if (i != 0)
-      route_trace_ << ',';
-    route_trace_ << expert_ids[i];
-  }
-  route_trace_ << "],\"passes\":[";
-  for (std::size_t i = 0; i < passes.size(); ++i) {
-    if (i != 0)
-      route_trace_ << ',';
-    route_trace_ << "{\"first\":" << passes[i].first_row
-                 << ",\"rows\":" << passes[i].rows << ",\"ids\":[";
-    for (std::size_t j = 0; j < passes[i].experts.size(); ++j) {
-      if (j != 0)
+  if (route_trace_.is_open()) {
+    route_trace_ << "{\"layer\":" << layer << ",\"phase\":\""
+                 << (prefill ? "prefill" : "decode") << "\",\"rows\":" << rows
+                 << ",\"used\":" << experts_used << ",\"windows\":[";
+    for (std::size_t i = 0; i < windows.size(); ++i) {
+      if (i != 0)
         route_trace_ << ',';
-      route_trace_ << passes[i].experts[j];
+      route_trace_ << windows[i];
     }
-    route_trace_ << "]}";
+    route_trace_ << "],\"ids\":[";
+    for (std::size_t i = 0; i < expert_ids.size(); ++i) {
+      if (i != 0)
+        route_trace_ << ',';
+      route_trace_ << expert_ids[i];
+    }
+    route_trace_ << "],\"passes\":[";
+    for (std::size_t i = 0; i < passes.size(); ++i) {
+      if (i != 0)
+        route_trace_ << ',';
+      route_trace_ << "{\"first\":" << passes[i].first_row
+                   << ",\"rows\":" << passes[i].rows << ",\"ids\":[";
+      for (std::size_t j = 0; j < passes[i].experts.size(); ++j) {
+        if (j != 0)
+          route_trace_ << ',';
+        route_trace_ << passes[i].experts[j];
+      }
+      route_trace_ << "]}";
+    }
+    route_trace_ << "],\"desk\":[";
+    for (std::size_t i = 0; i < desk_experts.size(); ++i) {
+      if (i != 0)
+        route_trace_ << ',';
+      route_trace_ << desk_experts[i];
+    }
+    route_trace_ << "],\"resident\":[";
+    for (std::size_t i = 0; i < resident_experts.size(); ++i) {
+      if (i != 0)
+        route_trace_ << ',';
+      route_trace_ << resident_experts[i];
+    }
+    route_trace_ << "]}\n";
+    route_trace_.flush();
+    if (!route_trace_) {
+      AssignError(error_msg, "failed while writing expert route trace");
+      return false;
+    }
   }
-  route_trace_ << "],\"desk\":[";
-  for (std::size_t i = 0; i < desk_experts.size(); ++i) {
-    if (i != 0)
-      route_trace_ << ',';
-    route_trace_ << desk_experts[i];
-  }
-  route_trace_ << "],\"resident\":[";
-  for (std::size_t i = 0; i < resident_experts.size(); ++i) {
-    if (i != 0)
-      route_trace_ << ',';
-    route_trace_ << resident_experts[i];
-  }
-  route_trace_ << "]}\n";
-  route_trace_.flush();
-  if (!route_trace_) {
-    AssignError(error_msg, "failed while writing expert route trace");
-    return false;
+
+  if (route_trace_binary_.is_open()) {
+    const auto write_pod = [&](const auto& value) {
+      route_trace_binary_.write(reinterpret_cast<const char*>(&value),
+                                sizeof(value));
+    };
+    std::uint64_t payload_bytes =
+        static_cast<std::uint64_t>(windows.size()) * 4 +
+        static_cast<std::uint64_t>(expert_ids.size()) * 4 +
+        static_cast<std::uint64_t>(desk_experts.size()) * 4 +
+        static_cast<std::uint64_t>(resident_experts.size()) * 4;
+    for (const auto& pass : passes)
+      payload_bytes += 16 + static_cast<std::uint64_t>(pass.experts.size()) * 4;
+    const std::uint32_t record_seq = route_record_seq_++;
+    const std::uint32_t forward_seq = route_forward_seq_;
+    const std::uint16_t record_kind = passes.empty() ? 0 : 1;
+    const std::uint16_t layer16 = static_cast<std::uint16_t>(layer);
+    const std::uint32_t phase = prefill ? 1 : 0;
+    const std::uint32_t slots =
+        expert_cache_ != nullptr ? expert_cache_->slots_for_layer(layer) : 0;
+    const std::uint32_t reserved = 0;
+    write_pod(record_seq);
+    write_pod(forward_seq);
+    write_pod(record_kind);
+    write_pod(layer16);
+    write_pod(phase);
+    write_pod(rows);
+    write_pod(experts_used);
+    write_pod(slots);
+    write_pod(static_cast<std::uint32_t>(windows.size()));
+    write_pod(static_cast<std::uint32_t>(expert_ids.size()));
+    write_pod(static_cast<std::uint32_t>(passes.size()));
+    write_pod(static_cast<std::uint32_t>(desk_experts.size()));
+    write_pod(static_cast<std::uint32_t>(resident_experts.size()));
+    write_pod(static_cast<std::uint32_t>(payload_bytes));
+    write_pod(reserved);
+    for (const std::uint32_t count : windows)
+      write_pod(count);
+    for (const std::int32_t expert : expert_ids)
+      write_pod(expert);
+    for (const auto& pass : passes) {
+      write_pod(pass.first_row);
+      write_pod(pass.rows);
+      write_pod(static_cast<std::uint32_t>(pass.experts.size()));
+      write_pod(reserved);
+      for (const std::int32_t expert : pass.experts)
+        write_pod(expert);
+    }
+    for (const std::int32_t expert : desk_experts)
+      write_pod(expert);
+    for (const std::int32_t expert : resident_experts)
+      write_pod(expert);
+    route_trace_binary_.flush();
+    if (!route_trace_binary_) {
+      AssignError(error_msg, "failed while writing binary routing trace");
+      return false;
+    }
   }
   return true;
 }
@@ -1692,7 +1804,8 @@ bool Executor::StreamedMoeRows(
         std::span<const std::int32_t>(expert_ids_host_, id_count));
   }
   if (prefill_phase && rows > 64 &&
-      DeskRoomHasSlotHeadroom(expert_cache_->slots_per_layer(), used)) {
+      DeskRoomHasSlotHeadroom(expert_cache_->slots_for_layer(layer.layer_index),
+                              used)) {
     return StreamedMoeRowsDeskRoom(layer, x, out, rows, rows_per_compute_group,
                                    error_msg, lookahead);
   }
@@ -1859,7 +1972,7 @@ bool Executor::StreamedMoeRowsDeskRoom(
     std::span<const LookaheadPrediction> lookahead) const {
   const Config& c = config();
   const std::uint32_t used = c.num_experts_used;
-  const std::uint32_t slots = expert_cache_->slots_per_layer();
+  const std::uint32_t slots = expert_cache_->slots_for_layer(layer.layer_index);
   DeviceLayer resident_layer = Layer(layer.layer_index);
   resident_layer.experts_streamed = false;
   if (used == 0 || !DeskRoomHasSlotHeadroom(slots, used) || rows <= 64 ||
@@ -2185,7 +2298,7 @@ bool Executor::PredictLookahead(const DeviceLayer& layer, const float* residual,
   if (first >= c.num_layers)
     return true;
   const std::size_t prefetch_limit =
-      std::min<std::size_t>(16, expert_cache_->slots_per_layer() / 3);
+      std::min<std::size_t>(16, expert_cache_->slots_for_layer(first) / 3);
   if (prefetch_limit == 0)
     return true;
   if (residual == nullptr || lookahead_norm_ == nullptr ||
@@ -2227,9 +2340,14 @@ bool Executor::PredictLookahead(const DeviceLayer& layer, const float* residual,
       restore_scratch();
       return false;
     }
+    const std::int32_t* residency = nullptr;
+    if (options_.cache_router_bonus != 0.0F &&
+        expert_id_to_slot_device_ != nullptr)
+      residency = expert_id_to_slot_device_ +
+                  static_cast<std::size_t>(target_index) * c.num_experts;
     RouterTopK(lookahead_router_, c.num_experts + 1, lookahead_ids_,
                lookahead_weights_, rows, c.num_experts, c.num_experts_used,
-               stream_);
+               stream_, residency, options_.cache_router_bonus);
     if (!Check(hipGetLastError(), "lookahead router", error_msg) ||
         !CaptureExpertIds(lookahead_ids_, id_count, error_msg)) {
       restore_scratch();
@@ -2237,7 +2355,8 @@ bool Executor::PredictLookahead(const DeviceLayer& layer, const float* residual,
     }
     LookaheadPrediction prediction;
     prediction.layer = target_index;
-    prediction.max_slots = prefetch_limit;
+    prediction.max_slots = std::min<std::size_t>(
+        16, expert_cache_->slots_for_layer(target_index) / 3);
     prediction.expert_ids.assign(expert_ids_host_, expert_ids_host_ + id_count);
     predictions->push_back(std::move(prediction));
   }
@@ -3708,8 +3827,14 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
   if (!Dense(l.router, x, s_.router, n_tokens, error_msg)) {
     return false;
   }
+  const std::int32_t* residency = nullptr;
+  if (options_.cache_router_bonus != 0.0F &&
+      expert_id_to_slot_device_ != nullptr)
+    residency = expert_id_to_slot_device_ +
+                static_cast<std::size_t>(l.layer_index) * c.num_experts;
   RouterTopK(s_.router, c.num_experts + 1, s_.ids, s_.weights, n_tokens,
-             c.num_experts, used, stream_);
+             c.num_experts, used, stream_, residency,
+             options_.cache_router_bonus);
   std::vector<LookaheadPrediction> lookahead;
   if (!PredictLookahead(
           l, lookahead_residual != nullptr ? lookahead_residual : s_.res,
@@ -4096,6 +4221,7 @@ bool Executor::Forward(Session& session, std::span<const std::int32_t> tokens,
   }
   if (speculative)
     BeginSpeculativeDemandTelemetry(n);
+  ++route_forward_seq_;
   if (n_logits > n || n_logits > options_.max_logit_rows) {
     AssignError(error_msg, "requested logit rows exceed the batch or limit");
     return false;

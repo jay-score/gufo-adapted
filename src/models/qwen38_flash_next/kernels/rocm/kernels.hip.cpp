@@ -3395,7 +3395,8 @@ __global__ void AttentionMergeKernel(const float* partials, float* out,
 template<unsigned MaxExperts>
 __global__ void RouterTopKKernel(const float* logits, std::uint32_t stride,
                                  std::int32_t* ids, float* weights,
-                                 std::uint32_t n_experts, std::uint32_t k) {
+                                 std::uint32_t n_experts, std::uint32_t k,
+                                 const std::int32_t* residency, float bonus) {
   __shared__ float probs[1024];
   __shared__ float shared[32];
   __shared__ std::uint32_t chosen[32];
@@ -3407,14 +3408,24 @@ __global__ void RouterTopKKernel(const float* logits, std::uint32_t stride,
     local_max = fmaxf(local_max, src[e]);
   }
   const float max_logit = BlockMax(local_max, shared);
-  float local_sum = 0.0f;
-  for (std::uint32_t e = threadIdx.x; e < n_experts; e += blockDim.x) {
-    probs[e] = __expf(src[e] - max_logit);
-    local_sum += probs[e];
-  }
-  const float denom = BlockSum(local_sum, shared);
-  for (std::uint32_t e = threadIdx.x; e < n_experts; e += blockDim.x) {
-    probs[e] /= denom;
+  const bool biased = residency != nullptr && bonus != 0.0F;
+  if (biased) {
+    // Selection sees the raw-logit residency bonus; the mixing weights below
+    // are recomputed from the unbiased probabilities of the selected experts.
+    for (std::uint32_t e = threadIdx.x; e < n_experts; e += blockDim.x) {
+      probs[e] =
+          __expf(src[e] - max_logit + (residency[e] >= 0 ? bonus : 0.0F));
+    }
+  } else {
+    float local_sum = 0.0f;
+    for (std::uint32_t e = threadIdx.x; e < n_experts; e += blockDim.x) {
+      probs[e] = __expf(src[e] - max_logit);
+      local_sum += probs[e];
+    }
+    const float denom = BlockSum(local_sum, shared);
+    for (std::uint32_t e = threadIdx.x; e < n_experts; e += blockDim.x) {
+      probs[e] /= denom;
+    }
   }
   __syncthreads();
 
@@ -3459,13 +3470,23 @@ __global__ void RouterTopKKernel(const float* logits, std::uint32_t stride,
   }
   if (threadIdx.x == 0) {
     float sum = 0.0f;
-    for (std::uint32_t slot = 0; slot < k; ++slot) {
-      sum += chosen_p[slot];
-    }
-    sum = fmaxf(sum, 6.103515625e-5f);
-    for (std::uint32_t slot = 0; slot < k; ++slot) {
-      ids[t * k + slot] = static_cast<std::int32_t>(chosen[slot]);
-      weights[t * k + slot] = chosen_p[slot] / sum;
+    if (biased) {
+      for (std::uint32_t slot = 0; slot < k; ++slot)
+        sum += __expf(src[chosen[slot]] - max_logit);
+      sum = fmaxf(sum, 6.103515625e-5f);
+      for (std::uint32_t slot = 0; slot < k; ++slot) {
+        ids[t * k + slot] = static_cast<std::int32_t>(chosen[slot]);
+        weights[t * k + slot] = __expf(src[chosen[slot]] - max_logit) / sum;
+      }
+    } else {
+      for (std::uint32_t slot = 0; slot < k; ++slot) {
+        sum += chosen_p[slot];
+      }
+      sum = fmaxf(sum, 6.103515625e-5f);
+      for (std::uint32_t slot = 0; slot < k; ++slot) {
+        ids[t * k + slot] = static_cast<std::int32_t>(chosen[slot]);
+        weights[t * k + slot] = chosen_p[slot] / sum;
+      }
     }
   }
 }
@@ -7785,13 +7806,16 @@ __global__ void ExpertCountsKernel(const std::int32_t* ids,
 
 void RouterTopK(const float* logits, std::uint32_t stride, std::int32_t* ids,
                 float* weights, std::uint32_t n_tokens, std::uint32_t n_experts,
-                std::uint32_t k, hipStream_t stream) {
+                std::uint32_t k, hipStream_t stream,
+                const std::int32_t* residency, float bonus) {
   if (n_experts <= 512) {
     hipLaunchKernelGGL((RouterTopKKernel<512>), dim3(n_tokens), dim3(kThreads),
-                       0, stream, logits, stride, ids, weights, n_experts, k);
+                       0, stream, logits, stride, ids, weights, n_experts, k,
+                       residency, bonus);
   } else {
     hipLaunchKernelGGL((RouterTopKKernel<1024>), dim3(n_tokens), dim3(kThreads),
-                       0, stream, logits, stride, ids, weights, n_experts, k);
+                       0, stream, logits, stride, ids, weights, n_experts, k,
+                       residency, bonus);
   }
 }
 

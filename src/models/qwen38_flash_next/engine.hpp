@@ -56,6 +56,10 @@ struct ModelOptions {
   float cache_prior_bias{0.0F};
   /// Expert-cache victim policy: lru, hotness, or decayed (default lru).
   std::string cache_policy{"lru"};
+  /// Per-layer expert-cache slots: uniform, skewed, or a JSON profile path.
+  std::string cache_slot_profile{"uniform"};
+  /// Raw-logit residency bonus for router selection (default off).
+  float cache_router_bonus{0.0F};
   /// Truncate MTP verification to the longest draft prefix whose live
   /// per-draft acceptance confidence reaches this floor. Zero (default)
   /// keeps the full chain verified.
@@ -89,6 +93,8 @@ struct ModelOptions {
   /// Reserve worst-case per-session image state even before an image request.
   /// Text-only callers can disable it; serve keeps it enabled.
   bool reserve_vision_session_bytes{true};
+  /// Optional binary GURT routing trace for offline cache replay.
+  std::string dump_routing_path;
 };
 
 class Session;

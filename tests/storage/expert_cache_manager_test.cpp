@@ -403,10 +403,41 @@ void Run() {
   async_manager->Release(0);
   async_manager->FinishPrefetch(0);
 
+  // A non-uniform profile spends the same total bytes but gives each layer an
+  // exact slot count. Layer 0 gets two slots and layer 1 gets three.
+  std::array<DeviceLayer, 2> skewed_layers{layer, layer};
+  skewed_layers[1].layer_index = 1;
+  std::array<std::int32_t, 2 * kExperts> skewed_indirection{};
+  skewed_indirection.fill(-1);
+  constexpr std::size_t skewed_budget =
+      5 * 3 * kExpertBytes + 2 * 3 * kTailMargin;
+  const std::array<std::uint32_t, 2> slot_profile{2, 3};
+  auto skewed_manager = gufo::storage::ExpertCacheManager::Create(
+      skewed_layers, skewed_budget, kExpertsUsed, kExperts, skewed_indirection,
+      &error, nullptr, 0.0F,
+      gufo::storage::ExpertCacheManager::VictimPolicy::kLru, 1024,
+      slot_profile);
+  if (!skewed_manager || skewed_manager->slots_for_layer(0) != 2 ||
+      skewed_manager->slots_for_layer(1) != 3 ||
+      skewed_manager->device_layers()[0].expert_cache_slots != 2 ||
+      skewed_manager->device_layers()[1].expert_cache_slots != 3) {
+    throw std::runtime_error("non-uniform slot profile was not applied: " +
+                             error);
+  }
+  const std::array<std::uint32_t, 2> oversized_profile{3, 3};
+  if (gufo::storage::ExpertCacheManager::Create(
+          skewed_layers, skewed_budget, kExpertsUsed, kExperts,
+          skewed_indirection, &error, nullptr, 0.0F,
+          gufo::storage::ExpertCacheManager::VictimPolicy::kLru, 1024,
+          oversized_profile) != nullptr) {
+    throw std::runtime_error(
+        "non-uniform slot profile was accepted above the budget");
+  }
+
   std::cout
       << "expert_cache_manager_test: packed GTT arenas, asynchronous and empty "
-         "prefetch batches, speculative cap, scratch reads, pin release, and "
-         "LRU indirection passed\n";
+         "prefetch batches, speculative cap, scratch reads, pin release, "
+         "non-uniform slots, and LRU indirection passed\n";
 }
 
 }  // namespace

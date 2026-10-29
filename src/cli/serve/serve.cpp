@@ -608,6 +608,9 @@ void PrintServeHelp(std::string_view program_name,
     float cache_prior_bias = 0.0F;
     float mtp_verify_acceptance_floor = 0.0F;
     std::string cache_policy = "lru";
+    std::string cache_slot_profile = "uniform";
+    float cache_router_bonus = 0.0F;
+    std::string dump_routing_path;
     bool ple_shelf = false;
     bool ple_shelf_mib_set = false;
     std::uint32_t ple_shelf_mib = 0;
@@ -780,6 +783,17 @@ void PrintServeHelp(std::string_view program_name,
         "", "--cache-policy", "POLICY",
         "Expert cache victim policy: lru, hotness, or decayed (default: lru)",
         "Memory", &cache_policy);
+    parser.AddOption(
+        "", "--cache-slot-profile", "PROFILE",
+        "Per-layer cache slots: uniform, skewed, or a JSON profile path",
+        "Memory", &cache_slot_profile);
+    parser.AddOption(
+        "", "--cache-router-bonus", "LAMBDA",
+        "Raw-logit residency bonus for router selection (default: 0)", "Memory",
+        &cache_router_bonus);
+    parser.AddOption("", "--dump-routing", "PATH",
+                     "Write a binary GURT expert-routing trace", "Memory",
+                     &dump_routing_path);
     parser.AddOption(
         "", "--prefill-chunk", "N",
         "Maximum prompt tokens between active decode rounds (default: 512)",
@@ -1280,6 +1294,9 @@ int RunServe(std::span<const char* const> args) {
     float cache_prior_bias = 0.0F;
     float mtp_verify_acceptance_floor = 0.0F;
     std::string cache_policy = "lru";
+    std::string cache_slot_profile = "uniform";
+    float cache_router_bonus = 0.0F;
+    std::string dump_routing_path;
     bool ple_shelf = false;
     bool ple_shelf_mib_set = false;
     std::uint32_t ple_shelf_mib = 0;
@@ -1449,6 +1466,17 @@ int RunServe(std::span<const char* const> args) {
         "Expert cache victim policy: lru, hotness, or decayed (default: lru)",
         "Memory", &cache_policy);
     llm_parser.AddOption(
+        "", "--cache-slot-profile", "PROFILE",
+        "Per-layer cache slots: uniform, skewed, or a JSON profile path",
+        "Memory", &cache_slot_profile);
+    llm_parser.AddOption(
+        "", "--cache-router-bonus", "LAMBDA",
+        "Raw-logit residency bonus for router selection (default: 0)", "Memory",
+        &cache_router_bonus);
+    llm_parser.AddOption("", "--dump-routing", "PATH",
+                         "Write a binary GURT expert-routing trace", "Memory",
+                         &dump_routing_path);
+    llm_parser.AddOption(
         "", "--prefill-chunk", "N",
         "Maximum prompt tokens between active decode rounds (default: 512)",
         "Scheduling", &prefill_chunk_tokens);
@@ -1575,6 +1603,11 @@ int RunServe(std::span<const char* const> args) {
           << "Error: --cache-prior-bias must be finite and non-negative\n";
       return 2;
     }
+    if (!std::isfinite(cache_router_bonus) || cache_router_bonus < 0.0F) {
+      std::cerr
+          << "Error: --cache-router-bonus must be finite and non-negative\n";
+      return 2;
+    }
     if (!std::isfinite(mtp_verify_acceptance_floor) ||
         mtp_verify_acceptance_floor < 0.0F ||
         mtp_verify_acceptance_floor > 1.0F) {
@@ -1653,6 +1686,9 @@ int RunServe(std::span<const char* const> args) {
     speculative_config.mtp_verify_acceptance_floor =
         mtp_verify_acceptance_floor;
     speculative_config.cache_policy = cache_policy;
+    speculative_config.cache_slot_profile = cache_slot_profile;
+    speculative_config.cache_router_bonus = cache_router_bonus;
+    speculative_config.dump_routing_path = dump_routing_path;
     speculative_config.ple_shelf_bytes =
         ple_shelf_mib_set
             ? static_cast<std::size_t>(ple_shelf_mib) * 1024 * 1024

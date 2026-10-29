@@ -155,6 +155,17 @@ static void RegisterTextOptions(ArgParser& parser, PromptOptions& opt,
       "Expert cache victim policy: lru, hotness, or decayed (default: lru)",
       "Memory", &opt.cache_policy);
   parser.AddOption(
+      "", "--cache-slot-profile", "PROFILE",
+      "Per-layer cache slots: uniform, skewed, or a JSON profile path",
+      "Memory", &opt.cache_slot_profile);
+  parser.AddOption(
+      "", "--cache-router-bonus", "LAMBDA",
+      "Raw-logit residency bonus for router selection (default: 0)", "Memory",
+      &opt.cache_router_bonus);
+  parser.AddOption("", "--dump-routing", "PATH",
+                   "Write a binary GURT expert-routing trace", "Memory",
+                   &opt.dump_routing_path);
+  parser.AddOption(
       "", "--mtp-verify-acceptance-floor", "FLOAT",
       "Verify MTP drafts only while each draft's live acceptance "
       "confidence reaches FLOAT; 0 verifies the full chain (default: 0)",
@@ -733,6 +744,8 @@ std::shared_ptr<models::qwen38_flash_next::Model> LoadFlashNextModel(
        .ssd_stats = opt.ssd_stats,
        .cache_prior_bias = opt.cache_prior_bias,
        .cache_policy = opt.cache_policy,
+       .cache_slot_profile = opt.cache_slot_profile,
+       .cache_router_bonus = opt.cache_router_bonus,
        .mtp_verify_acceptance_floor = opt.mtp_verify_acceptance_floor,
        .ple_shelf_bytes =
            opt.ple_shelf_mib_set
@@ -745,7 +758,8 @@ std::shared_ptr<models::qwen38_flash_next::Model> LoadFlashNextModel(
        .prompt_lookup = opt.prompt_lookup,
        .prefetch_layers_ahead = opt.prefetch_layers_ahead,
        .reserve_vision_session_bytes =
-           !opt.image_paths.empty() || !opt.vision_model_path.empty()},
+           !opt.image_paths.empty() || !opt.vision_model_path.empty(),
+       .dump_routing_path = opt.dump_routing_path},
       &error);
   PrintModelLoadTime(load_start, model != nullptr);
   if (!model)
@@ -974,6 +988,11 @@ static std::optional<PromptOptions> ParseTextOptions(
   if (!storage::ParseExpertCacheVictimPolicy(opt.cache_policy)) {
     if (error_msg != nullptr)
       *error_msg = "--cache-policy must be lru, hotness, or decayed";
+    return std::nullopt;
+  }
+  if (!std::isfinite(opt.cache_router_bonus) || opt.cache_router_bonus < 0.0F) {
+    if (error_msg != nullptr)
+      *error_msg = "--cache-router-bonus must be a finite non-negative number";
     return std::nullopt;
   }
   if ((!opt.image_paths.empty() || !opt.vision_model_path.empty()) &&

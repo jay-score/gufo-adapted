@@ -792,6 +792,12 @@ if (BUILD_TESTING)
   set_tests_properties(prof_test PROPERTIES
     LABELS "cpu;tools;profiling")
 
+  add_test(NAME routing_replay_test
+    COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/tools/test_routing_replay.py)
+  set_tests_properties(routing_replay_test PROPERTIES
+    LABELS "cpu;tools;profiling;experts")
+
   add_executable(gpu_queues_test tests/diagnostics/gpu_queues_test.cpp)
   target_link_libraries(gpu_queues_test PRIVATE gufo_diagnostics)
   add_test(NAME gpu_queues_test COMMAND gpu_queues_test)
