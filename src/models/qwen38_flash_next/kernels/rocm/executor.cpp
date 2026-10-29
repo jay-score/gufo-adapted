@@ -960,6 +960,9 @@ Executor::~Executor() {
   if (stream_ != nullptr) {
     (void)hipStreamSynchronize(stream_);
   }
+  // Release any deferred expert-cache pins while the cache is still alive.
+  DrainPendingLayerReleases();
+  DestroyLayerReleaseEvents();
   // Readers write pinned staging memory; drain them before freeing it,
   // including when a forward failed before reaching PLE.
   if (ple_pending_ || prefetch_.pending) {
@@ -1453,6 +1456,8 @@ bool Executor::EnableExpertCache(
       stats, cache_prior_bias, victim_policy, 1024, slot_profile);
   if (expert_cache_ == nullptr)
     return false;
+  if (!CreateLayerReleaseEvents(layers.size(), error_msg))
+    return false;
   gufo::storage::ExpertCacheManager::WarmupResult warmup;
   if (!expert_cache_->Prewarm(&warmup, error_msg))
     return false;
@@ -1605,6 +1610,144 @@ bool Executor::CaptureExpertIds(const std::int32_t* ids, std::size_t count,
                "router IDs ready event", error_msg) &&
          Check(hipEventSynchronize(expert_ids_ready_), "router IDs ready",
                error_msg);
+}
+
+bool Executor::CreateLayerReleaseEvents(std::size_t layers,
+                                        std::string* error_msg) {
+  DestroyLayerReleaseEvents();
+  layer_release_events_.assign(layers, nullptr);
+  layer_release_pending_.assign(layers, 0);
+  pending_layer_releases_.clear();
+  for (std::size_t layer = 0; layer < layers; ++layer) {
+    if (!Check(hipEventCreateWithFlags(&layer_release_events_[layer],
+                                       hipEventDisableTiming),
+               "layer release event", error_msg)) {
+      DestroyLayerReleaseEvents();
+      return false;
+    }
+  }
+  return true;
+}
+
+void Executor::DestroyLayerReleaseEvents() {
+  for (hipEvent_t event : layer_release_events_) {
+    if (event != nullptr)
+      (void)hipEventDestroy(event);
+  }
+  layer_release_events_.clear();
+  layer_release_pending_.clear();
+  pending_layer_releases_.clear();
+}
+
+bool Executor::RecordLayerRelease(std::uint32_t layer,
+                                  std::string* error_msg) const {
+  if (expert_cache_ == nullptr || layer >= layer_release_events_.size() ||
+      layer_release_events_[layer] == nullptr) {
+    AssignError(error_msg, "layer release event is unavailable");
+    if (expert_cache_ != nullptr)
+      expert_cache_->Release(layer);
+    return false;
+  }
+  if (layer_release_pending_[layer] &&
+      !RetireLayerRelease(layer, true, error_msg)) {
+    return false;
+  }
+  if (!Check(hipEventRecord(layer_release_events_[layer], stream_),
+             "layer completion event", error_msg)) {
+    // The stream is already unhealthy; still release the pins so a failed
+    // forward cannot retain them across turns.
+    (void)hipStreamSynchronize(stream_);
+    expert_cache_->Release(layer);
+    return false;
+  }
+  layer_release_pending_[layer] = 1;
+  pending_layer_releases_.push_back(layer);
+  RetireCompletedLayerReleases();
+  while (pending_layer_releases_.size() > kMaxPendingLayerReleases) {
+    const std::uint32_t oldest = pending_layer_releases_.front();
+    if (!RetireLayerRelease(oldest, true, error_msg))
+      return false;
+    if (!pending_layer_releases_.empty() &&
+        pending_layer_releases_.front() == oldest) {
+      // The event was already retired; remove the stale queue entry.
+      pending_layer_releases_.erase(pending_layer_releases_.begin());
+    }
+  }
+  return true;
+}
+
+bool Executor::RetireLayerRelease(std::uint32_t layer, bool wait,
+                                  std::string* error_msg) const {
+  if (expert_cache_ == nullptr || layer >= layer_release_events_.size() ||
+      !layer_release_pending_[layer] ||
+      layer_release_events_[layer] == nullptr) {
+    return true;
+  }
+  if (wait) {
+    if (!Check(hipEventSynchronize(layer_release_events_[layer]),
+               "layer pin retirement", error_msg)) {
+      // A failed stream must not leave cache pins behind.
+      expert_cache_->Release(layer);
+      layer_release_pending_[layer] = 0;
+      const auto found = std::find(pending_layer_releases_.begin(),
+                                   pending_layer_releases_.end(), layer);
+      if (found != pending_layer_releases_.end())
+        pending_layer_releases_.erase(found);
+      return false;
+    }
+  } else if (hipEventQuery(layer_release_events_[layer]) != hipSuccess) {
+    return true;
+  }
+  expert_cache_->Release(layer);
+  layer_release_pending_[layer] = 0;
+  const auto found = std::find(pending_layer_releases_.begin(),
+                               pending_layer_releases_.end(), layer);
+  if (found != pending_layer_releases_.end())
+    pending_layer_releases_.erase(found);
+  return true;
+}
+
+void Executor::RetireCompletedLayerReleases() const {
+  if (expert_cache_ == nullptr || pending_layer_releases_.empty())
+    return;
+  std::size_t kept = 0;
+  for (std::size_t index = 0; index < pending_layer_releases_.size(); ++index) {
+    const std::uint32_t layer = pending_layer_releases_[index];
+    if (layer < layer_release_events_.size() && layer_release_pending_[layer] &&
+        hipEventQuery(layer_release_events_[layer]) == hipSuccess) {
+      expert_cache_->Release(layer);
+      layer_release_pending_[layer] = 0;
+      continue;
+    }
+    pending_layer_releases_[kept++] = layer;
+  }
+  pending_layer_releases_.resize(kept);
+}
+
+void Executor::DrainPendingLayerReleases() const {
+  if (expert_cache_ == nullptr)
+    return;
+  const bool any_pending =
+      std::any_of(layer_release_pending_.begin(), layer_release_pending_.end(),
+                  [](std::uint8_t pending) { return pending != 0; });
+  if (!any_pending) {
+    pending_layer_releases_.clear();
+    return;
+  }
+  // A forward always ends after the stream drains (success) or must be
+  // quiesced before returning a failure. One stream barrier is enough to make
+  // every recorded completion event safe to release, and avoids trusting an
+  // event after a stream error.
+  (void)hipStreamSynchronize(stream_);
+  // Scan every layer rather than only the queue so an exception or an earlier
+  // failure cannot leave a pending flag that outlives the forward pass.
+  for (std::size_t layer = 0; layer < layer_release_pending_.size(); ++layer) {
+    if (!layer_release_pending_[layer])
+      continue;
+    expert_cache_->Release(static_cast<std::uint32_t>(layer));
+    layer_release_pending_[layer] = 0;
+  }
+  pending_layer_releases_.clear();
 }
 
 bool Executor::WriteRouteTrace(std::uint32_t layer, bool prefill,
@@ -1891,6 +2034,13 @@ bool Executor::StreamedMoeRows(
       demand_telemetry.row_demand_read_nanoseconds =
           std::span(verify_row_demand_read_ns_).subspan(first, rows_per_window);
     }
+    // The same cache layer may have a previous window (prefill) or a previous
+    // forward (decode) whose demand pins are waiting on a completion event.
+    // Retire it before Resolve, which requires an empty pin set.
+    if (!RetireLayerRelease(layer.layer_index, true, error_msg)) {
+      UseScratch(base);
+      return false;
+    }
     if (!expert_cache_->Resolve(
             layer.layer_index,
             std::span<const std::int32_t>(window_experts, window_ids),
@@ -1901,6 +2051,19 @@ bool Executor::StreamedMoeRows(
       UseScratch(base);
       return false;
     }
+    // A failure between Resolve and the completion event must not strand the
+    // window's demand pins.
+    struct WindowPinGuard {
+      const Executor* executor;
+      std::uint32_t layer;
+      bool armed{true};
+      ~WindowPinGuard() {
+        if (!armed || executor->expert_cache_ == nullptr)
+          return;
+        (void)hipStreamSynchronize(executor->stream_);
+        executor->expert_cache_->Release(layer);
+      }
+    } window_pins{this, layer.layer_index};
     route_windows.push_back(rows_per_window);
 
     bool ok = true;
@@ -1936,18 +2099,16 @@ bool Executor::StreamedMoeRows(
       SubmitLookaheadPrefetch(lookahead, prefill_phase);
     }
 
-    const hipError_t recorded = hipEventRecord(expert_ids_ready_, stream_);
-    const bool drain_ok =
-        recorded == hipSuccess
-            ? hipEventSynchronize(expert_ids_ready_) == hipSuccess
-            : hipStreamSynchronize(stream_) == hipSuccess;
-    expert_cache_->Release(layer.layer_index);
+    // Defer the pin release until the GEMV completion event is observed.
+    // The stream-ordered slot upload above stays alive because every later
+    // streamed layer captures its router IDs before reusing the host staging
+    // buffer, and multi-window prefill retires the previous window before its
+    // next Resolve.
+    if (!RecordLayerRelease(layer.layer_index, error_msg))
+      return false;
+    window_pins.armed = false;
     if (!ok)
       return false;
-    if (!drain_ok) {
-      AssignError(error_msg, "waiting for streamed expert kernels failed");
-      return false;
-    }
     first += rows_per_window;
   }
   if (!RestoreBaseScratchThenRun(base, [&] {
@@ -2062,6 +2223,10 @@ bool Executor::StreamedMoeRowsDeskRoom(
   const std::vector<std::int32_t> desk_release(
       resident_experts.begin() + desk_keep_count, resident_experts.end());
   std::vector<std::int32_t> desk_slots(resident_experts.size());
+  if (!RetireLayerRelease(layer.layer_index, true, error_msg)) {
+    UseScratch(base);
+    return false;
+  }
   if (!expert_cache_->PinDesk(layer.layer_index, resident_experts, desk_slots,
                               error_msg, true)) {
     UseScratch(base);
@@ -4123,6 +4288,13 @@ bool Executor::MtpHead(const DeviceMixer& head, const float* res, bool token,
 bool Executor::Run(Session& session, std::uint64_t key, bool graph,
                    const std::function<bool()>& body, std::string* error_msg,
                    bool synchronize) const {
+  // A streamed pass may leave layer pins pending until their GEMV completion
+  // events retire. Drain them on every exit, including failures and graph
+  // recording paths, so pins cannot leak across turns.
+  struct DrainLayerReleases {
+    const Executor* executor;
+    ~DrainLayerReleases() { executor->DrainPendingLayerReleases(); }
+  } drain_layer_releases{this};
   // A batch shape runs eagerly once before it is captured: the first pass
   // grows the GEMM tier's arena, which capture forbids.
   if (graph && session.warmed_.contains(key)) {

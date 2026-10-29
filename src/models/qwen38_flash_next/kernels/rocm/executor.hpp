@@ -637,6 +637,21 @@ private:
   [[nodiscard]] bool CaptureExpertIds(const std::int32_t* ids,
                                       std::size_t count,
                                       std::string* error_msg) const;
+  /// Deferred expert-cache pin release. A streamed layer records a completion
+  /// event after its GEMV launches; the pins are released once that event is
+  /// complete, at the latest when the next layer reuses the same cache layer
+  /// or the forward pass drains. Keeping a bounded window of pins avoids a
+  /// host/GPU round-trip after every layer.
+  static constexpr std::size_t kMaxPendingLayerReleases = 8;
+  [[nodiscard]] bool CreateLayerReleaseEvents(std::size_t layers,
+                                              std::string* error_msg);
+  void DestroyLayerReleaseEvents();
+  [[nodiscard]] bool RecordLayerRelease(std::uint32_t layer,
+                                        std::string* error_msg) const;
+  [[nodiscard]] bool RetireLayerRelease(std::uint32_t layer, bool wait,
+                                        std::string* error_msg) const;
+  void RetireCompletedLayerReleases() const;
+  void DrainPendingLayerReleases() const;
   [[nodiscard]] bool WriteRouteTrace(
       std::uint32_t layer, bool prefill, std::uint32_t rows,
       std::uint32_t experts_used, std::span<const std::int32_t> expert_ids,
@@ -844,6 +859,9 @@ private:
   std::int32_t* expert_id_to_slot_device_{nullptr};
   std::size_t expert_ids_capacity_{0};
   hipEvent_t expert_ids_ready_{nullptr};
+  mutable std::vector<hipEvent_t> layer_release_events_;
+  mutable std::vector<std::uint8_t> layer_release_pending_;
+  mutable std::vector<std::uint32_t> pending_layer_releases_;
   mutable std::mutex route_trace_mutex_;
   mutable std::ofstream route_trace_;
   mutable std::ofstream route_trace_binary_;
