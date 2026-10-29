@@ -2708,6 +2708,29 @@ void TestResponseSamplingDefaults() {
     ExpectStatus(server.Post("/v1/responses", body.dump()), 400);
     assert(server.backend->calls == calls);
   }
+  body["cache_prompt"] = gufo::json::Value();
+  ExpectStatus(server.Post("/v1/responses", body.dump()), 200);
+  assert(server.backend->LastCall().chat.cache_persist);
+  for (const bool persist : {false, true}) {
+    body["cache_persist"] = persist;
+    ExpectStatus(server.Post("/v1/responses", body.dump()), 200);
+    assert(server.backend->LastCall().chat.cache_persist == persist);
+    assert(server.backend->LastCall().chat.cache_prompt);
+  }
+  body["cache_persist"] = false;
+  ExpectStatus(server.Post("/v1/responses", body.dump()), 200);
+  body["cache_persist"] = gufo::json::Value();
+  ExpectStatus(server.Post("/v1/responses", body.dump()), 200);
+  assert(server.backend->LastCall().chat.cache_persist);
+  for (const char* invalid : {"0", "\"false\""}) {
+    body["cache_persist"] = gufo::json::parse(invalid);
+    const int calls = server.backend->calls;
+    const auto rejected = server.Post("/v1/responses", body.dump());
+    ExpectStatus(rejected, 400);
+    assert(rejected.find("'cache_persist' must be a boolean") !=
+           std::string::npos);
+    assert(server.backend->calls == calls);
+  }
 }
 
 void TestStreamingFraming() {
@@ -2975,6 +2998,116 @@ void TestRawCompletionLogprobs() {
       200);
 }
 
+// The applied cache_persist is echoed at the top level of every final
+// response object, and of the finishing and usage stream chunks, never of a
+// content delta.
+void TestCachePersistEcho() {
+  RunningServer server;
+  const auto payload = [](const std::string& response) {
+    return response.find("Transfer-Encoding: chunked") != std::string::npos
+               ? ChunkedBody(response)
+               : response.substr(response.find("\r\n\r\n") + 4);
+  };
+  // The JSON of each `data:` line except [DONE], in order.
+  const auto events = [&](const std::string& response) {
+    std::vector<gufo::json::Value> result;
+    const auto body = payload(response);
+    for (std::size_t at = body.find("data: "); at != std::string::npos;
+         at = body.find("data: ", at + 6)) {
+      const auto end = body.find('\n', at);
+      const auto data = body.substr(at + 6, end - at - 6);
+      if (data != "[DONE]")
+        result.push_back(gufo::json::parse(data));
+    }
+    return result;
+  };
+  const auto echoed = [](const gufo::json::Value& value) {
+    const auto* field = value.find("cache_persist");
+    return field != nullptr && field->is_bool()
+               ? std::optional<bool>(field->as_bool())
+               : std::nullopt;
+  };
+  const std::string chat =
+      R"("model":"test","messages":[{"role":"user","content":"hello"}])";
+  for (const std::optional<bool> persist :
+       {std::optional<bool>(), std::optional<bool>(false),
+        std::optional<bool>(true)}) {
+    const bool expected = persist.value_or(true);
+    const std::string field = persist ? std::string(R"(,"cache_persist":)") +
+                                            (*persist ? "true" : "false")
+                                      : std::string();
+    const auto plain =
+        server.Post("/v1/chat/completions", "{" + chat + field + "}");
+    ExpectStatus(plain, 200);
+    assert(echoed(gufo::json::parse(payload(plain))) == expected);
+
+    const auto streamed = events(server.Post(
+        "/v1/chat/completions",
+        "{" + chat + field +
+            R"(,"stream":true,"stream_options":{"include_usage":true}})"));
+    assert(streamed.size() >= 3);
+    for (std::size_t i = 0; i + 2 < streamed.size(); ++i)
+      assert(!echoed(streamed[i]).has_value());
+    assert(echoed(streamed[streamed.size() - 2]) == expected);
+    assert(echoed(streamed.back()) == expected);
+    assert(streamed.back().find("usage") != nullptr);
+
+    const auto response =
+        server.Post("/v1/responses", R"({"input":"hello")" + field + "}");
+    ExpectStatus(response, 200);
+    assert(echoed(gufo::json::parse(payload(response))) == expected);
+    const auto lifecycle = events(server.Post(
+        "/v1/responses", R"({"input":"hello","stream":true)" + field + "}"));
+    assert(!lifecycle.empty() &&
+           lifecycle.back().member_str("type") == "response.completed");
+    assert(echoed(*lifecycle.back().find("response")) == expected);
+    assert(!echoed(*lifecycle.front().find("response")).has_value());
+
+    for (const auto* path : {"/v1/completions", "/completion"}) {
+      const auto completion =
+          server.Post(path, R"({"prompt":"hello")" + field + "}");
+      ExpectStatus(completion, 200);
+      assert(echoed(gufo::json::parse(payload(completion))) == expected);
+    }
+    const auto chunks = events(server.Post(
+        "/v1/completions",
+        R"({"prompt":"hello","stream":true,"stream_options":{"include_usage":true})" +
+            field + "}"));
+    assert(chunks.size() >= 3);
+    for (std::size_t i = 0; i + 2 < chunks.size(); ++i)
+      assert(!echoed(chunks[i]).has_value());
+    assert(echoed(chunks[chunks.size() - 2]) == expected);
+    assert(echoed(chunks.back()) == expected);
+  }
+}
+
+void TestRawCompletionCachePersist() {
+  RunningServer server;
+  for (const auto* path : {"/v1/completions", "/completion"}) {
+    ExpectStatus(
+        server.Post(path, R"({"prompt":"hello","cache_persist":false})"), 200);
+    assert(!server.backend->last_cache_persist);
+    assert(server.backend->last_cache_prompt);
+    ExpectStatus(server.Post(path, R"({"prompt":"hello"})"), 200);
+    assert(server.backend->last_cache_persist);
+    ExpectStatus(
+        server.Post(path, R"({"prompt":"hello","cache_persist":false})"), 200);
+    ExpectStatus(
+        server.Post(path, R"({"prompt":"hello","cache_persist":null})"), 200);
+    assert(server.backend->last_cache_persist);
+    const auto before = server.backend->calls.load();
+    for (const auto* value : {"\"false\"", "0"}) {
+      const auto rejected = server.Post(
+          path,
+          std::string(R"({"prompt":"hello","cache_persist":)") + value + "}");
+      ExpectStatus(rejected, 400);
+      assert(rejected.find("'cache_persist' must be a boolean") !=
+             std::string::npos);
+    }
+    assert(server.backend->calls == before);
+  }
+}
+
 void TestRawCompletionPromptProgress() {
   RunningServer server;
   server.backend->progress = {
@@ -3235,6 +3368,8 @@ int main() {
   TestResponsesLogprobsOptions();
   TestRawCompletionPromptProgress();
   TestRawCompletionCachePrompt();
+  TestRawCompletionCachePersist();
+  TestCachePersistEcho();
   TestCompatibilityStopSequences();
   TestCompatibilityThinkingDefaults();
   TestResponseSamplingDefaults();

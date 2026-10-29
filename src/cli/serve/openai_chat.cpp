@@ -902,6 +902,14 @@ std::optional<HttpResponse> ParseRequest(const HttpRequest& request,
     }
     output->chat.cache_prompt = cache_prompt->as_bool();
   }
+  if (const auto* cache_persist = body.find("cache_persist");
+      cache_persist != nullptr && !cache_persist->is_null()) {
+    if (!cache_persist->is_bool()) {
+      return Error(400, "Bad Request", "'cache_persist' must be a boolean",
+                   "invalid_cache_persist");
+    }
+    output->chat.cache_persist = cache_persist->as_bool();
+  }
   if (const auto error =
           ParseStopSequences(body.find("stop"), StopSequenceFormat::kOpenAi,
                              &output->chat.stop_sequences)) {
@@ -2712,7 +2720,9 @@ class ResponsesOutput {
 public:
   ResponsesOutput(std::string model, HttpResponse::BodyWriter writer,
                   const ChatRequest& chat)
-      : writer_(std::move(writer)), namespaces_(chat.tool_namespaces) {
+      : writer_(std::move(writer)),
+        namespaces_(chat.tool_namespaces),
+        cache_persist_(chat.cache_persist) {
     response_ = json::Value::object();
     response_["id"] = RandomId("resp_");
     response_["object"] = "response";
@@ -2876,6 +2886,7 @@ public:
     usage["total_tokens"] = result.prompt_tokens + result.completion_tokens;
     response_["usage"] = std::move(usage);
     response_["timings"] = GenerationTimings(result);
+    response_["cache_persist"] = cache_persist_;
     Lifecycle(limited || unfinished_tool_ ? "response.incomplete"
                                           : "response.completed");
     return response_;
@@ -2963,6 +2974,8 @@ private:
 
   HttpResponse::BodyWriter writer_;
   std::map<std::string, std::string> namespaces_;
+  // Echoed in the final response, as the applied `cache_persist`.
+  bool cache_persist_;
   json::Value response_;
   json::Value item_;
   json::Value tool_;
@@ -3033,6 +3046,7 @@ HttpResponse NonStreamingResponse(
   response["choices"] = std::move(choices);
   response["usage"] = Usage(result);
   response["timings"] = GenerationTimings(result);
+  response["cache_persist"] = request.chat.cache_persist;
   RecordServerMetrics(result);
 
   std::ostringstream timing;
@@ -3203,6 +3217,7 @@ HttpResponse StreamingResponse(
               // of the optional OpenAI usage chunk. Proxies need these even
               // when a client does not request stream_options.include_usage.
               terminal_chunk["timings"] = GenerationTimings(result);
+              terminal_chunk["cache_persist"] = request.chat.cache_persist;
               if (!writer(Sse(terminal_chunk))) {
                 return;
               }
@@ -3211,6 +3226,7 @@ HttpResponse StreamingResponse(
                 usage_chunk["choices"] = json::Value::array();
                 usage_chunk["usage"] = Usage(result);
                 usage_chunk["timings"] = GenerationTimings(result);
+                usage_chunk["cache_persist"] = request.chat.cache_persist;
                 if (!writer(Sse(usage_chunk))) {
                   return;
                 }
@@ -3372,6 +3388,13 @@ std::optional<HttpResponse> ParseOpenAiResponseControls(const json::Value& body,
       return Error(400, "Bad Request", "'cache_prompt' must be a boolean",
                    "invalid_cache_prompt");
     chat->cache_prompt = cache->as_bool();
+  }
+  if (const auto* persist = body.find("cache_persist");
+      persist != nullptr && !persist->is_null()) {
+    if (!persist->is_bool())
+      return Error(400, "Bad Request", "'cache_persist' must be a boolean",
+                   "invalid_cache_persist");
+    chat->cache_persist = persist->as_bool();
   }
   if (const auto* reasoning = body.find("reasoning");
       reasoning && !reasoning->is_null()) {
