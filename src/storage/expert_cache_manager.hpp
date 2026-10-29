@@ -67,11 +67,14 @@ public:
       std::string* error_msg = nullptr, SsdStats* stats = nullptr,
       float cache_prior_bias = 0.0F,
       VictimPolicy victim_policy = VictimPolicy::kLru,
-      std::uint32_t hotness_decay_tokens = 1024);
+      std::uint32_t hotness_decay_tokens = 1024,
+      std::span<const std::uint32_t> slot_profile = {});
 
   [[nodiscard]] const std::vector<models::qwen38_flash_next::rocm::DeviceLayer>&
   device_layers() const noexcept;
   [[nodiscard]] std::uint32_t slots_per_layer() const noexcept;
+  [[nodiscard]] std::uint32_t slots_for_layer(
+      std::uint32_t layer) const noexcept;
   [[nodiscard]] std::size_t layer_count() const noexcept;
   [[nodiscard]] std::uint32_t demand_slots_available(
       std::uint32_t layer) const noexcept;

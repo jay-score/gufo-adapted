@@ -52,6 +52,9 @@ struct TextSpeculativeConfig {
   float cache_prior_bias{0.0F};
   float mtp_verify_acceptance_floor{0.0F};
   std::string cache_policy{"lru"};
+  std::string cache_slot_profile{"uniform"};
+  float cache_router_bonus{0.0F};
+  std::string dump_routing_path;
   std::size_t ple_shelf_bytes{std::size_t{128} * 1024 * 1024};
   std::uint32_t prefetch_layers_ahead{2};
   bool ssd_stats{false};

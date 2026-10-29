@@ -520,7 +520,8 @@ void ExpertCounts(const std::int32_t* ids, std::uint32_t* counts,
 /// selection, renormalized weights. ids [t][k] int32, weights [t][k] f32.
 void RouterTopK(const float* logits, std::uint32_t stride, std::int32_t* ids,
                 float* weights, std::uint32_t n_tokens, std::uint32_t n_experts,
-                std::uint32_t k, hipStream_t stream);
+                std::uint32_t k, hipStream_t stream,
+                const std::int32_t* residency = nullptr, float bonus = 0.0F);
 
 /// out[t][i] = sum_s weights[t][s] * expert_out[t*k + s][i]
 ///           + sigmoid(gate[t * gate_stride]) * shared[t][i].

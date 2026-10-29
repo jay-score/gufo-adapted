@@ -3160,6 +3160,8 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
             .ssd_stats = speculative_config.ssd_stats,
             .cache_prior_bias = speculative_config.cache_prior_bias,
             .cache_policy = speculative_config.cache_policy,
+            .cache_slot_profile = speculative_config.cache_slot_profile,
+            .cache_router_bonus = speculative_config.cache_router_bonus,
             .mtp_verify_acceptance_floor =
                 speculative_config.mtp_verify_acceptance_floor,
             .ple_shelf_bytes = speculative_config.ple_shelf_bytes,
@@ -3178,6 +3180,7 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
                           std::clamp<std::size_t>(session_count, 1, 8)),
             .rope_scaling = rope_scaling,
             .prefetch_layers_ahead = speculative_config.prefetch_layers_ahead,
+            .dump_routing_path = speculative_config.dump_routing_path,
         },
         &load_error);
     if (model == nullptr) {

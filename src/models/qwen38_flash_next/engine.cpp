@@ -2,11 +2,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -29,6 +32,74 @@
 
 namespace gufo::models::qwen38_flash_next {
 namespace {
+
+// Validated by tools/prof/routing_replay.py on a 1,024-token trace and
+// installed as the default skewed profile. Kept in source so `skewed` does not
+// depend on a sidecar file at serving time.
+constexpr std::array<std::uint32_t, 48> kSkewedSlotProfile = {
+    460, 436, 456, 264, 312, 356, 380, 388, 332, 248, 312, 224,
+    288, 304, 264, 156, 184, 296, 340, 240, 272, 364, 408, 276,
+    292, 252, 272, 260, 284, 268, 284, 184, 220, 280, 288, 240,
+    248, 300, 364, 228, 220, 260, 244, 276, 276, 288, 244, 288,
+};
+
+bool LoadSlotProfileFile(const std::string& path, std::size_t layers,
+                         std::vector<std::uint32_t>* profile,
+                         std::string* error) {
+  std::ifstream input(path);
+  if (!input) {
+    *error = "cannot open cache slot profile: " + path;
+    return false;
+  }
+  std::string text((std::istreambuf_iterator<char>(input)),
+                   std::istreambuf_iterator<char>());
+  const auto key = text.find("\"slots\"");
+  const auto begin = text.find('[', key == std::string::npos ? 0 : key);
+  const auto end = text.find(']', begin == std::string::npos ? 0 : begin);
+  if (begin == std::string::npos || end == std::string::npos) {
+    *error = "cache slot profile has no slots array: " + path;
+    return false;
+  }
+  profile->clear();
+  std::size_t cursor = begin + 1;
+  while (cursor < end) {
+    while (cursor < end &&
+           !std::isdigit(static_cast<unsigned char>(text[cursor])))
+      ++cursor;
+    if (cursor >= end)
+      break;
+    std::uint32_t value = 0;
+    while (cursor < end &&
+           std::isdigit(static_cast<unsigned char>(text[cursor]))) {
+      value = value * 10 + static_cast<std::uint32_t>(text[cursor] - '0');
+      ++cursor;
+    }
+    profile->push_back(value);
+  }
+  if (profile->size() != layers) {
+    *error = "cache slot profile must list exactly " + std::to_string(layers) +
+             " layers";
+    return false;
+  }
+  return true;
+}
+
+bool ResolveSlotProfile(const std::string& name, std::size_t layers,
+                        std::vector<std::uint32_t>* profile,
+                        std::string* error) {
+  profile->clear();
+  if (name.empty() || name == "uniform")
+    return true;
+  if (name == "skewed") {
+    if (layers != kSkewedSlotProfile.size()) {
+      *error = "skewed cache profile expects 48 streamed layers";
+      return false;
+    }
+    profile->assign(kSkewedSlotProfile.begin(), kSkewedSlotProfile.end());
+    return true;
+  }
+  return LoadSlotProfileFile(name, layers, profile, error);
+}
 
 // gfx1151, served repository prompts: 4096-token chunks prefill 24K-102K
 // tokens 6-11% faster than 2048 (pp4096 +5% at d0, +6% at d32K). Each
@@ -222,6 +293,18 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     if (const char* route_trace = std::getenv("GUFO_EXPERT_ROUTE_TRACE"))
       exec.route_trace_path = route_trace;
   }
+  exec.dump_routing_path = options.dump_routing_path;
+  exec.cache_router_bonus = options.cache_router_bonus;
+  if (!options.cache_slot_profile.empty() &&
+      options.cache_slot_profile != "uniform") {
+    std::string profile_error;
+    if (!ResolveSlotProfile(options.cache_slot_profile,
+                            m->device_->layers().size(),
+                            &exec.cache_slot_profile, &profile_error)) {
+      AssignError(error_msg, profile_error);
+      return nullptr;
+    }
+  }
   exec.streamed_experts = options.memory_budget_gb > 0.0;
   exec.max_logit_rows =
       m->mtp_weights_
@@ -301,7 +384,8 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     std::clog << "memory_budget_plan\n" << plan.Format();
     if (!m->executor_->EnableExpertCache(
             plan.expert_cache_bytes, m->ssd_stats_.get(),
-            options.cache_prior_bias, *cache_policy, error_msg))
+            options.cache_prior_bias, *cache_policy, error_msg,
+            std::span<const std::uint32_t>(exec.cache_slot_profile)))
       return nullptr;
   }
   if (m->ssd_stats_ != nullptr) {

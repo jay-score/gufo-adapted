@@ -260,8 +260,14 @@ public:
     bool streamed_experts{false};
     /// Optional JSONL route trace destination for offline cache replay.
     std::string route_trace_path;
+    /// Optional binary GURT routing trace destination.
+    std::string dump_routing_path;
     /// Token-prior prefetch horizon in layers (0..max_context layers).
     std::uint32_t prefetch_layers_ahead{2};
+    /// Raw-logit-space residency bonus for router selection.
+    float cache_router_bonus{0.0F};
+    /// Per-layer slot counts; empty keeps the uniform cache.
+    std::vector<std::uint32_t> cache_slot_profile;
   };
 
   ~Executor();
@@ -276,7 +282,7 @@ public:
       std::size_t budget_bytes, gufo::storage::SsdStats* stats,
       float cache_prior_bias,
       gufo::storage::ExpertCacheManager::VictimPolicy victim_policy,
-      std::string* error_msg);
+      std::string* error_msg, std::span<const std::uint32_t> slot_profile = {});
   /// Stage 0 wasted-tail telemetry. Active only for a kVerify forward; the
   /// engine arms it at forward entry and takes the prefix/tail split once the
   /// accepted prefix length is known. Rows index the verify chain
@@ -831,10 +837,14 @@ private:
   std::int32_t* expert_ids_host_{nullptr};
   std::int32_t* expert_slot_ids_host_{nullptr};
   std::int32_t* expert_id_to_slot_host_{nullptr};
+  std::int32_t* expert_id_to_slot_device_{nullptr};
   std::size_t expert_ids_capacity_{0};
   hipEvent_t expert_ids_ready_{nullptr};
   mutable std::mutex route_trace_mutex_;
   mutable std::ofstream route_trace_;
+  mutable std::ofstream route_trace_binary_;
+  mutable std::uint32_t route_record_seq_{0};
+  mutable std::uint32_t route_forward_seq_{0};
   float* lookahead_norm_{nullptr};
   float* lookahead_mixed_{nullptr};
   float* lookahead_inject_{nullptr};
