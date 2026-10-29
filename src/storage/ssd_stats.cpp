@@ -7,6 +7,7 @@
 #include <limits>
 #include <sstream>
 #include <string_view>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -171,6 +172,24 @@ void SsdStats::RecordExpertDemand(std::uint64_t requests,
   }
 }
 
+void SsdStats::RecordLayerDemand(std::uint32_t layer_id,
+                                 std::uint64_t resident_hits,
+                                 std::uint64_t cold_misses,
+                                 bool prefill) noexcept {
+  if (prefill || !enabled_.load(std::memory_order_relaxed) ||
+      layer_id >= kMaxTrackedLayers) {
+    return;
+  }
+  auto& layer = layer_counters_[layer_id];
+  layer.resident_hits.fetch_add(resident_hits, std::memory_order_relaxed);
+  layer.cold_misses.fetch_add(cold_misses, std::memory_order_relaxed);
+  std::uint32_t count = decode_layer_count_.load(std::memory_order_relaxed);
+  const std::uint32_t required = layer_id + 1;
+  while (count < required && !decode_layer_count_.compare_exchange_weak(
+                                 count, required, std::memory_order_relaxed)) {
+  }
+}
+
 void SsdStats::RecordPrefetchRequests(std::uint64_t requests,
                                       bool prefill) noexcept {
   if (enabled_.load(std::memory_order_relaxed)) {
@@ -322,7 +341,7 @@ SsdStatsSnapshot SsdStats::Snapshot() const noexcept {
       resident_hits_.load(std::memory_order_relaxed);
   const std::uint64_t prefetched_hits =
       prefetched_hits_in_time_.load(std::memory_order_relaxed);
-  return {
+  SsdStatsSnapshot snapshot{
       .budget_bytes = budget_bytes_,
       .peak_working_set_bytes =
           peak_working_set_bytes_.load(std::memory_order_relaxed),
@@ -362,6 +381,15 @@ SsdStatsSnapshot SsdStats::Snapshot() const noexcept {
       .prefill = PhaseSnapshot(true),
       .decode = PhaseSnapshot(false),
   };
+  snapshot.decode_layer_count = std::min<std::size_t>(
+      decode_layer_count_.load(std::memory_order_relaxed), kMaxTrackedLayers);
+  for (std::size_t layer = 0; layer < snapshot.decode_layer_count; ++layer) {
+    snapshot.decode_layer_cold_misses[layer] =
+        layer_counters_[layer].cold_misses.load(std::memory_order_relaxed);
+    snapshot.decode_layer_resident_hits[layer] =
+        layer_counters_[layer].resident_hits.load(std::memory_order_relaxed);
+  }
+  return snapshot;
 }
 
 std::string SsdStats::Format() const {
@@ -415,6 +443,39 @@ std::string SsdStats::Format() const {
       << '\n'
       << "  inference_window_ms:      "
       << static_cast<double>(stats.elapsed_nanoseconds) / 1.0e6 << '\n';
+  if (stats.decode_layer_count != 0) {
+    std::vector<std::uint64_t> cold(
+        stats.decode_layer_cold_misses.begin(),
+        stats.decode_layer_cold_misses.begin() +
+            static_cast<std::ptrdiff_t>(stats.decode_layer_count));
+    std::vector<std::uint64_t> sorted = cold;
+    std::sort(sorted.begin(), sorted.end());
+    std::vector<std::size_t> hottest(stats.decode_layer_count);
+    for (std::size_t layer = 0; layer < hottest.size(); ++layer)
+      hottest[layer] = layer;
+    std::sort(hottest.begin(), hottest.end(),
+              [&](std::size_t lhs, std::size_t rhs) {
+                if (cold[lhs] != cold[rhs])
+                  return cold[lhs] > cold[rhs];
+                return lhs < rhs;
+              });
+    out << "  decode_layer_cold_miss_skew:\n"
+        << "    tracked_layers:         " << stats.decode_layer_count << '\n'
+        << "    cold_min_median_max:    " << sorted.front() << '/'
+        << sorted[sorted.size() / 2] << '/' << sorted.back() << '\n'
+        << "    layer_cold/hits:";
+    for (std::size_t layer = 0; layer < stats.decode_layer_count; ++layer) {
+      out << " L" << layer << '=' << stats.decode_layer_cold_misses[layer]
+          << '/' << stats.decode_layer_resident_hits[layer];
+    }
+    out << "\n    hottest_cold_layers:";
+    const std::size_t top = std::min<std::size_t>(8, hottest.size());
+    for (std::size_t i = 0; i < top; ++i) {
+      const std::size_t layer = hottest[i];
+      out << " L" << layer << '=' << cold[layer];
+    }
+    out << '\n';
+  }
   const auto write_phase = [&](const char* name,
                                const SsdPhaseStatsSnapshot& phase) {
     out << "  " << name << "_phase:\n"

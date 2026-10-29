@@ -1637,14 +1637,34 @@ bool Executor::StreamedMoeRows(
     AssignError(error_msg, "streamed experts have no enabled cache");
     return false;
   }
-  // Retire the just-consumed layer's lookahead credit before this path
-  // submits its own L+2 prediction. Otherwise L and L+1 can fill the cap.
-  expert_cache_->FinishPrefetch(layer.layer_index);
+  // Keep the current layer's in-flight prefetch alive so Resolve can promote
+  // and wait on it. Retire it only after the layer's demand resolves (and
+  // before this path submits its own L+2 prediction), or on early errors.
+  struct PrefetchRetirement {
+    gufo::storage::ExpertCacheManager* cache;
+    std::uint32_t layer;
+    bool retired{false};
+
+    ~PrefetchRetirement() { Retire(); }
+
+    void Retire() noexcept {
+      if (!retired && cache != nullptr) {
+        cache->FinishPrefetch(layer);
+        retired = true;
+      }
+    }
+  } prefetch_retirement{expert_cache_.get(), layer.layer_index};
   const auto& c = config();
   const std::uint32_t used = c.num_experts_used;
-  const std::uint32_t default_group_rows =
-      expert_cache_->demand_slots_available(layer.layer_index) /
-      std::max(used, 1u);
+  std::uint32_t available_slots =
+      expert_cache_->demand_slots_available(layer.layer_index);
+  if (available_slots < used) {
+    // A tiny budget may leave too few slots once prefetch pins are counted.
+    // Fall back to the old ordering rather than failing the layer.
+    prefetch_retirement.Retire();
+    available_slots = expert_cache_->demand_slots_available(layer.layer_index);
+  }
+  const std::uint32_t default_group_rows = available_slots / std::max(used, 1u);
   const std::uint32_t rows_per_compute_group =
       compute_group_rows == 0 ? default_group_rows : compute_group_rows;
   if (rows_per_compute_group == 0) {
@@ -1798,8 +1818,10 @@ bool Executor::StreamedMoeRows(
       offset += count;
     }
     UseScratch(base);
-    if (first + rows_per_window == rows)
+    if (first + rows_per_window == rows) {
+      prefetch_retirement.Retire();
       SubmitLookaheadPrefetch(lookahead, prefill_phase);
+    }
 
     const hipError_t recorded = hipEventRecord(expert_ids_ready_, stream_);
     const bool drain_ok =

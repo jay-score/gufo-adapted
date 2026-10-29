@@ -11,6 +11,8 @@
 
 namespace gufo::storage {
 
+inline constexpr std::size_t kMaxTrackedLayers = 128;
+
 struct SsdPhaseStatsSnapshot {
   std::uint64_t expert_requests{0};
   std::uint64_t cache_hits{0};
@@ -57,6 +59,10 @@ struct SsdStatsSnapshot {
   std::uint64_t ple_read_nanoseconds{0};
   std::uint64_t session_bytes_written{0};
   std::uint64_t elapsed_nanoseconds{0};
+  /// Decode-phase expert demand skew, indexed by transformer layer.
+  std::size_t decode_layer_count{0};
+  std::array<std::uint64_t, kMaxTrackedLayers> decode_layer_cold_misses{};
+  std::array<std::uint64_t, kMaxTrackedLayers> decode_layer_resident_hits{};
   SsdPhaseStatsSnapshot prefill;
   SsdPhaseStatsSnapshot decode;
 };
@@ -78,6 +84,11 @@ public:
                           std::uint64_t late_prefetch_requests,
                           std::chrono::nanoseconds hard_stall,
                           bool prefill = false) noexcept;
+  /// Per-layer decode demand outcomes, used to decide whether cache slots
+  /// should be redistributed across transformer layers.
+  void RecordLayerDemand(std::uint32_t layer_id, std::uint64_t resident_hits,
+                         std::uint64_t cold_misses,
+                         bool prefill = false) noexcept;
   void RecordPrefetchRequests(std::uint64_t requests,
                               bool prefill = false) noexcept;
   void RecordPrefetchUnused(std::uint64_t requests,
@@ -106,6 +117,11 @@ public:
   [[nodiscard]] std::string Format() const;
 
 private:
+  struct LayerCounters {
+    std::atomic<std::uint64_t> cold_misses{0};
+    std::atomic<std::uint64_t> resident_hits{0};
+  };
+
   struct PhaseCounters {
     std::atomic<std::uint64_t> expert_requests{0};
     std::atomic<std::uint64_t> cache_hits{0};
@@ -158,6 +174,8 @@ private:
   std::atomic<std::uint64_t> wasted_tail_bytes_read_{0};
   std::atomic<std::uint64_t> wasted_tail_stall_nanoseconds_{0};
   std::array<PhaseCounters, 2> phase_counters_{};
+  std::array<LayerCounters, kMaxTrackedLayers> layer_counters_{};
+  std::atomic<std::uint32_t> decode_layer_count_{0};
 };
 
 }  // namespace gufo::storage
