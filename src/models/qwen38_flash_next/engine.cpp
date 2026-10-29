@@ -295,6 +295,8 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
   }
   exec.dump_routing_path = options.dump_routing_path;
   exec.cache_router_bonus = options.cache_router_bonus;
+  exec.cache_router_bonus_core = options.cache_router_bonus_core;
+  exec.cache_router_bonus_skip_layers = options.cache_router_bonus_skip_layers;
   if (!options.cache_slot_profile.empty() &&
       options.cache_slot_profile != "uniform") {
     std::string profile_error;

@@ -60,6 +60,10 @@ struct ModelOptions {
   std::string cache_slot_profile{"uniform"};
   /// Raw-logit residency bonus for router selection (default off).
   float cache_router_bonus{0.0F};
+  /// Keep this many highest-logit experts unbiased by the residency bonus.
+  std::uint32_t cache_router_bonus_core{0};
+  /// Skip the residency bonus for this many leading layers.
+  std::uint32_t cache_router_bonus_skip_layers{0};
   /// Truncate MTP verification to the longest draft prefix whose live
   /// per-draft acceptance confidence reaches this floor. Zero (default)
   /// keeps the full chain verified.

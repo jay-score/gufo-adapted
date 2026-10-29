@@ -764,12 +764,13 @@ bool Executor::MoeBatch(const DeviceLayer& l, const float* x, float* out,
     return false;
   const std::int32_t* residency = nullptr;
   if (options_.cache_router_bonus != 0.0F &&
-      expert_id_to_slot_device_ != nullptr)
+      expert_id_to_slot_device_ != nullptr &&
+      l.layer_index >= options_.cache_router_bonus_skip_layers)
     residency = expert_id_to_slot_device_ +
                 static_cast<std::size_t>(l.layer_index) * c.num_experts;
   RouterTopK(base.router, c.num_experts + 1, base.ids, base.weights, rows,
              c.num_experts, c.num_experts_used, stream_, residency,
-             options_.cache_router_bonus);
+             options_.cache_router_bonus, options_.cache_router_bonus_core);
   std::vector<LookaheadPrediction> lookahead;
   if (!PredictLookahead(
           l, lookahead_residual != nullptr ? lookahead_residual : base.res,

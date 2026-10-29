@@ -266,6 +266,10 @@ public:
     std::uint32_t prefetch_layers_ahead{2};
     /// Raw-logit-space residency bonus for router selection.
     float cache_router_bonus{0.0F};
+    /// Number of highest-logit experts selected without the residency bonus.
+    std::uint32_t cache_router_bonus_core{0};
+    /// Skip the residency bonus for this many leading layers.
+    std::uint32_t cache_router_bonus_skip_layers{0};
     /// Per-layer slot counts; empty keeps the uniform cache.
     std::vector<std::uint32_t> cache_slot_profile;
   };
