@@ -33,7 +33,40 @@ gates are the deferred functional/performance half, Windows execution, the probe
 HIP branch and asset-heavy serving rows, lock-mode runtime qualification, and the
 exempt ASR in-tree test edge until Card 12 — none of which it claims. See its
 [execution record](09-serving-runtime-boundary.md#execution-record).
-Cards 10–29 are pending.
+Card 10 is complete for its in-card gates: published 44 forwarding headers
+(7 platform, 14 experimental, 23 stable); generated and verified the reproducible
+transitive `SURFACE` closure (97 paths, 4,235 LoC, 31,365 tokens) with zero serving
+leaks and zero model include leaks; bumped the extension API version to `0.1.2` in
+`include/gufo/ext/version.hpp` and `cmake/GufoExtension.cmake`; updated `include/gufo/ext/CHANGES.md`;
+extended diff/policy tests in `tests/tools/check_extension_api_test.py` with negative
+rejection proof; compiled representative HIP-less and HIP public consumers; and
+passed all bounded CPU/GPU CTests including continuation identity goldens. Its
+unresolved gates — none of which it claims — are the deferred functional/performance
+half, Windows execution, model include migration (deferred to Card 11), and the
+exempt ASR in-tree test edge until Card 12. See its
+[execution record](10-public-api-surface.md#execution-record).
+Card 11 is complete for its in-card gates: migrated all eight model implementations
+(152 includes across 95 files) to published `<gufo/ext/...>` headers with zero
+non-include edits; added `${CMAKE_SOURCE_DIR}/include` to root `CMakeLists.txt`;
+preserved 386 own root-relative and 65 family includes; enforced
+`--fail-on-model-core-includes` via `extension_model_core_includes_gate` with negative
+proof; and passed bounded CPU/GPU CTests including continuation identity goldens. Its
+unresolved gates — none of which it claims — are the deferred functional/performance
+half, native Windows binary execution, own/family root-relative coupling (to be migrated
+in cards 13–22), and the exempt ASR in-tree test edge until Card 12. See its
+[execution record](11-public-header-migrations.md#execution-record).
+Card 12 is complete for its in-card gates: added `gufo_test_support` STATIC library
+under `BUILD_TESTING` wrapping serving fixtures; migrated all four model API test suites
+(Qwen3-ASR, EmbeddingGemma 2, Qwen3-TTS, Qwen-Image-21) to `tests/support/model_api_test_support.hpp`;
+removed production serving sources from test targets; tightened the serving boundary
+ratchet in `tools/ci/check-extension-isolation.py` (with negative unit test proof) to forbid
+`src/cli/` includes across all boundary layers including model test trees; kept test machinery
+out of public `SURFACE` (97 paths unchanged) and out of production builds (`BUILD_TESTING=OFF`);
+and passed all bounded CPU/GPU CTests, continuation identity goldens, and format checks.
+Its unresolved gates — none of which it claims — are the deferred functional/performance half
+and remaining CLI text runner coupling in text model integration harnesses. See its
+[execution record](12-model-api-test-support.md#execution-record).
+Cards 13–29 are pending.
 The authorized implementation milestone ends after Card 14 is
 verified and committed; cards 15–29 document later scope only. This split is
 documentation work and does not itself advance any implementation status.

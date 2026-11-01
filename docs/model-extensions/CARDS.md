@@ -115,9 +115,9 @@ the current implementation milestone stops after Card 14.
 | 07 | 5; 06 | [Extract acyclic Qwen family libraries](cards/07-qwen-family-libraries.md) | complete |
 | 08 | 5; 07 | [Extract H3, evaluation and model-dependent targets](cards/08-h3-eval-and-test-targets.md) | complete |
 | 09 | 6; 08 | [Separate serving policy from extension execution](cards/09-serving-runtime-boundary.md) | complete |
-| 10 | 7; 09 | [Publish and measure the public extension API](cards/10-public-api-surface.md) | pending |
-| 11 | 7; 10 | [Migrate models to public extension headers](cards/11-public-header-migrations.md) | pending |
-| 12 | 7b; 11 | [Add in-tree model API test support](cards/12-model-api-test-support.md) | pending |
+| 10 | 7; 09 | [Publish and measure the public extension API](cards/10-public-api-surface.md) | complete |
+| 11 | 7; 10 | [Migrate models to public extension headers](cards/11-public-header-migrations.md) | complete |
+| 12 | 7b; 11 | [Add in-tree model API test support](cards/12-model-api-test-support.md) | complete |
 | 13 | 8 embeddings; 12 | [Migrate the EmbeddingGemma pilot](cards/13-embeddinggemma-pilot.md) | pending |
 | 14 | 9; 13 | [Generate infrastructure from model metadata](cards/14-generated-infrastructure.md) | pending |
 | 15 | 8 ASR; 14 | [Migrate speech recognition](cards/15-speech-recognition.md) | pending |
@@ -140,7 +140,7 @@ the current implementation milestone stops after Card 14.
 
 Card-specific records now live with their plans. Completed records describe
 historical evidence and limitations; they are not instructions to redo completed
-work. Cards 01–05 have now been through implementation, independent review and
+work. Cards 01–11 have now been through implementation, independent review and
 review integration. See the
 [three-agent workflow](cards/README.md#card-by-card-workflow) before continuing.
 
@@ -207,3 +207,51 @@ which it claims — are the deferred functional/performance half, Windows execut
 the probe's HIP branch and asset-heavy serving rows, the low-memory budget branch,
 per-model extension exclusion until `extension.json` exists, lock-mode runtime
 qualification beyond `diagnose`, and the exempt ASR in-tree test edge until Card 12.
+
+### Card 10
+
+See [Card 10: execution record](cards/10-public-api-surface.md#execution-record).
+It classified every model-used core/cache header into stable (`include/gufo/ext/`),
+platform (`include/gufo/ext/platform/`), experimental (`include/gufo/ext/experimental/`),
+host wrapper or private (the 2 test-only ASR edges to be removed in Card 12); published
+44 forwarding headers; generated and verified the reproducible transitive `SURFACE`
+closure (97 paths, 4,235 LoC, 31,365 tokens) with zero serving leaks and zero model
+include leaks; bumped the extension API version to `0.1.2` (`kApiRevision = 2`, `kApiVersion = "0.1.2"`)
+in `version.hpp` and `GufoExtension.cmake`; updated `CHANGES.md`; extended diff/policy tests
+in `check_extension_api_test.py` and enforced rejection on missing `ext-api` label;
+compiled representative HIP-less and HIP consumers; and passed all bounded CPU/GPU CTests
+including continuation identity goldens. Its unresolved gates — none of which it claims —
+are the deferred functional/performance half, Windows execution, model include migration
+(deferred to Card 11), and the exempt ASR in-tree test edge until Card 12.
+
+### Card 11
+
+See [Card 11: execution record](cards/11-public-header-migrations.md#execution-record).
+It migrated all eight model implementations (EmbeddingGemma, ASR, TTS, Image, H3,
+Qwen 27B, Flash-Next, DeepSeek) from private `src/core/` and `src/cache/` include paths
+to published `<gufo/ext/...>` headers (152 include directives across 95 files) with zero
+non-include line changes; updated root `CMakeLists.txt` to include `${CMAKE_SOURCE_DIR}/include`;
+preserved all 386 own root-relative includes and 65 family includes for their respective
+cards; preserved the 2 test-only ASR serving edges for Card 12; added the permanent
+`--fail-on-model-core-includes` isolation ratchet and CTest gate `extension_model_core_includes_gate`
+with negative unit test proof; and verified continuation identity goldens and bounded
+tests on both CPU and GPU presets. Its unresolved gates — none of which it claims — are
+the deferred functional/performance half, native Windows execution, own and family coupling
+(to be migrated with each model's card), and the exempt ASR test edge until Card 12.
+
+### Card 12
+
+See [Card 12: execution record](cards/12-model-api-test-support.md#execution-record).
+It added the in-tree `gufo_test_support` STATIC library under `BUILD_TESTING` wrapping
+HTTP and serving fixtures (`HttpRequest`, `HttpResponse`, `AsrService`, `AudioAsrApi`,
+`AudioStream`, `TtsService`, `AudioTtsApi`, `EmbeddingService`, `EmbeddingsApi`, `ImageService`, `ImageApi`),
+and migrated all four model API test suites (Qwen3-ASR, EmbeddingGemma 2, Qwen3-TTS, Qwen-Image-21)
+from production `src/cli/serve/*.hpp` includes to `tests/support/model_api_test_support.hpp`;
+removed production serving sources from test compile targets; tightened the serving boundary
+ratchet in `tools/ci/check-extension-isolation.py` to forbid `src/cli/` includes from all
+`BOUNDARY_LAYERS` (including model test trees); preserved `include/gufo/ext/SURFACE` (97 paths)
+without leaking test machinery; proved exclusion under `BUILD_TESTING=OFF`; and passed bounded
+CPU/GPU tests, continuation identity goldens, and format checks. Its unresolved gates — none of
+which it claims — are the deferred functional/performance half (deferred to post-Card-14 qualification
+window) and remaining CLI text runner coupling in text model integration harnesses.
+

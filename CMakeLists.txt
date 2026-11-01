@@ -26,7 +26,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(GUFO_RELEASE_VERSION "development" CACHE STRING "Gufo release version")
 set(GUFO_REVISION "unknown" CACHE STRING "Gufo source revision")
-include_directories(${CMAKE_SOURCE_DIR})
+include_directories(${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
 
 # Reuse the compiler cache whenever it is installed, as the CPU check
 # derivations do. HIP kernels stay uncached: hipcc drive files and bitcode
@@ -556,6 +556,13 @@ if (BUILD_TESTING)
   endif()
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+  # In-tree test support for model API tests (RFC Step 7b, Card 12).
+  # Wraps HTTP and serving fixtures so tests stop reaching src/cli/ directly.
+  # Excluded from production, external extensions, and installation.
+  add_library(gufo_test_support STATIC tests/support/test_support.cpp)
+  target_include_directories(gufo_test_support PUBLIC ${CMAKE_SOURCE_DIR})
+  target_link_libraries(gufo_test_support PUBLIC gufo_http gufo_serving)
+
   add_subdirectory(tests/cache)
   add_subdirectory(tests/extensions)
 
@@ -739,6 +746,10 @@ if (BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/check-extension-isolation.py
       --fail-on-serving-boundary)
+  add_test(NAME extension_model_core_includes_gate
+    COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/check-extension-isolation.py
+      --fail-on-model-core-includes)
   add_test(NAME extension_family_graph_gate
     COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/check-extension-isolation.py
@@ -752,6 +763,7 @@ if (BUILD_TESTING)
     LABELS "cpu;repository" TIMEOUT 180)
   set_tests_properties(extension_isolation_report
     extension_core_model_includes_gate extension_family_graph_gate
+    extension_model_core_includes_gate
     extension_serving_boundary_gate extension_target_ownership_gate
     PROPERTIES LABELS "cpu;repository" TIMEOUT 30)
 
@@ -1016,10 +1028,8 @@ if (BUILD_TESTING)
     SKIP_RETURN_CODE 77)
 
   add_executable(qwen3_tts_audio_api_test
-    tests/models/qwen3_tts/audio_api_test.cpp
-    src/cli/serve/audio_tts_api.cpp
-    src/cli/serve/tts_service.cpp)
-  target_link_libraries(qwen3_tts_audio_api_test PRIVATE gufo_qwen3_tts)
+    tests/models/qwen3_tts/audio_api_test.cpp)
+  target_link_libraries(qwen3_tts_audio_api_test PRIVATE gufo_qwen3_tts gufo_test_support)
   add_test(NAME qwen3_tts_audio_api_test COMMAND qwen3_tts_audio_api_test)
   set_tests_properties(qwen3_tts_audio_api_test PROPERTIES
     LABELS "cpu;models;qwen3-tts;server;api;audio;quality")
