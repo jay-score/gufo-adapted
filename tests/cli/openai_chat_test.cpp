@@ -21,6 +21,10 @@
 #include "src/families/qwen/control_tokens/control_tokens.hpp"
 #include "src/models/deepseek_v4_flash/chat_template.hpp"
 
+namespace gufo::models::deepseek_v4_flash {
+void RegisterToolDialect();
+}
+
 using gufo::tokenization::kImEnd;
 
 namespace {
@@ -6873,6 +6877,7 @@ void TestChatUsageReportsReasoningTokens() {
 }
 
 int main() {
+  gufo::models::deepseek_v4_flash::RegisterToolDialect();
   TestLogprobs();
   TestToolCallRenderParseRoundTrip();
   TestToolTagBoundaries();
