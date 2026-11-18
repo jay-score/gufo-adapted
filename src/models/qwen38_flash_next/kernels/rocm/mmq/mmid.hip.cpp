@@ -1,3 +1,6 @@
+#include <climits>
+#include <limits>
+
 #include "qfn_mmq_prelude.h"
 #include <gufo/ext/experimental/managed_alloc.hpp>
 namespace qfn_mmq {
@@ -134,16 +137,68 @@ static __global__ void mm_ids_scatter_kernel(
 
 static int32_t * g_ids_scratch = nullptr;
 static size_t g_ids_scratch_elems = 0;
+static bool g_ids_scratch_frozen = false;
 
-static void launch_mm_ids_helper_scan(
+static int reserve_ids_scratch(int max_tokens, int n_experts, int n_expert_used,
+                               bool freeze) {
+    if (max_tokens <= 0 || n_experts <= 0 || n_expert_used <= 0 ||
+        max_tokens > INT_MAX / n_expert_used) {
+        return -1;
+    }
+    const size_t n_rows = (size_t)max_tokens * n_expert_used;
+    const size_t n_blocks = (n_rows + kIdsRowsPerBlock - 1) / kIdsRowsPerBlock;
+    if (n_blocks >
+        (std::numeric_limits<size_t>::max() - n_rows) / (size_t(n_experts) + 1)) {
+        return -1;
+    }
+    const size_t need = n_rows + n_blocks * (size_t(n_experts) + 1);
+    if (need > std::numeric_limits<size_t>::max() / sizeof(int32_t) ||
+        (need > g_ids_scratch_elems && g_ids_scratch_frozen)) {
+        return -1;
+    }
+    if (need > g_ids_scratch_elems) {
+        int32_t * grown = nullptr;
+        const hipError_t status =
+            gufo::hip::AllocateDevice(&grown, need * sizeof(int32_t));
+        if (status != hipSuccess)
+            return -1;
+        if (g_ids_scratch != nullptr)
+            (void)hipFree(g_ids_scratch);
+        g_ids_scratch = grown;
+        g_ids_scratch_elems = need;
+    }
+    g_ids_scratch_frozen = freeze;
+    return 0;
+}
+
+static bool launch_mm_ids_helper_scan(
         const int32_t * __restrict__ ids, int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst, int32_t * __restrict__ expert_bounds,
         const int n_experts, const int n_tokens, const int n_expert_used, const int nchannels_y, const int si1, const int sis1, hipStream_t stream) {
+    if (n_tokens <= 0 || n_expert_used <= 0 || n_experts <= 0 ||
+        n_tokens > INT_MAX / n_expert_used) {
+        return false;
+    }
     const int n_rows = n_tokens * n_expert_used;
-    const int n_blocks = (n_rows + kIdsRowsPerBlock - 1) / kIdsRowsPerBlock;
-    const size_t need = (size_t)n_rows + (size_t)n_blocks * (n_experts + 1);
+    const int n_blocks = (n_rows - 1) / kIdsRowsPerBlock + 1;
+    const size_t n_expert_columns = (size_t)n_experts + 1;
+    if ((size_t)n_blocks > (std::numeric_limits<size_t>::max() - (size_t)n_rows) /
+                               n_expert_columns) {
+        return false;
+    }
+    const size_t need = (size_t)n_rows + (size_t)n_blocks * n_expert_columns;
+    if (need > std::numeric_limits<size_t>::max() / sizeof(int32_t)) {
+        return false;
+    }
     const size_t lds = (size_t)(n_experts + 1) * kIdsWaves * sizeof(int32_t);
     GGML_ASSERT(n_rows > 0 && lds <= 48 * 1024 && "routed id maps: shape");
     if (need > g_ids_scratch_elems) {
+        if (g_ids_scratch_frozen) {
+            fprintf(stderr,
+                    "routed id-map scratch exceeded its model-load reserve "
+                    "(%zu > %zu elements)\n",
+                    need, g_ids_scratch_elems);
+            return false;
+        }
         // Grown only while the previous buffer may still be in flight, so
         // the old allocation is left to the process (it happens once per
         // widest shape).
@@ -161,19 +216,25 @@ static void launch_mm_ids_helper_scan(
     mm_ids_scatter_kernel<<<n_blocks, kIdsRowsPerBlock, 0, stream>>>(
         ids, local_rank, block_counts, expert_bounds, ids_src1, ids_dst, n_rows,
         n_experts, n_expert_used, nchannels_y, si1, sis1);
+    return hipGetLastError() == hipSuccess;
 }
 
-void ggml_hip_launch_mm_ids_helper(
+bool ggml_hip_launch_mm_ids_helper(
         const int32_t * __restrict__ ids, int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst, int32_t * __restrict__ expert_bounds,
         const int n_experts, const int n_tokens, const int n_expert_used, const int nchannels_y, const int si1, const int sis1, hipStream_t stream) {
-    launch_mm_ids_helper_scan(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, stream);
+    return launch_mm_ids_helper_scan(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, stream);
 }
 
 }  // namespace qfn_mmq
 
+extern "C" int qfn_mmq_reserve_ids_scratch(int max_tokens, int n_experts,
+                                           int n_expert_used, int freeze) {
+    return qfn_mmq::reserve_ids_scratch(max_tokens, n_experts, n_expert_used,
+                                        freeze != 0);
+}
+
 extern "C" int qfn_mmq_build_ids_maps(
         const int32_t * ids, int32_t * ids_src1, int32_t * ids_dst, int32_t * expert_bounds,
         int n_experts, int n_tokens, int n_expert_used, int nchannels_y, int si1, int sis1, hipStream_t stream) {
-    qfn_mmq::ggml_hip_launch_mm_ids_helper(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, stream);
-    return hipGetLastError() == hipSuccess ? 0 : -1;
+    return qfn_mmq::ggml_hip_launch_mm_ids_helper(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, stream) ? 0 : -1;
 }

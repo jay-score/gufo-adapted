@@ -28,6 +28,9 @@ class GgufReader;
 
 namespace gufo::models::qwen38_flash_next {
 
+inline constexpr std::size_t kDefaultPleShelfBytes =
+    std::size_t{128} * 1024 * 1024;
+
 struct ModelWeights;
 struct MtpWeights;
 struct MtpCandidateLogits;
@@ -43,12 +46,38 @@ struct PrefillCheckpoint;
 
 struct ModelOptions {
   std::uint32_t max_context = 4096;
+  /// Zero keeps the legacy unlimited device budget. Positive values are GiB.
+  double memory_budget_gb{0.0};
+  /// Print SSD/cache/process-memory telemetry after inference.
+  bool ssd_stats{false};
+  /// Weight learned expert priors during cache victim selection (default off).
+  float cache_prior_bias{0.0F};
+  /// Expert-cache victim policy: lru, hotness, or decayed (default lru).
+  std::string cache_policy{"lru"};
+  /// Per-layer expert-cache slots: uniform, skewed, or a JSON profile path.
+  /// `skewed` is scaled to the budget-derived slot total.
+  std::string cache_slot_profile{"skewed"};
+  /// Raw-logit residency bonus for router selection (default off).
+  float cache_router_bonus{0.0F};
+  /// Keep this many highest-logit experts unbiased by the residency bonus.
+  std::uint32_t cache_router_bonus_core{0};
+  /// Skip the residency bonus for this many leading layers.
+  std::uint32_t cache_router_bonus_skip_layers{0};
+  /// Truncate MTP verification to the longest draft prefix whose live
+  /// per-draft acceptance confidence reaches this floor. Zero (default)
+  /// keeps the full chain verified.
+  float mtp_verify_acceptance_floor{0.0F};
+  /// Compressed-row PLE shelf size in bytes. Zero disables the shelf.
+  std::size_t ple_shelf_bytes{kDefaultPleShelfBytes};
   /// Optional MTP draft sidecar (`mtp-...-shared-*.gguf`). Empty leaves
   /// speculative decoding off.
   std::string mtp_model_path;
   /// Maximum proposals per cycle; acceptance history selects the length.
   std::uint32_t max_draft_tokens = kMaxMtpDraftTokens;
   std::string vision_model_path;
+  /// Let repeated committed text fill remaining MTP draft slots (default on;
+  /// the prompt CLI exposes it as an opt-in flag).
+  bool prompt_lookup{true};
   /// Fixed serving capacity used by the calibrated MTP cost model. Keeping
   /// it independent of scheduler timing preserves seeded request replay.
   std::uint32_t decode_concurrency = 1;
@@ -57,6 +86,19 @@ struct ModelOptions {
   /// artifact's own setting, which is always off: no GGUF metadata key sets
   /// it today.
   std::optional<RopeScaling> rope_scaling{};
+  /// Extra device session capacity the caller reserves for continuation-cache
+  /// slots. Text-only callers leave this zero; serve charges cached slots
+  /// through its admission ledger.
+  std::size_t continuation_cache_bytes{0};
+  /// Token-prior prefetch horizon in layers. Two preserves the historical
+  /// lookahead; larger values fan priors out to layers 3..N-1.
+  std::uint32_t prefetch_layers_ahead{2};
+  /// Reserve worst-case per-session image state even before an image request.
+  /// Text-only callers can disable it; serve keeps it enabled unless budgeted
+  /// without an explicit --mmproj.
+  bool reserve_vision_session_bytes{true};
+  /// Optional binary GURT routing trace for offline cache replay.
+  std::string dump_routing_path;
 };
 
 class Session;
@@ -107,6 +149,19 @@ public:
   [[nodiscard]] std::size_t SessionBytes(core::SessionMode mode,
                                          std::uint32_t context) const noexcept;
   [[nodiscard]] std::size_t DeferredScratchBytes() const;
+  [[nodiscard]] const std::optional<storage::MemoryBudgetPlan>& MemoryBudget()
+      const noexcept {
+    return memory_budget_;
+  }
+  [[nodiscard]] std::string SsdStatsReport() const;
+  /// Stage 0: folds a verification cycle's rejected-tail cold demand reads
+  /// (expert count, bytes, hard-stall nanoseconds) into the SSD stats.
+  void RecordVerifyTailWaste(std::uint64_t cold_experts, std::uint64_t bytes,
+                             std::uint64_t stall_nanoseconds) noexcept;
+  [[nodiscard]] std::shared_ptr<storage::SsdStats> SsdStatsHandle()
+      const noexcept {
+    return ssd_stats_;
+  }
   /// Caps wide copy verification (Executor::LimitCopyRows); call before any
   /// session is created.
   void LimitCopyRows(std::uint32_t rows) noexcept;
@@ -123,6 +178,7 @@ private:
   Model() = default;
 
   ModelOptions options_;
+  std::shared_ptr<storage::SsdStats> ssd_stats_;
   std::shared_ptr<core::GgufReader> reader_;
   std::shared_ptr<core::GgufReader> mtp_reader_;
   std::unique_ptr<ModelWeights> weights_;
@@ -132,6 +188,7 @@ private:
   std::unique_ptr<rocm::DeviceModel> device_;
   std::unique_ptr<rocm::Executor> executor_;
   std::shared_ptr<qwen::vision::Encoder> vision_;
+  std::optional<storage::MemoryBudgetPlan> memory_budget_;
   MtpBatchController batch_policy_;
   /// MTP drafts may use the small head (draft_vocab.hpp).
   bool draft_subset_{false};
@@ -244,12 +301,24 @@ public:
   struct SpeculativeStats {
     std::uint64_t cycles{0};
     std::uint64_t drafted{0};
+    /// Draft rows inside the verified prefix (Stage 1; equals drafted when
+    /// the verification floor is off).
+    std::uint64_t verified{0};
     std::uint64_t accepted{0};
     /// Cycles whose draft scored the small head (draft_vocab.hpp).
     std::uint64_t small_head_cycles{0};
     /// Of drafted/accepted: proposals copied by prompt lookup.
     std::uint64_t lookup{0};
     std::uint64_t lookup_accepted{0};
+    /// Stage 0: cold demand expert reads and hard-stall time during
+    /// verification, split at the accepted prefix. Rows past the committed
+    /// prefix are the rejected tail.
+    std::uint64_t prefix_cold_experts{0};
+    std::uint64_t prefix_cold_bytes{0};
+    std::uint64_t prefix_stall_nanoseconds{0};
+    std::uint64_t tail_cold_experts{0};
+    std::uint64_t tail_cold_bytes{0};
+    std::uint64_t tail_stall_nanoseconds{0};
   };
   [[nodiscard]] const SpeculativeStats& Statistics() const noexcept {
     return stats_;
@@ -327,7 +396,7 @@ private:
   bool DraftCatchUp(std::int32_t next_token, bool propose,
                     std::string* error_msg,
                     MtpCandidateLogits* candidates = nullptr,
-                    bool draft_subset = false);
+                    bool draft_subset = false, bool token_output = false);
   bool DraftReplay(std::int32_t next_token, std::vector<std::int32_t>* replay,
                    std::int32_t* hidden_row, std::string* error_msg) const;
   static bool DraftCatchUpBatch(std::span<const AdvanceRequest> requests,

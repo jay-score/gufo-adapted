@@ -911,6 +911,8 @@ int ggml_hip_get_device();
 struct ggml_hip_pool {
     virtual ~ggml_hip_pool() = default;
 
+    virtual bool reserve(size_t /*bytes*/) { return false; }
+    virtual void freeze() {}
     virtual void * alloc(size_t size, size_t * actual_size) = 0;
     virtual void free(void * ptr, size_t size) = 0;
 };

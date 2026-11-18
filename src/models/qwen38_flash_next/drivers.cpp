@@ -194,13 +194,97 @@ std::shared_ptr<models::qwen38_flash_next::Model> LoadFlashNextModel(
     std::cerr << "Unsupported Flash-Next chat template: " << error << '\n';
     return nullptr;
   }
+  const auto& po = opt.provider_options;
+  const double memory_budget_gb =
+      ext::FindOption<double>(po, "--memory-budget-gb")
+          ? *ext::FindOption<double>(po, "--memory-budget-gb")
+          : 0.0;
+  const bool ssd_stats = ext::FindOption<bool>(po, "--ssd-stats")
+                             ? *ext::FindOption<bool>(po, "--ssd-stats")
+                             : false;
+  const float cache_prior_bias =
+      ext::FindOption<double>(po, "--cache-prior-bias")
+          ? static_cast<float>(
+                *ext::FindOption<double>(po, "--cache-prior-bias"))
+          : 0.0F;
+  const std::string cache_policy =
+      ext::FindOption<std::string>(po, "--cache-policy")
+          ? *ext::FindOption<std::string>(po, "--cache-policy")
+          : "lru";
+  const std::string cache_slot_profile =
+      ext::FindOption<std::string>(po, "--cache-slot-profile")
+          ? *ext::FindOption<std::string>(po, "--cache-slot-profile")
+          : "skewed";
+  const float cache_router_bonus =
+      ext::FindOption<double>(po, "--cache-router-bonus")
+          ? static_cast<float>(
+                *ext::FindOption<double>(po, "--cache-router-bonus"))
+          : 0.0F;
+  const auto* core_opt =
+      ext::FindOption<std::int64_t>(po, "--cache-router-bonus-core");
+  const auto* skip_opt =
+      ext::FindOption<std::int64_t>(po, "--cache-router-bonus-skip-layers");
+  const float mtp_verify_acceptance_floor =
+      ext::FindOption<double>(po, "--mtp-verify-acceptance-floor")
+          ? static_cast<float>(
+                *ext::FindOption<double>(po, "--mtp-verify-acceptance-floor"))
+          : 0.0F;
+  const auto* ple_shelf_opt = ext::FindOption<bool>(po, "--ple-shelf");
+  const auto* ple_shelf_mib_opt =
+      ext::FindOption<std::int64_t>(po, "--ple-shelf-mib");
+  if (ple_shelf_opt && ple_shelf_mib_opt) {
+    std::cerr << "--ple-shelf and --ple-shelf-mib are mutually exclusive\n";
+    return nullptr;
+  }
+  if (ple_shelf_mib_opt &&
+      (*ple_shelf_mib_opt < 0 ||
+       *ple_shelf_mib_opt > std::numeric_limits<std::uint32_t>::max())) {
+    std::cerr << "Invalid integer for ple-shelf-mib\n";
+    return nullptr;
+  }
+  const std::size_t ple_shelf_bytes =
+      ple_shelf_mib_opt
+          ? static_cast<std::size_t>(*ple_shelf_mib_opt) * 1024 * 1024
+          : models::qwen38_flash_next::kDefaultPleShelfBytes;
+  const auto* prefetch_opt =
+      ext::FindOption<std::int64_t>(po, "--prefetch-layers-ahead");
+  if (prefetch_opt && (*prefetch_opt <= 0 || *prefetch_opt > 64)) {
+    std::cerr << "Invalid integer for prefetch-layers-ahead\n";
+    return nullptr;
+  }
+  const std::uint32_t prefetch_layers_ahead =
+      prefetch_opt ? static_cast<std::uint32_t>(*prefetch_opt) : 2U;
+  const std::string dump_routing_path =
+      ext::FindOption<std::string>(po, "--dump-routing")
+          ? *ext::FindOption<std::string>(po, "--dump-routing")
+          : std::string{};
+  const bool prompt_lookup = ext::FindOption<bool>(po, "--prompt-lookup")
+                                 ? *ext::FindOption<bool>(po, "--prompt-lookup")
+                                 : false;
   auto model = models::qwen38_flash_next::Model::Load(
       opt.model_path,
       {.max_context = kDefaultContext,
+       .memory_budget_gb = memory_budget_gb,
+       .ssd_stats = ssd_stats,
+       .cache_prior_bias = cache_prior_bias,
+       .cache_policy = cache_policy,
+       .cache_slot_profile = cache_slot_profile,
+       .cache_router_bonus = cache_router_bonus,
+       .cache_router_bonus_core =
+           core_opt ? static_cast<std::uint32_t>(*core_opt) : 0U,
+       .cache_router_bonus_skip_layers =
+           skip_opt ? static_cast<std::uint32_t>(*skip_opt) : 0U,
+       .mtp_verify_acceptance_floor = mtp_verify_acceptance_floor,
+       .ple_shelf_bytes = ple_shelf_bytes,
        .mtp_model_path =
            opt.speculative_backend == "mtp" ? opt.mtp_model_path : "",
        .max_draft_tokens = opt.draft_tokens,
-       .vision_model_path = opt.vision_model_path},
+       .vision_model_path = opt.vision_model_path,
+       .prompt_lookup = prompt_lookup,
+       .prefetch_layers_ahead = prefetch_layers_ahead,
+       .reserve_vision_session_bytes =
+           !opt.image_paths.empty() || !opt.vision_model_path.empty(),
+       .dump_routing_path = dump_routing_path},
       &error);
   PrintModelLoadTime(load_start, model != nullptr);
   if (!model)
@@ -221,10 +305,15 @@ int GenerateFlashNextResponse(const ext::TextPromptOptions& opt,
   }
   const std::vector<std::int32_t> input(prompt.begin(), prompt.end());
   std::string error;
+  const auto prefill_start = std::chrono::steady_clock::now();
   if (!session.Sync(input, &error)) {
     std::cerr << "Flash-Next prefill failed: " << error << '\n';
     return 1;
   }
+  const double prefill_seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                    prefill_start)
+          .count();
   sampling::SamplerState sampler(opt.sampling, prompt);
   std::vector<tokenization::TokenId> generated;
   const auto stats_before = session.Statistics();
@@ -247,12 +336,19 @@ int GenerateFlashNextResponse(const ext::TextPromptOptions& opt,
       break;
   }
   std::cout << '\n';
-  if (opt.verbose) {
-    const double seconds =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
-            .count();
+  const bool ssd_stats =
+      ext::FindOption<bool>(opt.provider_options, "--ssd-stats") &&
+      *ext::FindOption<bool>(opt.provider_options, "--ssd-stats");
+  const double seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
+          .count();
+  if (opt.verbose || ssd_stats) {
+    std::cerr << "Prefill " << prompt.size() << " tokens in " << prefill_seconds
+              << " s (" << prompt.size() / prefill_seconds << " tok/s)\n";
     std::cerr << "Generated " << generated.size() << " tokens ("
               << generated.size() / seconds << " tok/s)\n";
+  }
+  if (opt.verbose) {
     const auto& stats = session.Statistics();
     if (stats.cycles != stats_before.cycles) {
       std::cerr << "[Speculative]: cycles="
@@ -261,9 +357,27 @@ int GenerateFlashNextResponse(const ext::TextPromptOptions& opt,
                 << " accepted=" << stats.accepted - stats_before.accepted
                 << " lookup_proposed=" << stats.lookup - stats_before.lookup
                 << " lookup_accepted="
-                << stats.lookup_accepted - stats_before.lookup_accepted << '\n';
+                << stats.lookup_accepted - stats_before.lookup_accepted
+                << " prefix_cold_misses="
+                << stats.prefix_cold_experts - stats_before.prefix_cold_experts
+                << " tail_cold_misses="
+                << stats.tail_cold_experts - stats_before.tail_cold_experts
+                << " prefix_stall_ms="
+                << static_cast<double>(stats.prefix_stall_nanoseconds -
+                                       stats_before.prefix_stall_nanoseconds) /
+                       1.0e6
+                << " tail_stall_ms="
+                << static_cast<double>(stats.tail_stall_nanoseconds -
+                                       stats_before.tail_stall_nanoseconds) /
+                       1.0e6
+                << '\n';
     }
     PrintTokenTrace(generated);
+  }
+  if (ssd_stats) {
+    const auto report = model.SsdStatsReport();
+    if (!report.empty())
+      std::cerr << report;
   }
   return 0;
 }
@@ -326,14 +440,85 @@ int RunQwen38FlashNextBenchmarkImpl(
     return 1;
   }
 
+  const auto& po = options.provider_options;
+  const double memory_budget_gb =
+      ext::FindOption<double>(po, "--memory-budget-gb")
+          ? *ext::FindOption<double>(po, "--memory-budget-gb")
+          : 0.0;
+  const bool ssd_stats = ext::FindOption<bool>(po, "--ssd-stats")
+                             ? *ext::FindOption<bool>(po, "--ssd-stats")
+                             : false;
+  const float cache_prior_bias =
+      ext::FindOption<double>(po, "--cache-prior-bias")
+          ? static_cast<float>(
+                *ext::FindOption<double>(po, "--cache-prior-bias"))
+          : 0.0F;
+  const std::string cache_policy =
+      ext::FindOption<std::string>(po, "--cache-policy")
+          ? *ext::FindOption<std::string>(po, "--cache-policy")
+          : "lru";
+  const std::string cache_slot_profile =
+      ext::FindOption<std::string>(po, "--cache-slot-profile")
+          ? *ext::FindOption<std::string>(po, "--cache-slot-profile")
+          : "skewed";
+  const float cache_router_bonus =
+      ext::FindOption<double>(po, "--cache-router-bonus")
+          ? static_cast<float>(
+                *ext::FindOption<double>(po, "--cache-router-bonus"))
+          : 0.0F;
+  const auto* core_opt =
+      ext::FindOption<std::int64_t>(po, "--cache-router-bonus-core");
+  const auto* skip_opt =
+      ext::FindOption<std::int64_t>(po, "--cache-router-bonus-skip-layers");
+  const float mtp_verify_acceptance_floor =
+      ext::FindOption<double>(po, "--mtp-verify-acceptance-floor")
+          ? static_cast<float>(
+                *ext::FindOption<double>(po, "--mtp-verify-acceptance-floor"))
+          : 0.0F;
+  const auto* ple_shelf_opt = ext::FindOption<bool>(po, "--ple-shelf");
+  const auto* ple_shelf_mib_opt =
+      ext::FindOption<std::int64_t>(po, "--ple-shelf-mib");
+  if (ple_shelf_opt && ple_shelf_mib_opt) {
+    std::cerr
+        << "Error: --ple-shelf and --ple-shelf-mib are mutually exclusive\n";
+    return 1;
+  }
+  const std::size_t ple_shelf_bytes =
+      ple_shelf_mib_opt
+          ? static_cast<std::size_t>(*ple_shelf_mib_opt) * 1024 * 1024
+          : qfn::kDefaultPleShelfBytes;
+  const auto* prefetch_opt =
+      ext::FindOption<std::int64_t>(po, "--prefetch-layers-ahead");
+  const std::uint32_t prefetch_layers_ahead =
+      prefetch_opt ? static_cast<std::uint32_t>(*prefetch_opt) : 2U;
+  const std::string dump_routing_path =
+      ext::FindOption<std::string>(po, "--dump-routing")
+          ? *ext::FindOption<std::string>(po, "--dump-routing")
+          : std::string{};
+
   std::string error;
   auto model = qfn::Model::Load(
       options.model_path,
       qfn::ModelOptions{
           .max_context = static_cast<std::uint32_t>(required_context),
+          .memory_budget_gb = memory_budget_gb,
+          .ssd_stats = ssd_stats,
+          .cache_prior_bias = cache_prior_bias,
+          .cache_policy = cache_policy,
+          .cache_slot_profile = cache_slot_profile,
+          .cache_router_bonus = cache_router_bonus,
+          .cache_router_bonus_core =
+              core_opt ? static_cast<std::uint32_t>(*core_opt) : 0U,
+          .cache_router_bonus_skip_layers =
+              skip_opt ? static_cast<std::uint32_t>(*skip_opt) : 0U,
+          .mtp_verify_acceptance_floor = mtp_verify_acceptance_floor,
+          .ple_shelf_bytes = ple_shelf_bytes,
           .mtp_model_path = mtp ? options.mtp_model_path : "",
           .max_draft_tokens = std::max<std::uint32_t>(1, options.draft_tokens),
           .rope_scaling = rope_scaling,
+          .prefetch_layers_ahead = prefetch_layers_ahead,
+          .reserve_vision_session_bytes = false,
+          .dump_routing_path = dump_routing_path,
       },
       &error);
   if (model == nullptr) {
@@ -525,21 +710,27 @@ int RunQwen38FlashNextBenchmarkImpl(
         runs.push_back(static_cast<double>(generation_length) / seconds);
         if (options.verbose) {
           const auto stats = session->Statistics();
-          std::cerr << "Qwen3.8-Flash-Next tg depth=" << depth
-                    << " cycles=" << stats.cycles
-                    << " drafted=" << stats.drafted
-                    << " accepted=" << stats.accepted
-                    << " lookup_proposed=" << stats.lookup
-                    << " lookup_accepted=" << stats.lookup_accepted
-                    << " output_sha256="
-                    << crypto::Sha256Hex(
-                           std::span(reinterpret_cast<const std::uint8_t*>(
-                                         generated.data()),
-                                     generated.size() * sizeof(std::int32_t)))
-                    << " text="
-                    << model->Decode(std::span(generated).first(
-                           std::min<std::size_t>(generated.size(), 48)))
-                    << '\n';
+          std::cerr
+              << "Qwen3.8-Flash-Next tg depth=" << depth
+              << " cycles=" << stats.cycles << " drafted=" << stats.drafted
+              << " accepted=" << stats.accepted
+              << " lookup_proposed=" << stats.lookup
+              << " lookup_accepted=" << stats.lookup_accepted
+              << " prefix_cold_misses=" << stats.prefix_cold_experts
+              << " tail_cold_misses=" << stats.tail_cold_experts
+              << " tail_cold_bytes=" << stats.tail_cold_bytes
+              << " prefix_stall_ms="
+              << static_cast<double>(stats.prefix_stall_nanoseconds) / 1.0e6
+              << " tail_stall_ms="
+              << static_cast<double>(stats.tail_stall_nanoseconds) / 1.0e6
+              << " output_sha256="
+              << crypto::Sha256Hex(std::span(
+                     reinterpret_cast<const std::uint8_t*>(generated.data()),
+                     generated.size() * sizeof(std::int32_t)))
+              << " text="
+              << model->Decode(std::span(generated).first(
+                     std::min<std::size_t>(generated.size(), 48)))
+              << '\n';
         }
       }
       print_result(MakeTestName("tg", generation_length, depth),
@@ -547,6 +738,11 @@ int RunQwen38FlashNextBenchmarkImpl(
     }
   }
   std::cout << '\n';
+  if (ssd_stats) {
+    const auto report = model->SsdStatsReport();
+    if (!report.empty())
+      std::cerr << report;
+  }
   return 0;
 }
 

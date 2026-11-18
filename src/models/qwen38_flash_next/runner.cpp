@@ -677,9 +677,18 @@ public:
     step.draft_rounds = stats_after.cycles - stats_before.cycles;
     step.draft_tokens = stats_after.drafted - stats_before.drafted;
     step.draft_accepted_tokens = stats_after.accepted - stats_before.accepted;
+    step.draft_verified_tokens = stats_after.verified - stats_before.verified;
     step.lookup_tokens = stats_after.lookup - stats_before.lookup;
     step.lookup_accepted_tokens =
         stats_after.lookup_accepted - stats_before.lookup_accepted;
+    step.prefix_cold_misses =
+        stats_after.prefix_cold_experts - stats_before.prefix_cold_experts;
+    step.tail_cold_misses =
+        stats_after.tail_cold_experts - stats_before.tail_cold_experts;
+    step.prefix_stall_nanoseconds = stats_after.prefix_stall_nanoseconds -
+                                    stats_before.prefix_stall_nanoseconds;
+    step.tail_stall_nanoseconds = stats_after.tail_stall_nanoseconds -
+                                  stats_before.tail_stall_nanoseconds;
     return step;
   }
 
@@ -767,11 +776,20 @@ public:
       step.draft_rounds = stats.cycles - before[i].cycles;
       step.draft_tokens = stats.drafted - before[i].drafted;
       step.draft_accepted_tokens = stats.accepted - before[i].accepted;
+      step.draft_verified_tokens = stats.verified - before[i].verified;
       // A request whose peers dropped out runs a single-session step,
       // which can use prompt lookup.
       step.lookup_tokens = stats.lookup - before[i].lookup;
       step.lookup_accepted_tokens =
           stats.lookup_accepted - before[i].lookup_accepted;
+      step.prefix_cold_misses =
+          stats.prefix_cold_experts - before[i].prefix_cold_experts;
+      step.tail_cold_misses =
+          stats.tail_cold_experts - before[i].tail_cold_experts;
+      step.prefix_stall_nanoseconds =
+          stats.prefix_stall_nanoseconds - before[i].prefix_stall_nanoseconds;
+      step.tail_stall_nanoseconds =
+          stats.tail_stall_nanoseconds - before[i].tail_stall_nanoseconds;
     }
     return steps;
   }
@@ -787,6 +805,10 @@ public:
         RequireQwenFlashNextState(state).session().NgramRowTotals();
     return {totals.rows, totals.dedup_rows, totals.cache_hits,
             totals.disk_reads};
+  }
+
+  [[nodiscard]] std::string SsdStatsReport() const override {
+    return model_->SsdStatsReport();
   }
 
 private:
@@ -880,17 +902,118 @@ std::shared_ptr<ext::TextModelRunner> CreateQwenFlashNextTextRunner(
       *error = "Qwen3.8-Flash-Next MTP HTTP decoding requires --mtp-model";
     return nullptr;
   }
+  const auto& po = options.provider_options;
+  const double memory_budget_gb =
+      ext::FindOption<double>(po, "--memory-budget-gb")
+          ? *ext::FindOption<double>(po, "--memory-budget-gb")
+          : 0.0;
+  const bool ssd_stats = ext::FindOption<bool>(po, "--ssd-stats")
+                             ? *ext::FindOption<bool>(po, "--ssd-stats")
+                             : false;
+  const float cache_prior_bias =
+      ext::FindOption<double>(po, "--cache-prior-bias")
+          ? static_cast<float>(
+                *ext::FindOption<double>(po, "--cache-prior-bias"))
+          : 0.0F;
+  const std::string cache_policy =
+      ext::FindOption<std::string>(po, "--cache-policy")
+          ? *ext::FindOption<std::string>(po, "--cache-policy")
+          : "lru";
+  const std::string cache_slot_profile =
+      ext::FindOption<std::string>(po, "--cache-slot-profile")
+          ? *ext::FindOption<std::string>(po, "--cache-slot-profile")
+          : "skewed";
+  const float cache_router_bonus =
+      ext::FindOption<double>(po, "--cache-router-bonus")
+          ? static_cast<float>(
+                *ext::FindOption<double>(po, "--cache-router-bonus"))
+          : 0.0F;
+  const auto* core_opt =
+      ext::FindOption<std::int64_t>(po, "--cache-router-bonus-core");
+  const auto* skip_opt =
+      ext::FindOption<std::int64_t>(po, "--cache-router-bonus-skip-layers");
+  const float mtp_verify_acceptance_floor =
+      ext::FindOption<double>(po, "--mtp-verify-acceptance-floor")
+          ? static_cast<float>(
+                *ext::FindOption<double>(po, "--mtp-verify-acceptance-floor"))
+          : 0.0F;
+  const auto* ple_shelf_opt = ext::FindOption<bool>(po, "--ple-shelf");
+  const auto* ple_shelf_mib_opt =
+      ext::FindOption<std::int64_t>(po, "--ple-shelf-mib");
+  if (ple_shelf_opt && ple_shelf_mib_opt) {
+    if (error)
+      *error = "--ple-shelf and --ple-shelf-mib are mutually exclusive";
+    return nullptr;
+  }
+  if (ple_shelf_mib_opt &&
+      (*ple_shelf_mib_opt < 0 ||
+       *ple_shelf_mib_opt > std::numeric_limits<std::uint32_t>::max())) {
+    if (error)
+      *error = "Invalid integer for ple-shelf-mib";
+    return nullptr;
+  }
+  const std::size_t ple_shelf_bytes =
+      ple_shelf_mib_opt
+          ? static_cast<std::size_t>(*ple_shelf_mib_opt) * 1024 * 1024
+          : kDefaultPleShelfBytes;
+  const auto* prefetch_opt =
+      ext::FindOption<std::int64_t>(po, "--prefetch-layers-ahead");
+  if (prefetch_opt && (*prefetch_opt <= 0 || *prefetch_opt > 64)) {
+    if (error)
+      *error = "Invalid integer for prefetch-layers-ahead";
+    return nullptr;
+  }
+  const std::uint32_t prefetch_layers_ahead =
+      prefetch_opt ? static_cast<std::uint32_t>(*prefetch_opt) : 2U;
+  const std::string dump_routing_path =
+      ext::FindOption<std::string>(po, "--dump-routing")
+          ? *ext::FindOption<std::string>(po, "--dump-routing")
+          : std::string{};
+  if (core_opt && (*core_opt < 0 ||
+                   *core_opt > std::numeric_limits<std::uint32_t>::max())) {
+    if (error)
+      *error = "--cache-router-bonus-core must be non-negative";
+    return nullptr;
+  }
+  if (skip_opt && (*skip_opt < 0 ||
+                   *skip_opt > std::numeric_limits<std::uint32_t>::max())) {
+    if (error)
+      *error = "--cache-router-bonus-skip-layers must be non-negative";
+    return nullptr;
+  }
+
   std::string load_error;
   auto model = Model::Load(
       options.model_path,
       ModelOptions{
           .max_context = max_context,
+          .memory_budget_gb = memory_budget_gb,
+          .ssd_stats = ssd_stats,
+          .cache_prior_bias = cache_prior_bias,
+          .cache_policy = cache_policy,
+          .cache_slot_profile = cache_slot_profile,
+          .cache_router_bonus = cache_router_bonus,
+          .cache_router_bonus_core =
+              core_opt ? static_cast<std::uint32_t>(*core_opt) : 0U,
+          .cache_router_bonus_skip_layers =
+              skip_opt ? static_cast<std::uint32_t>(*skip_opt) : 0U,
+          .mtp_verify_acceptance_floor = mtp_verify_acceptance_floor,
+          .ple_shelf_bytes = ple_shelf_bytes,
           .mtp_model_path =
               use_mtp ? options.speculative.draft_model_path : std::string{},
+          .max_draft_tokens = options.speculative.max_draft_tokens,
           .vision_model_path = options.vision_model_path,
+          // A budgeted runtime reserves one session's KV and rollback rows;
+          // the streamed-expert scheduler drives one decode cohort.
           .decode_concurrency =
-              DecodeConcurrencyForSessions(options.session_count),
+              memory_budget_gb > 0.0
+                  ? 1U
+                  : DecodeConcurrencyForSessions(options.session_count),
           .rope_scaling = rope_scaling,
+          .prefetch_layers_ahead = prefetch_layers_ahead,
+          .reserve_vision_session_bytes =
+              memory_budget_gb <= 0.0 || !options.vision_model_path.empty(),
+          .dump_routing_path = dump_routing_path,
       },
       &load_error);
   if (!model) {
@@ -910,7 +1033,8 @@ std::shared_ptr<ext::TextModelRunner> CreateQwenFlashNextTextRunner(
   // until the configured sessions fit, rather than refusing a session count
   // the ordinary verifier width fits.
   if (std::size_t free_bytes = 0, total_bytes = 0;
-      use_mtp && hipMemGetInfo(&free_bytes, &total_bytes) == hipSuccess) {
+      use_mtp && memory_budget_gb <= 0.0 &&
+      hipMemGetInfo(&free_bytes, &total_bytes) == hipSuccess) {
     const std::size_t sessions =
         std::max<std::size_t>(options.session_count, 1);
     for (std::uint32_t rows = rocm::Executor::kWideRows;; rows -= 8) {

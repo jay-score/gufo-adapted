@@ -125,17 +125,20 @@ void Executor::UseScratch(const Scratch& scratch) const {
   q8t_src_ = nullptr;
   half_src_ = nullptr;
   xn_half_ = false;
-  moe_pending_ = false;
+  moe_pending_.Reset();
 }
 
 bool Executor::AllocateBatch(std::string* error) const {
-  return batch_logits_ != nullptr ||
-         Check(hip::AllocateDevice(
-                   &batch_logits_,
-                   static_cast<std::size_t>(kBatchSessions) *
-                       std::min(kDecodeRows, options_.max_logit_rows) *
-                       config().vocab_size * sizeof(float)),
-               error);
+  if (batch_logits_ != nullptr)
+    return true;
+  if (options_.streamed_experts)
+    return Fail(error, "batch logits were not reserved at model load");
+  return Check(
+      hip::AllocateDevice(&batch_logits_,
+                          static_cast<std::size_t>(kBatchSessions) *
+                              std::min(kDecodeRows, options_.max_logit_rows) *
+                              config().vocab_size * sizeof(float)),
+      error);
 }
 
 bool Executor::HcMixBatch(const DeviceMixer& m, const float* res, bool normed,
@@ -431,7 +434,8 @@ bool Executor::MtpForwardBatch(std::span<const MtpBatchItem> items,
       return false;
     if (!AnyActive(items))
       return true;
-    if (!MoeBatch(l, tail.mixed, tail.block_out, tail_rows, error))
+    if (!MoeBatch(l, tail.mixed, tail.block_out, tail_rows, error,
+                  tail.mtp_res))
       return false;
     CombineBatch(tail.mtp_res, nullptr, tail_rows);
     for (std::size_t i = 0; i < items.size(); ++i) {
@@ -789,19 +793,54 @@ bool Executor::GatedDenseBatch(const DeviceTensor& up, const DeviceTensor& gate,
 }
 
 bool Executor::MoeBatch(const DeviceLayer& l, const float* x, float* out,
-                        std::uint32_t rows, std::string* error) const {
+                        std::uint32_t rows, std::string* error,
+                        const float* lookahead_residual) const {
   if (rows <= kDecodeRows)
-    return Moe(l, x, out, rows, error);
+    return Moe(l, x, out, rows, error, false, lookahead_residual);
   const auto& c = config();
   const Scratch base = s_;
   if (!DenseBatch(l.router, x, base.router, rows, error))
     return false;
+  const std::int32_t* residency = nullptr;
+  if (options_.cache_router_bonus != 0.0F &&
+      expert_id_to_slot_device_ != nullptr &&
+      l.layer_index >= options_.cache_router_bonus_skip_layers)
+    residency = expert_id_to_slot_device_ +
+                static_cast<std::size_t>(l.layer_index) * c.num_experts;
   RouterTopK(base.router, c.num_experts + 1, base.ids, base.weights, rows,
-             c.num_experts, c.num_experts_used, stream_);
+             c.num_experts, c.num_experts_used, stream_, residency,
+             options_.cache_router_bonus, options_.cache_router_bonus_core);
+  std::vector<LookaheadPrediction> lookahead;
+  if (!PredictLookahead(
+          l, lookahead_residual != nullptr ? lookahead_residual : base.res,
+          rows, &lookahead, error))
+    return false;
+  const auto cancel_future_prefetch = [&] {
+    if (expert_cache_ == nullptr)
+      return;
+    for (std::uint32_t distance = 1; distance <= 2; ++distance) {
+      if (distance < c.num_layers - l.layer_index)
+        expert_cache_->FinishPrefetch(l.layer_index + distance);
+    }
+  };
   if (!GatedDenseBatch(l.shexp_up, l.shexp_gate, x, base.shexp_up, rows,
                        error) ||
-      !DenseBatch(l.shexp_down, base.shexp_up, base.shexp_out, rows, error))
+      !DenseBatch(l.shexp_down, base.shexp_up, base.shexp_out, rows, error)) {
+    cancel_future_prefetch();
     return false;
+  }
+  // Streamed tensors contain cache slots, while the batched Q4_K fast path
+  // below indexes weights with global router IDs. StreamedMoeRows resolves a
+  // larger unique-expert window, then executes the original eight-row groups.
+  if (l.experts_streamed) {
+    const bool ok =
+        StreamedMoeRows(l, x, out, rows, error, kDecodeRows, lookahead);
+    if (expert_cache_ != nullptr)
+      expert_cache_->FinishPrefetch(l.layer_index);
+    if (!ok)
+      cancel_future_prefetch();
+    return ok;
+  }
   if (l.ffn_gate_exps.type == core::GgmlType::kQ4_K &&
       l.ffn_up_exps.type == core::GgmlType::kQ4_K) {
     // Share expert weights across request boundaries while retaining the
@@ -814,11 +853,17 @@ bool Executor::MoeBatch(const DeviceLayer& l, const float* x, float* out,
         qfn_mmq_moe_vec(
             static_cast<int>(l.ffn_down_exps.type), l.ffn_down_exps.data,
             base.gate_e, base.ids, base.down_e, c.hidden_size, c.expert_ff,
-            rows * c.num_experts_used, c.num_experts, 1, stream_) != 0)
+            rows * c.num_experts_used, c.num_experts, 1, stream_) != 0) {
+      cancel_future_prefetch();
+      if (expert_cache_ != nullptr)
+        expert_cache_->FinishPrefetch(l.layer_index);
       return Fail(error, "batched routed vector projection failed");
+    }
     MoeEpilogue(base.down_e, base.weights, base.shexp_out,
                 base.router + c.num_experts, c.num_experts + 1, out, rows,
                 c.num_experts_used, c.hidden_size, stream_);
+    if (expert_cache_ != nullptr)
+      expert_cache_->FinishPrefetch(l.layer_index);
     return true;
   }
   for (std::uint32_t r = 0; r < rows; r += kDecodeRows) {
@@ -827,9 +872,16 @@ bool Executor::MoeBatch(const DeviceLayer& l, const float* x, float* out,
                                out + std::size_t{r} * c.hidden_size,
                                std::min(kDecodeRows, rows - r), error);
     UseScratch(base);
-    if (!ok)
+    if (!ok) {
+      if (expert_cache_ != nullptr) {
+        expert_cache_->FinishPrefetch(l.layer_index);
+        cancel_future_prefetch();
+      }
       return false;
+    }
   }
+  if (expert_cache_ != nullptr)
+    expert_cache_->FinishPrefetch(l.layer_index);
   return true;
 }
 
@@ -895,6 +947,7 @@ bool Executor::ForwardBatchImpl(std::span<const BatchItem> items, bool wide,
   if (rows > options_.max_batch) {
     return Fail(error, "decode batch exceeds executor capacity");
   }
+  ++route_forward_seq_;
   if (!AnyActive(items))
     return true;
   for (const auto& item : items) {
@@ -1077,12 +1130,11 @@ bool Executor::ForwardBatchImpl(std::span<const BatchItem> items, bool wide,
           items[i].session->position_, items[i].tokens.size(), c.hidden_size,
           c.hc_count, stream_);
     }
-    const auto& layers = model_->layers();
     bool normed = false;
     for (std::uint32_t il = 0; il < c.num_layers; ++il) {
       if (!AnyActive(items))
         return true;
-      const auto& l = layers[il];
+      const auto& l = Layer(il);
       if (c.IsPleLayer(il) && !WaitPle(error))
         return false;
       for (std::size_t i = 0; i < items.size(); ++i) {
@@ -1265,7 +1317,7 @@ bool Executor::ForwardBatchImpl(std::span<const BatchItem> items, bool wide,
       // wider rows and deferred/other-format states keep the batched path.
       if (rows != 0 && FusedMixer(l.hc_ffn, rows) &&
           pending_combine_.mixer == nullptr && !res_deferred_ &&
-          !defer_residual_ && !moe_pending_) {
+          !defer_residual_ && !moe_pending_.pending()) {
         DropReadyQ8();
         Combine(base.res, l.hc_ffn.norm.f32(), rows, nullptr, &l.hc_ffn);
         if (!HcMix(l.hc_ffn, base.res, true, base.mixed, base.inject, rows,
@@ -1282,7 +1334,7 @@ bool Executor::ForwardBatchImpl(std::span<const BatchItem> items, bool wide,
       const float* next_norm =
           il + 1 < c.num_layers
               ? (c.IsPleLayer(il + 1) ? nullptr
-                                      : layers[il + 1].hc_attn.norm.f32())
+                                      : Layer(il + 1).hc_attn.norm.f32())
               : model_->hc_head().norm.f32();
       UseScratch(base);
       CombineBatch(base.res, next_norm, rows);

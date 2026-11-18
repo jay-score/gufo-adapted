@@ -1,8 +1,11 @@
 #ifndef GUFO_MODELS_QWEN38_FLASH_NEXT_KERNELS_ROCM_DEVICE_MODEL_HPP_
 #define GUFO_MODELS_QWEN38_FLASH_NEXT_KERNELS_ROCM_DEVICE_MODEL_HPP_
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <gufo/ext/experimental/moe_streaming.hpp>
 #include <gufo/ext/gguf_reader.hpp>
 #include <memory>
 #include <span>
@@ -12,6 +15,8 @@
 #include "src/models/qwen38_flash_next/weights.hpp"
 
 namespace gufo::models::qwen38_flash_next::rocm {
+
+using DeviceExpertSource = gufo::storage::StreamedExpertSource;
 
 /// One weight resident in device memory, still in its GGUF encoding.
 struct DeviceTensor {
@@ -35,6 +40,7 @@ struct DeviceMixer {
 };
 
 struct DeviceLayer {
+  std::uint32_t layer_index{0};
   bool linear{false};
   DeviceMixer hc_attn;
   DeviceMixer hc_ffn;
@@ -57,6 +63,9 @@ struct DeviceLayer {
   DeviceTensor router;
   DeviceTensor ffn_gate_exps, ffn_up_exps, ffn_down_exps, shexp_gate, shexp_up,
       shexp_down;
+  std::array<DeviceExpertSource, 3> expert_sources;
+  std::uint32_t expert_cache_slots{0};
+  bool experts_streamed{false};
   DeviceTensor nextn_enorm, nextn_hnorm, nextn_fc_embedding, nextn_fc_hidden;
   DeviceMixer nextn_head;
 };
@@ -98,7 +107,7 @@ public:
   [[nodiscard]] static std::unique_ptr<DeviceModel> Upload(
       const ModelWeights& weights, const core::GgufReader& reader,
       const MtpWeights* mtp, const core::GgufReader* mtp_reader,
-      std::string* error_msg = nullptr);
+      std::string* error_msg = nullptr, bool stream_experts = false);
 
   const Config& config() const noexcept { return config_; }
   const DeviceTensor& token_embd() const noexcept { return token_embd_; }
@@ -127,9 +136,20 @@ public:
                                    std::string* error_msg);
   const DeviceMixer& hc_head() const noexcept { return hc_head_; }
   const std::vector<DeviceLayer>& layers() const noexcept { return layers_; }
+  [[nodiscard]] std::vector<gufo::storage::StreamedLayerSpec>
+  StreamedLayerSpecs() const;
   [[nodiscard]] bool has_mtp() const noexcept { return has_mtp_; }
   const DeviceLayer& mtp() const noexcept { return mtp_; }
   [[nodiscard]] std::size_t resident_bytes() const noexcept { return bytes_; }
+  [[nodiscard]] std::size_t backbone_bytes() const noexcept {
+    return backbone_bytes_;
+  }
+  [[nodiscard]] std::size_t draft_bytes() const noexcept {
+    return draft_bytes_;
+  }
+  [[nodiscard]] std::size_t routed_expert_bytes() const noexcept {
+    return routed_expert_bytes_;
+  }
   /// Widest K among the BF16/F16 matrices (activation staging for hipBLAS).
   [[nodiscard]] std::size_t max_half_cols() const noexcept {
     return max_half_cols_;
@@ -155,6 +175,9 @@ private:
   bool has_mtp_{false};
   std::vector<void*> allocations_;
   std::size_t bytes_{0};
+  std::size_t backbone_bytes_{0};
+  std::size_t draft_bytes_{0};
+  std::size_t routed_expert_bytes_{0};
   std::size_t max_half_cols_{1};
   std::size_t max_q8_cols_{32};
 };

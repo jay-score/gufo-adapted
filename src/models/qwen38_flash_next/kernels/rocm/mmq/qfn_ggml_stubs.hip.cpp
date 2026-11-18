@@ -16,6 +16,7 @@ namespace qfn_mmq {
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <map>
 #include <mutex>
@@ -136,6 +137,7 @@ struct qfn_stack_pool : public ggml_hip_pool {
     int device;
     std::vector<block> blocks;
     size_t current = 0;
+    bool frozen = false;
     std::vector<live_alloc> live;
 
     explicit qfn_stack_pool(int device) : device(device) {}
@@ -144,7 +146,33 @@ struct qfn_stack_pool : public ggml_hip_pool {
         for (const block &b : blocks) (void)hipFree(b.base);
     }
 
+    bool reserve(size_t bytes) override {
+        if (!blocks.empty() && blocks[0].capacity >= bytes) return true;
+        if (frozen || !live.empty()) return false;
+        if (hipDeviceSynchronize() != hipSuccess) return false;
+        for (const block &b : blocks) {
+            if (hipFree(b.base) != hipSuccess) return false;
+        }
+        blocks.clear();
+        current = 0;
+        size_t next = kFirstBlockBytes;
+        while (next < bytes) {
+            if (next > std::numeric_limits<size_t>::max() / 2) return false;
+            next *= 2;
+        }
+        char *base = nullptr;
+        if (gufo::hip::AllocateDevice(&base, next) != hipSuccess) return false;
+        blocks.push_back({base, next, 0});
+        return true;
+    }
+
+    void freeze() override { frozen = true; }
+
     void add_block(size_t bytes) {
+        if (frozen) {
+            fprintf(stderr, "qfn_stack_pool: inference scratch exceeded the load-time reservation\n");
+            abort();
+        }
         /* Drain the device first, as the single arena did. On ROCm 10.1 an
          * allocation made while kernels are in flight leaves later kernel
          * launches slower for seconds (+14 ms per short MTP request). Blocks

@@ -86,12 +86,207 @@
       "commands": [
         "serve",
         "bench",
-        "prompt"
+        "prompt",
+        "chat"
       ],
       "providers": [
         "flash-next-q4"
       ],
       "help": "MTP draft model path for speculative decoding"
+    },
+    {
+      "name": "--memory-budget-gb",
+      "type": "number",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Qwen3.8-Flash-Next memory budget in GiB (default: off)"
+    },
+    {
+      "name": "--ple-shelf",
+      "type": "boolean",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Cache PLE rows in a 128 MiB bounded RAM shelf"
+    },
+    {
+      "name": "--ple-shelf-mib",
+      "type": "integer",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "PLE shelf size in MiB (0 disables; default: 128)"
+    },
+    {
+      "name": "--prefetch-layers-ahead",
+      "type": "integer",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Token-prior prefetch horizon in layers (default: 2)"
+    },
+    {
+      "name": "--ssd-stats",
+      "type": "boolean",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Print SSD, cache, memory and session-write telemetry"
+    },
+    {
+      "name": "--cache-prior-bias",
+      "type": "number",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Weight learned expert priors in cache retention (default: 0)"
+    },
+    {
+      "name": "--cache-policy",
+      "type": "string",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Expert cache victim policy: lru, hotness, or decayed (default: lru)"
+    },
+    {
+      "name": "--cache-slot-profile",
+      "type": "string",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Per-layer cache slots: uniform, skewed, or a JSON profile path (default: skewed)"
+    },
+    {
+      "name": "--cache-router-bonus",
+      "type": "number",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Raw-logit residency bonus for router selection (default: 0)"
+    },
+    {
+      "name": "--cache-router-bonus-core",
+      "type": "integer",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Keep the N highest-logit experts unbiased (default: 0)"
+    },
+    {
+      "name": "--cache-router-bonus-skip-layers",
+      "type": "integer",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Skip the residency bonus for the first N layers (default: 0)"
+    },
+    {
+      "name": "--mtp-verify-acceptance-floor",
+      "type": "number",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Verify MTP drafts only while each draft's live acceptance confidence reaches FLOAT; 0 verifies the full chain (default: 0)"
+    },
+    {
+      "name": "--dump-routing",
+      "type": "path",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Write a binary GURT expert-routing trace"
+    },
+    {
+      "name": "--prompt-lookup",
+      "type": "boolean",
+      "commands": [
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Allow repeated committed text to fill remaining MTP draft slots"
     }
   ],
   "targets": {

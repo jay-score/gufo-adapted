@@ -6,10 +6,13 @@
 #include <hipblas/hipblas.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <functional>
 #include <gufo/ext/experimental/host_allocations.hpp>
+#include <gufo/ext/experimental/moe_streaming.hpp>
 #include <gufo/ext/session_mode.hpp>
 #include <memory>
 #include <mutex>
@@ -26,6 +29,7 @@
 #include "src/models/qwen38_flash_next/kernels/rocm/blaslt.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/device_model.hpp"
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
+#include "src/models/qwen38_flash_next/kernels/rocm/moe_pending_state.hpp"
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
 #include "src/models/qwen38_flash_next/ngram.hpp"
 
@@ -275,6 +279,22 @@ public:
     /// Largest session context. Zero selects the native context; values
     /// above it require YaRN (Config::MaxContextLength()).
     std::uint32_t max_context{0};
+    /// Allocate bounded lookahead router scratch when expert weights stream.
+    bool streamed_experts{false};
+    /// Optional JSONL route trace destination for offline cache replay.
+    std::string route_trace_path;
+    /// Optional binary GURT routing trace destination.
+    std::string dump_routing_path;
+    /// Token-prior prefetch horizon in layers (0..max_context layers).
+    std::uint32_t prefetch_layers_ahead{2};
+    /// Raw-logit-space residency bonus for router selection.
+    float cache_router_bonus{0.0F};
+    /// Number of highest-logit experts selected without the residency bonus.
+    std::uint32_t cache_router_bonus_core{0};
+    /// Skip the residency bonus for this many leading layers.
+    std::uint32_t cache_router_bonus_skip_layers{0};
+    /// Per-layer slot counts; empty keeps the uniform cache.
+    std::vector<std::uint32_t> cache_slot_profile;
   };
 
   ~Executor();
@@ -285,15 +305,51 @@ public:
   [[nodiscard]] static std::unique_ptr<Executor> Create(
       const DeviceModel& model, NgramTable* ngram, Options options,
       std::string* error_msg = nullptr);
+  [[nodiscard]] bool EnableExpertCache(
+      std::size_t budget_bytes, gufo::storage::SsdStats* stats,
+      float cache_prior_bias,
+      gufo::storage::ExpertCacheManager::VictimPolicy victim_policy,
+      std::string* error_msg, std::span<const std::uint32_t> slot_profile = {},
+      bool scale_slot_profile = false);
+  /// Stage 0 wasted-tail telemetry. Active only for a kVerify forward; the
+  /// engine arms it at forward entry and takes the prefix/tail split once the
+  /// accepted prefix length is known. Rows index the verify chain
+  /// ([anchor, d1..dD]); rows [0, keep) are useful, rows [keep, rows) wasted.
+  struct SpeculativeDemandTotals {
+    std::uint64_t prefix_cold_experts{0};
+    std::uint64_t prefix_cold_bytes{0};
+    std::uint64_t prefix_stall_nanoseconds{0};
+    std::uint64_t tail_cold_experts{0};
+    std::uint64_t tail_cold_bytes{0};
+    std::uint64_t tail_stall_nanoseconds{0};
+  };
+  void BeginSpeculativeDemandTelemetry(std::uint32_t rows) const;
+  [[nodiscard]] SpeculativeDemandTotals TakeSpeculativeDemandTotals(
+      std::uint32_t keep) const;
+  /// True when routed experts stream through the out-of-core cache. A fully
+  /// resident model keeps no cache manager, so a wasted speculative row
+  /// costs no SSD reads there and verification stays full-width.
+  [[nodiscard]] bool MoeStreamingActive() const noexcept {
+    return expert_cache_ != nullptr;
+  }
+  [[nodiscard]] bool PrefetchCandidates(
+      std::span<const std::int32_t> candidate_tokens,
+      std::string* error_msg) const;
+  void FinishAllExpertPrefetch() const noexcept;
+  [[nodiscard]] std::size_t ExpertCacheBytes() const noexcept;
+  [[nodiscard]] std::uint32_t ExpertCacheSlots() const noexcept;
 
   [[nodiscard]] std::unique_ptr<Session> CreateSession(
       core::SessionMode mode, std::uint32_t max_context,
       std::string* error_msg = nullptr) const;
   [[nodiscard]] bool EnsureRollback(Session& session, std::uint32_t depth,
                                     std::string* error_msg) const;
+  [[nodiscard]] bool ReserveRollback(Session& session, std::uint32_t depth,
+                                     std::string* error_msg) const;
   [[nodiscard]] std::size_t SessionBytes(
       core::SessionMode mode, std::uint32_t max_context,
       std::uint32_t rollback_depth) const noexcept;
+  [[nodiscard]] std::size_t ScratchBytes() const noexcept;
   [[nodiscard]] std::size_t DeferredScratchBytes() const;
 
   enum class ForwardMode { kDecode, kVerify, kPrefill };
@@ -529,7 +585,20 @@ public:
 
 private:
   friend struct ExecutorTestAccess;  // capture failure injection in GPU tests
+  friend class Session;
   Executor() = default;
+
+  struct RouteTracePass {
+    std::uint32_t first_row{0};
+    std::uint32_t rows{0};
+    std::vector<std::int32_t> experts;
+  };
+
+  struct LookaheadPrediction {
+    std::uint32_t layer{0};
+    std::size_t max_slots{0};
+    std::vector<std::int32_t> expert_ids;
+  };
 
   /// Visits every device region of a snapshot in payload order with
   /// (device pointer or null when sizing, payload offset, bytes, name).
@@ -642,15 +711,63 @@ private:
   bool JoinSide(std::string* error_msg) const;
   bool Moe(const DeviceLayer& l, const float* x, float* out,
            std::uint32_t n_tokens, std::string* error_msg,
-           bool last_only = false) const;
+           bool last_only = false,
+           const float* lookahead_residual = nullptr) const;
   /// Whether MoeExperts takes the routed F16 WMMA route, whose epilogue the
   /// following combine absorbs (see Moe).
   bool WmmaExperts(const DeviceLayer& l, std::uint32_t n_tokens) const;
   /// Runs routed experts after the router and shared expert are ready.
   bool MoeExperts(const DeviceLayer& l, const float* x, float* out,
-                  std::uint32_t n_tokens, std::string* error_msg) const;
+                  std::uint32_t n_tokens, std::string* error_msg,
+                  bool defer_epilogue = false,
+                  bool recompute_route_counts = false,
+                  std::span<const LookaheadPrediction> lookahead = {}) const;
+  bool MoeEpilogueRows(const DeviceLayer& l, float* out, std::uint32_t n_tokens,
+                       std::string* error_msg) const;
   bool MoeBatch(const DeviceLayer& l, const float* x, float* out,
-                std::uint32_t rows, std::string* error) const;
+                std::uint32_t rows, std::string* error,
+                const float* lookahead_residual = nullptr) const;
+  [[nodiscard]] const DeviceLayer& Layer(std::uint32_t index) const noexcept;
+  [[nodiscard]] bool CaptureExpertIds(const std::int32_t* ids,
+                                      std::size_t count,
+                                      std::string* error_msg) const;
+  /// Deferred expert-cache pin release. A streamed layer records a completion
+  /// event after its GEMV launches; the pins are released once that event is
+  /// complete, at the latest when the next layer reuses the same cache layer
+  /// or the forward pass drains. Keeping a bounded window of pins avoids a
+  /// host/GPU round-trip after every layer.
+  static constexpr std::size_t kMaxPendingLayerReleases = 8;
+  [[nodiscard]] bool CreateLayerReleaseEvents(std::size_t layers,
+                                              std::string* error_msg);
+  void DestroyLayerReleaseEvents();
+  [[nodiscard]] bool RecordLayerRelease(std::uint32_t layer,
+                                        std::string* error_msg) const;
+  [[nodiscard]] bool RetireLayerRelease(std::uint32_t layer, bool wait,
+                                        std::string* error_msg) const;
+  void RetireCompletedLayerReleases() const;
+  void DrainPendingLayerReleases() const;
+  [[nodiscard]] bool WriteRouteTrace(
+      std::uint32_t layer, bool prefill, std::uint32_t rows,
+      std::uint32_t experts_used, std::span<const std::int32_t> expert_ids,
+      std::span<const std::uint32_t> windows,
+      std::span<const RouteTracePass> passes,
+      std::span<const std::int32_t> desk_experts,
+      std::span<const std::int32_t> resident_experts,
+      std::string* error_msg) const;
+  [[nodiscard]] bool StreamedMoeRows(
+      const DeviceLayer& layer, const float* x, float* out, std::uint32_t rows,
+      std::string* error_msg, std::uint32_t compute_group_rows = 0,
+      std::span<const LookaheadPrediction> lookahead = {}) const;
+  [[nodiscard]] bool StreamedMoeRowsDeskRoom(
+      const DeviceLayer& layer, const float* x, float* out, std::uint32_t rows,
+      std::uint32_t compute_group_rows, std::string* error_msg,
+      std::span<const LookaheadPrediction> lookahead) const;
+  [[nodiscard]] bool PredictLookahead(
+      const DeviceLayer& layer, const float* residual, std::uint32_t rows,
+      std::vector<LookaheadPrediction>* predictions,
+      std::string* error_msg) const;
+  void SubmitLookaheadPrefetch(std::span<const LookaheadPrediction> predictions,
+                               bool prefill) const;
   /// Whether a draft of `session` requesting the small head gets it.
   bool UseDraftSubset(const Session& session, bool requested) const noexcept {
     return requested && !model_->draft_output().empty() &&
@@ -837,6 +954,12 @@ private:
   [[nodiscard]] Scratch RowScratch(const Scratch& base,
                                    std::uint32_t offset) const;
   void UseScratch(const Scratch& scratch) const;
+  template<typename RunEpilogue>
+  bool RestoreBaseScratchThenRun(const Scratch& base,
+                                 RunEpilogue run_epilogue) const {
+    UseScratch(base);
+    return run_epilogue();
+  }
   bool DenseBatch(const DeviceTensor& w, const float* x, float* out,
                   std::uint32_t rows, std::string* error_msg) const;
   bool GatedDenseBatch(const DeviceTensor& up, const DeviceTensor& gate,
@@ -856,6 +979,40 @@ private:
   mutable std::vector<sampling::TokenPenalty> verification_penalty_host_;
   /// Allocated only when concurrent decoding is first requested.
   mutable float* batch_logits_{nullptr};
+  std::unique_ptr<gufo::storage::ExpertCacheManager> expert_cache_;
+  std::vector<DeviceLayer> streamed_layers_;
+  /// Stage 0 per-row verify telemetry (7 drafts + anchor).
+  static constexpr std::uint32_t kVerifyTelemetryRows = 8;
+  mutable std::array<std::uint64_t, kVerifyTelemetryRows>
+      verify_row_cold_experts_{};
+  mutable std::array<std::uint64_t, kVerifyTelemetryRows>
+      verify_row_cold_bytes_{};
+  mutable std::array<std::uint64_t, kVerifyTelemetryRows>
+      verify_row_late_join_ns_{};
+  mutable std::array<std::uint64_t, kVerifyTelemetryRows>
+      verify_row_demand_read_ns_{};
+  mutable std::uint32_t verify_telemetry_rows_{0};
+  std::int32_t* expert_ids_host_{nullptr};
+  std::int32_t* expert_slot_ids_host_{nullptr};
+  std::int32_t* expert_id_to_slot_host_{nullptr};
+  std::int32_t* expert_id_to_slot_device_{nullptr};
+  std::size_t expert_ids_capacity_{0};
+  hipEvent_t expert_ids_ready_{nullptr};
+  mutable std::vector<hipEvent_t> layer_release_events_;
+  mutable std::vector<std::uint8_t> layer_release_pending_;
+  mutable std::vector<std::uint32_t> pending_layer_releases_;
+  mutable std::mutex route_trace_mutex_;
+  mutable std::ofstream route_trace_;
+  mutable std::ofstream route_trace_binary_;
+  mutable std::uint32_t route_record_seq_{0};
+  mutable std::uint32_t route_forward_seq_{0};
+  float* lookahead_norm_{nullptr};
+  float* lookahead_mixed_{nullptr};
+  float* lookahead_inject_{nullptr};
+  float* lookahead_router_{nullptr};
+  std::int32_t* lookahead_ids_{nullptr};
+  float* lookahead_weights_{nullptr};
+  std::int32_t* tokens_device_base_{nullptr};
   mutable Session::Control* batch_controls_{nullptr};
   mutable MtpCandidateLogits* batch_candidates_host_{nullptr};
   // Mapped descriptors, one slice per layer: GPU reads cannot race the host
@@ -907,8 +1064,10 @@ private:
   }
   bool dynamic_yarn_{false};
   RopeScaling yarn_max_{};  ///< configured static scaling (dynamic ceiling)
+  std::size_t qfn_workspace_bytes_{0};
   /// Bounded score scratch, shared by sequential selector chunks.
   std::size_t select_score_floats_{0};
+  std::size_t scratch_allocated_bytes_{0};
   std::vector<void*> allocations_;
   /// Coherent pinned storage, read directly by the GPU through s_.ple_emb.
   /// Reused only after the preceding forward has drained its stream.
@@ -952,7 +1111,7 @@ private:
   /// The model geometry allows the wide mixer route (see Combine).
   bool wide_mixer_{false};
   /// Set by Moe when its epilogue is left for the combine that follows.
-  mutable bool moe_pending_{false};
+  mutable MoePendingState moe_pending_;
   /// Set before an attention-side combine whose FFN combine fuses the MoE
   /// epilogue: that combine may then leave its residual update to the next
   /// one (res_deferred_), which reads s_.block_out and s_.hc_defer_w.

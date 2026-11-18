@@ -84,6 +84,21 @@ ggml_backend_hip_context * get_ctx_for_device(int device) {
     return cached[device].get();
 }
 
+extern "C" int qfn_mmq_reserve_scratch_for_stream(hipStream_t stream,
+                                                  size_t bytes, int freeze) {
+    const int device = ggml_hip_get_device();
+    ggml_backend_hip_context * ctx = get_ctx_for_device(device);
+    if (!ctx) return -1;
+    ggml_hip_pool & pool = qfn_pool_for_stream(ctx->device, stream);
+    if (!pool.reserve(bytes)) return -1;
+    if (freeze) pool.freeze();
+    return 0;
+}
+
+extern "C" int qfn_mmq_reserve_scratch(size_t bytes, int freeze) {
+    return qfn_mmq_reserve_scratch_for_stream(nullptr, bytes, freeze);
+}
+
 template <ggml_type type>
 int qfn_mmq_dense_impl(
         const char  * tag,
@@ -255,9 +270,12 @@ int qfn_mmq_moe_impl(
     const int si1  = n_expert_used;
     const int sis1 = 1;
 
-    ggml_hip_launch_mm_ids_helper(
+    if (!ggml_hip_launch_mm_ids_helper(
         ids, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
-        n_experts, n_tokens, n_expert_used, (int)ne11, si1, sis1, stream);
+        n_experts, n_tokens, n_expert_used, (int)ne11, si1, sis1, stream)) {
+        fprintf(stderr, "%s: routed id-map scratch was not reserved\n", tag);
+        return -2;
+    }
 
     hipError_t err = hipGetLastError();
     if (err != hipSuccess) {
@@ -359,7 +377,9 @@ static int moe_vector_projection(int weight_type, const void* W,
   constexpr const char* tag = "qfn_mmq_moe_vec";
   const auto type = static_cast<ggml_type>(weight_type);
   if (type != GGML_TYPE_Q4_K && type != GGML_TYPE_Q5_K &&
-      type != GGML_TYPE_Q5_1 && type != GGML_TYPE_Q8_0) {
+      type != GGML_TYPE_Q5_1 && type != GGML_TYPE_Q8_0 &&
+      type != GGML_TYPE_IQ3_S && type != GGML_TYPE_IQ4_XS &&
+      type != GGML_TYPE_IQ4_NL) {
     fprintf(stderr, "%s: unsupported weight type %d\n", tag, weight_type);
     return -1;
   }
@@ -565,6 +585,33 @@ extern "C" int qfn_mmq_q5_K_moe_raw(
                                             nullptr, nullptr);
 }
 
+extern "C" int qfn_mmq_iq3_s_moe_raw(
+        const void * W, const float * X, const int32_t * ids, float * out,
+        int M, int K, int n_tokens, int n_experts, int n_expert_used,
+        hipStream_t stream) {
+    return qfn_mmq_moe_impl<GGML_TYPE_IQ3_S>("qfn_mmq_iq3_s_moe_raw", W, X, ids, out, M, K,
+                                             n_tokens, n_experts, n_expert_used, stream,
+                                             nullptr, nullptr);
+}
+
+extern "C" int qfn_mmq_iq4_xs_moe_raw(
+        const void * W, const float * X, const int32_t * ids, float * out,
+        int M, int K, int n_tokens, int n_experts, int n_expert_used,
+        hipStream_t stream) {
+    return qfn_mmq_moe_impl<GGML_TYPE_IQ4_XS>("qfn_mmq_iq4_xs_moe_raw", W, X, ids, out, M, K,
+                                              n_tokens, n_experts, n_expert_used, stream,
+                                              nullptr, nullptr);
+}
+
+extern "C" int qfn_mmq_iq4_nl_moe_raw(
+        const void * W, const float * X, const int32_t * ids, float * out,
+        int M, int K, int n_tokens, int n_experts, int n_expert_used,
+        hipStream_t stream) {
+    return qfn_mmq_moe_impl<GGML_TYPE_IQ4_NL>("qfn_mmq_iq4_nl_moe_raw", W, X, ids, out, M, K,
+                                              n_tokens, n_experts, n_expert_used, stream,
+                                              nullptr, nullptr);
+}
+
 extern "C" int qfn_mmq_q4_K_moe_pair_unique(
     const void * W_a, const void * W_b, const float * X, const int32_t * ids,
     float * out_a, float * out_b, int M, int K, int n_tokens, int n_experts,
@@ -729,5 +776,11 @@ template void mul_mat_q_case<GGML_TYPE_Q4_K>(
 template void mul_mat_q_case<GGML_TYPE_Q5_1>(
     ggml_backend_hip_context&, const mmq_args&, hipStream_t);
 template void mul_mat_q_case<GGML_TYPE_Q5_K>(
+    ggml_backend_hip_context&, const mmq_args&, hipStream_t);
+template void mul_mat_q_case<GGML_TYPE_IQ3_S>(
+    ggml_backend_hip_context&, const mmq_args&, hipStream_t);
+template void mul_mat_q_case<GGML_TYPE_IQ4_XS>(
+    ggml_backend_hip_context&, const mmq_args&, hipStream_t);
+template void mul_mat_q_case<GGML_TYPE_IQ4_NL>(
     ggml_backend_hip_context&, const mmq_args&, hipStream_t);
 } // namespace qfn_mmq

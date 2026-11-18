@@ -4,10 +4,15 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <gufo/ext/experimental/moe_streaming.hpp>
 #include <gufo/ext/gguf_reader.hpp>
+#include <iomanip>
+#include <iostream>
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <type_traits>
 
 #include "src/families/qwen/draft_vocab/draft_vocab.hpp"
@@ -17,6 +22,7 @@
 #include "src/models/qwen38_flash_next/kernels/rocm/kernels.hpp"
 #include "src/models/qwen38_flash_next/mtp_sampling.hpp"
 #include "src/models/qwen38_flash_next/ngram.hpp"
+#include "src/models/qwen38_flash_next/slot_profile.hpp"
 #include "src/models/qwen38_flash_next/weights.hpp"
 
 namespace gufo::models::qwen38_flash_next {
@@ -84,6 +90,31 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     AssignError(error_msg, "draft token limit must be positive");
     return nullptr;
   }
+  if (!std::isfinite(options.memory_budget_gb) ||
+      options.memory_budget_gb < 0.0) {
+    AssignError(error_msg,
+                "memory budget must be a finite, non-negative GiB value");
+    return nullptr;
+  }
+  if (!std::isfinite(options.cache_prior_bias) ||
+      options.cache_prior_bias < 0.0F) {
+    AssignError(error_msg, "cache prior bias must be finite and non-negative");
+    return nullptr;
+  }
+  if (!std::isfinite(options.mtp_verify_acceptance_floor) ||
+      options.mtp_verify_acceptance_floor < 0.0F ||
+      options.mtp_verify_acceptance_floor > 1.0F) {
+    AssignError(error_msg,
+                "MTP verification acceptance floor must be finite and in "
+                "[0, 1]");
+    return nullptr;
+  }
+  const auto cache_policy =
+      storage::ExpertCacheManager::ParseVictimPolicy(options.cache_policy);
+  if (!cache_policy.has_value()) {
+    AssignError(error_msg, "cache policy must be lru, hotness, or decayed");
+    return nullptr;
+  }
   if (!options.mtp_model_path.empty() &&
       options.max_draft_tokens > kMaxMtpDraftTokens) {
     AssignError(error_msg,
@@ -91,6 +122,8 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     return nullptr;
   }
   m->options_ = options;
+  if (options.ssd_stats)
+    m->ssd_stats_ = std::make_shared<storage::SsdStats>();
   m->reader_ = core::GgufReader::OpenFile(model_path, error_msg);
   if (!m->reader_) {
     return nullptr;
@@ -114,12 +147,15 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
                                " tokens");
     return nullptr;
   }
-  try {
-    m->vision_ = qwen::vision::Encoder::Open(
-        model_path, options.vision_model_path, c.hidden_size);
-  } catch (const std::exception& e) {
-    AssignError(error_msg, e.what());
-    return nullptr;
+  if (options.memory_budget_gb <= 0.0 || !options.vision_model_path.empty() ||
+      options.reserve_vision_session_bytes) {
+    try {
+      m->vision_ = qwen::vision::Encoder::Open(
+          model_path, options.vision_model_path, c.hidden_size);
+    } catch (const std::exception& e) {
+      AssignError(error_msg, e.what());
+      return nullptr;
+    }
   }
   m->tokenizer_ =
       tokenization::QwenTokenizer::CreateFromGguf(*m->reader_, error_msg);
@@ -130,7 +166,8 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     const auto& t = m->weights_->ple_table;
     m->ngram_ = NgramTable::Open(
         m->reader_->GetMappedRegions()[t.shard].file_descriptor, t.file_offset,
-        t.rows, c.ple_head_dim, t.type, error_msg);
+        t.rows, c.ple_head_dim, t.type, error_msg, options.ple_shelf_bytes,
+        m->ssd_stats_.get());
     if (!m->ngram_) {
       return nullptr;
     }
@@ -147,9 +184,9 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     }
     m->mtp_weights_ = std::make_unique<MtpWeights>(std::move(*mtp));
   }
-  m->device_ = rocm::DeviceModel::Upload(*m->weights_, *m->reader_,
-                                         m->mtp_weights_.get(),
-                                         m->mtp_reader_.get(), error_msg);
+  m->device_ = rocm::DeviceModel::Upload(
+      *m->weights_, *m->reader_, m->mtp_weights_.get(), m->mtp_reader_.get(),
+      error_msg, options.memory_budget_gb > 0.0);
   if (!m->device_) {
     return nullptr;
   }
@@ -170,19 +207,126 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
       m->draft_subset_ = true;
     }
   }
+  constexpr std::size_t kGiB = std::size_t{1024} * 1024 * 1024;
+  const long double requested_safety =
+      static_cast<long double>(options.memory_budget_gb) * kGiB * 0.05L;
+  const long double max_size =
+      static_cast<long double>(std::numeric_limits<std::size_t>::max());
+  const std::size_t memory_safety_margin_bytes =
+      options.memory_budget_gb <= 0.0 ? 0
+      : requested_safety >= max_size
+          ? std::numeric_limits<std::size_t>::max()
+          : std::max<std::size_t>(kGiB,
+                                  static_cast<std::size_t>(requested_safety));
   rocm::Executor::Options exec;
   exec.max_batch = m->PrefillThroughCapacity();
+  exec.max_context = options.max_context;
+  if (options.memory_budget_gb > 0.0) {
+    if (const char* route_trace = std::getenv("GUFO_EXPERT_ROUTE_TRACE"))
+      exec.route_trace_path = route_trace;
+  }
+  exec.dump_routing_path = options.dump_routing_path;
+  exec.cache_router_bonus = options.cache_router_bonus;
+  exec.cache_router_bonus_core = options.cache_router_bonus_core;
+  exec.cache_router_bonus_skip_layers = options.cache_router_bonus_skip_layers;
+  if (!options.cache_slot_profile.empty() &&
+      options.cache_slot_profile != "uniform") {
+    std::string profile_error;
+    if (!storage::ExpertCacheManager::ResolveSlotProfile(
+            options.cache_slot_profile, m->device_->layers().size(),
+            kSkewedSlotProfile, &exec.cache_slot_profile, &profile_error)) {
+      AssignError(error_msg, profile_error);
+      return nullptr;
+    }
+  }
+  exec.streamed_experts = options.memory_budget_gb > 0.0;
   exec.max_logit_rows =
       m->mtp_weights_
           ? static_cast<std::uint32_t>(std::min<std::uint64_t>(
                 exec.max_batch, std::uint64_t{options.max_draft_tokens} + 1))
           : 1;
   exec.max_speculative = exec.max_logit_rows;
-  exec.max_context = options.max_context;
+  exec.prefetch_layers_ahead = options.prefetch_layers_ahead;
   m->executor_ =
       rocm::Executor::Create(*m->device_, m->ngram_.get(), exec, error_msg);
   if (!m->executor_) {
     return nullptr;
+  }
+  if (options.memory_budget_gb > 0.0) {
+    m->executor_->LimitCopyRows(exec.max_speculative);
+    const auto mode = m->HasMtp() ? core::SessionMode::kSpeculative
+                                  : core::SessionMode::kAutoregressive;
+    const std::size_t per_session = m->SessionBytes(mode, options.max_context);
+    if (per_session >
+        std::numeric_limits<std::size_t>::max() / options.decode_concurrency) {
+      AssignError(error_msg, "reserved session memory exceeds size limits");
+      return nullptr;
+    }
+    const std::size_t backbone_bytes =
+        m->device_->backbone_bytes() +
+        (m->vision_ ? m->vision_->ResidentBytes() : 0);
+    const std::size_t scratch_bytes = m->executor_->ScratchBytes();
+    std::size_t reader_scratch_bytes = 0;
+    try {
+      reader_scratch_bytes = storage::ExpertCacheManager::SharedScratchBytes(
+          m->device_->StreamedLayerSpecs());
+    } catch (const std::exception& error) {
+      AssignError(error_msg, error.what());
+      return nullptr;
+    }
+    std::size_t free_bytes = 0;
+    std::size_t total_bytes = 0;
+    const bool has_available =
+        hipMemGetInfo(&free_bytes, &total_bytes) == hipSuccess;
+    (void)total_bytes;
+    storage::MemoryBudgetInputs inputs{
+        .budget_gb = options.memory_budget_gb,
+        .backbone_bytes = backbone_bytes,
+        .drafter_bytes = m->device_->draft_bytes(),
+        .ple_shelf_bytes = m->ngram_ ? m->ngram_->CacheBytes() : 0,
+        .kv_reserved_bytes = per_session * options.decode_concurrency,
+        .scratch_bytes = scratch_bytes,
+        .reader_scratch_bytes = reader_scratch_bytes,
+        .continuation_cache_bytes = options.continuation_cache_bytes,
+        .safety_margin_bytes = memory_safety_margin_bytes,
+        .wddm_available_bytes = free_bytes,
+        .has_wddm_available = has_available,
+        .routed_expert_bytes = m->device_->routed_expert_bytes(),
+    };
+    storage::MemoryBudgetPlan plan;
+    if (!storage::PlanMemoryBudget(inputs, &plan, error_msg))
+      return nullptr;
+    if (!plan.fits_fixed) {
+      AssignError(error_msg,
+                  "memory budget cannot reserve the requested " +
+                      std::to_string(options.max_context) +
+                      "-token context, backbone, drafter, PLE, snapshot "
+                      "reserve, reader scratch, and safety margin; reduce "
+                      "--context (try 65536 or 32768) or increase "
+                      "--memory-budget-gb");
+      return nullptr;
+    }
+    if (plan.expert_cache_bytes == 0) {
+      AssignError(error_msg,
+                  "the GPU leaves no expert-cache headroom after reserving the "
+                  "requested " +
+                      std::to_string(options.max_context) +
+                      "-token context; reduce --context (try 65536 or 32768) "
+                      "or increase --memory-budget-gb");
+      return nullptr;
+    }
+    m->memory_budget_ = plan;
+    std::clog << "memory_budget_plan\n" << plan.Format();
+    if (!m->executor_->EnableExpertCache(
+            plan.expert_cache_bytes, m->ssd_stats_.get(),
+            options.cache_prior_bias, *cache_policy, error_msg,
+            std::span<const std::uint32_t>(exec.cache_slot_profile),
+            options.cache_slot_profile == "skewed"))
+      return nullptr;
+  }
+  if (m->ssd_stats_ != nullptr) {
+    m->ssd_stats_->Start(m->memory_budget_ ? m->memory_budget_->budget_bytes
+                                           : 0);
   }
   return m;
 }
@@ -280,16 +424,19 @@ const Config& Model::config() const noexcept {
 }
 
 std::size_t Model::ResidentBytes() const noexcept {
-  return device_->resident_bytes() + (vision_ ? vision_->ResidentBytes() : 0);
+  return device_->resident_bytes() + executor_->ScratchBytes() +
+         executor_->ExpertCacheBytes() +
+         (vision_ ? vision_->ResidentBytes() : 0);
 }
 
 std::size_t Model::SessionBytes(core::SessionMode mode,
                                 std::uint32_t context) const noexcept {
   const std::size_t vision =
-      vision_ ? std::size_t{context} * (config().hidden_size * sizeof(float) +
-                                        3 * sizeof(std::int32_t)) +
-                    64
-              : 0;
+      vision_ && options_.reserve_vision_session_bytes
+          ? std::size_t{context} * (config().hidden_size * sizeof(float) +
+                                    3 * sizeof(std::int32_t)) +
+                64
+          : 0;
   return executor_->SessionBytes(mode, context,
                                  mode == core::SessionMode::kSpeculative
                                      ? executor_->max_speculative() - 1
@@ -299,6 +446,54 @@ std::size_t Model::SessionBytes(core::SessionMode mode,
 
 std::size_t Model::DeferredScratchBytes() const {
   return executor_->DeferredScratchBytes();
+}
+
+std::string Model::SsdStatsReport() const {
+  std::string report =
+      ssd_stats_ != nullptr ? ssd_stats_->Format() : std::string{};
+  if (!memory_budget_)
+    return report;
+  std::size_t free_bytes = 0;
+  std::size_t total_bytes = 0;
+  const bool has_hip = hipMemGetInfo(&free_bytes, &total_bytes) == hipSuccess;
+  const auto mode = HasMtp() ? core::SessionMode::kSpeculative
+                             : core::SessionMode::kAutoregressive;
+  const auto per_session = SessionBytes(mode, options_.max_context);
+  std::ostringstream out;
+  constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+  out << std::fixed << std::setprecision(3) << "memory_accounting\n"
+      << "  continuation_reserve_gib: "
+      << static_cast<double>(memory_budget_->continuation_cache_bytes) / kGiB
+      << '\n'
+      << "  session_reserve_gib:      "
+      << static_cast<double>(per_session * options_.decode_concurrency) / kGiB
+      << '\n'
+      << "  vision_session_reserve:   "
+      << (vision_ && options_.reserve_vision_session_bytes ? "yes" : "no")
+      << '\n'
+      << "  expert_cache_planned_gib: "
+      << static_cast<double>(memory_budget_->expert_cache_bytes) / kGiB << '\n'
+      << "  expert_cache_actual_gib:  "
+      << static_cast<double>(executor_->ExpertCacheBytes()) / kGiB << '\n'
+      << "  expert_cache_slots:       " << executor_->ExpertCacheSlots() << '\n'
+      << "  hip_free_gib:             ";
+  if (has_hip)
+    out << static_cast<double>(free_bytes) / kGiB << '\n';
+  else
+    out << "not reported\n";
+  out << "  hip_total_gib:            ";
+  if (has_hip)
+    out << static_cast<double>(total_bytes) / kGiB << '\n';
+  else
+    out << "not reported\n";
+  return report + out.str();
+}
+
+void Model::RecordVerifyTailWaste(std::uint64_t cold_experts,
+                                  std::uint64_t bytes,
+                                  std::uint64_t stall_nanoseconds) noexcept {
+  if (ssd_stats_ != nullptr)
+    ssd_stats_->RecordVerifyTailWaste(cold_experts, bytes, stall_nanoseconds);
 }
 
 void Model::LimitCopyRows(std::uint32_t rows) noexcept {
@@ -679,7 +874,8 @@ bool Session::DraftReplay(std::int32_t next_token,
 
 bool Session::DraftCatchUp(std::int32_t next_token, bool propose,
                            std::string* error_msg,
-                           MtpCandidateLogits* candidates, bool draft_subset) {
+                           MtpCandidateLogits* candidates, bool draft_subset,
+                           bool token_output) {
   std::vector<std::int32_t> replay;
   std::int32_t hidden_row = 0;
   if (!DraftReplay(next_token, &replay, &hidden_row, error_msg))
@@ -689,7 +885,9 @@ bool Session::DraftCatchUp(std::int32_t next_token, bool propose,
   auto& exec = *model_->executor_;
   if (!exec.MtpForward(
           *session_, replay, hidden_row,
-          {.token = propose && candidates == nullptr ? &draft_token_ : nullptr,
+          {.token = propose && (candidates == nullptr || token_output)
+                        ? &draft_token_
+                        : nullptr,
            .confidence = &draft_confidence_,
            .candidates = candidates,
            .kv_only = !propose,
@@ -1037,6 +1235,13 @@ struct Session::PendingDecode {
   std::uint32_t policy_concurrency{0};
   /// A copy-only cycle here may verify more than max_speculative() rows.
   bool wide{false};
+  /// Stage 1: live per-draft acceptance confidence for the neural drafts,
+  /// aligned with chain[1 + i]. Lookup-copied tokens are excluded; cycles
+  /// that use them keep the full verification width.
+  std::vector<float> draft_conf;
+  /// Stage 1: rows the gated cycle verifies (anchor plus the confident
+  /// draft prefix); zero keeps the whole chain.
+  std::uint32_t verify_rows{0};
 };
 
 bool Session::GateStops(const PendingDecode& pending) {
@@ -1053,6 +1258,11 @@ void Session::AppendDraft(PendingDecode& pending) {
         pending.candidates, *pending.draft_sampler, &pending.draft_rng));
     pending.draft = static_cast<std::int32_t>(pending.proposals.back().token);
     pending.draft_sampler->Accept(pending.proposals.back().token);
+    pending.draft_conf.push_back(pending.proposals.back().probability);
+  } else {
+    // The greedy drafter exports top-candidate logits only while the
+    // verification floor is armed; without them the mass is 1 (no gate).
+    pending.draft_conf.push_back(TopCandidateMass(pending.candidates));
   }
   pending.chain.push_back(pending.draft);
 }
@@ -1191,6 +1401,16 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   const bool gpu_greedy = sampler.config().temperature == 0.0F;
   const bool gpu_verification =
       gpu_greedy || rocm::Executor::CanCompactMtpVerification(sampler);
+  // Stage 1: with the verification floor armed on an out-of-core cache, a
+  // cycle verifies only the draft prefix whose live per-draft acceptance
+  // confidence meets the floor. A fully resident model has no SSD reads to
+  // save, batched drafting keeps its legacy widths.
+  const bool verify_floor_active =
+      model_->options_.mtp_verify_acceptance_floor > 0.0F &&
+      exec.MoeStreamingActive() && !batch_drafts;
+  // Greedy drafts carry no proposal distribution: while the floor is armed
+  // they also export top-candidate logits, the live per-draft confidence.
+  const bool draft_confidence = !sampled && verify_floor_active;
   // A cycle-local proposal stream needs no pending RNG state in snapshots.
   // Target verification keeps its own draws after this independent seed.
   pending->draft_rng =
@@ -1200,7 +1420,7 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   pending->chain = {anchor};
   pending->draft = draft_token_;
   pending->width = width;
-  pending->gated = true;
+  pending->gated = !exec.MoeStreamingActive();
   pending->base = base;
   pending->speculative = true;
   pending->sampled = sampled;
@@ -1214,7 +1434,8 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   // a peer must not change a sampled request's proposals or RNG sequence.
   // A request's first speculative step copies nothing (see
   // speculative::PromptLookup<>).
-  pending->lookup_cap = lookup_.Step(base) ? cap : 0;
+  pending->lookup_cap =
+      model_->options_.prompt_lookup && lookup_.Step(base) ? cap : 0;
   if (pending->lookup_cap != 0) {
     lookup_.Extend(tokens_, sampled);
   }
@@ -1259,9 +1480,11 @@ bool Session::PrepareDecode(const DecodeRequest& request,
   pending->sampled_subset_cost =
       sampled && gpu_verification && pending->draft_subset &&
       std::min(max_tokens, room) > 2 * exec.max_speculative();
-  if (!defer_head && !DraftCatchUp(anchor, true, error_msg,
-                                   sampled ? &pending->candidates : nullptr,
-                                   pending->draft_subset)) {
+  if (!defer_head &&
+      !DraftCatchUp(
+          anchor, true, error_msg,
+          sampled || draft_confidence ? &pending->candidates : nullptr,
+          pending->draft_subset, draft_confidence)) {
     return false;
   }
   pending->draft = draft_token_;
@@ -1285,10 +1508,29 @@ bool Session::PrepareDecode(const DecodeRequest& request,
               *session_, std::span<const std::int32_t>(&pending->draft, 1), -1,
               {.token = sampled ? nullptr : &pending->draft,
                .confidence = &pending->draft_confidence,
-               .candidates = sampled ? &pending->candidates : nullptr,
+               .candidates =
+                   sampled || draft_confidence ? &pending->candidates : nullptr,
                .draft_subset = pending->draft_subset},
               error_msg)) {
         return false;
+      }
+    }
+    if (pending->speculative) {
+      // Stage 1: the verified prefix follows the live confidence of the
+      // drafts actually made (sampled: the exact proposal probabilities;
+      // greedy: the draft head's candidate mass). Prefetching keeps the
+      // full drafted chain.
+      if (verify_floor_active && pending->lookup == 0) {
+        pending->verify_rows =
+            ChooseVerified(pending->draft_conf,
+                           static_cast<std::uint32_t>(pending->chain.size()),
+                           model_->options_.mtp_verify_acceptance_floor);
+      }
+      std::string prefetch_error;
+      if (!exec.PrefetchCandidates(pending->chain, &prefetch_error) &&
+          !prefetch_error.empty()) {
+        std::clog << "expert_prefetch_skipped layer=0 reason=" << prefetch_error
+                  << '\n';
       }
     }
   }
@@ -1309,6 +1551,11 @@ bool Session::FinishDecode(const DecodeRequest& request,
   const bool gpu_verification = pending.gpu_verification;
   const auto anchor = chain.front();
   const auto k = static_cast<std::uint32_t>(chain.size());
+  // Stage 1: a gated cycle forwarded only the confident prefix; the
+  // censored tail was drafted (and prefetched) but never verified.
+  const auto verify_rows = pending.verify_rows != 0 && pending.verify_rows < k
+                               ? pending.verify_rows
+                               : k;
   const auto vocab = model_->VocabSize();
   const auto is_stop = [&](std::int32_t token) {
     return request.stop_at_eos && model_->IsStopToken(token);
@@ -1323,9 +1570,13 @@ bool Session::FinishDecode(const DecodeRequest& request,
   }
   sampler.Accept(static_cast<sampling::TokenId>(anchor));
   std::array<rocm::ArgmaxCandidate, rocm::Executor::kWideRows - 1> greedy{};
-  if (gpu_greedy &&
-      !exec.GreedyMtpPredictions(std::span(greedy).first(k - 1), sampler,
-                                 std::span(chain).subspan(1), error_msg)) {
+  // An anchor-only gated cycle (every draft below the floor) has no GPU
+  // prediction rows to fetch; the verify loop below is a no-op and the next
+  // token comes from the harvested anchor row.
+  if (gpu_greedy && verify_rows > 1 &&
+      !exec.GreedyMtpPredictions(
+          std::span(greedy).first(verify_rows - 1), sampler,
+          std::span(chain).subspan(1, verify_rows - 1), error_msg)) {
     return false;
   }
   std::uint32_t keep = 1;
@@ -1333,10 +1584,10 @@ bool Session::FinishDecode(const DecodeRequest& request,
   std::optional<std::int32_t> stop_token;
   bool cpu_rows = false;
   const auto download_remaining = [&](std::uint32_t first) {
-    verify_logits_.resize(std::max<std::size_t>(exec.max_speculative(), k) *
-                          vocab);
-    auto rows =
-        std::span(verify_logits_).subspan(first * vocab, (k - first) * vocab);
+    verify_logits_.resize(
+        std::max<std::size_t>(exec.max_speculative(), verify_rows) * vocab);
+    auto rows = std::span(verify_logits_)
+                    .subspan(first * vocab, (verify_rows - first) * vocab);
     if (!exec.ReadVerificationRows(first, rows, error_msg))
       return false;
     cpu_rows = true;
@@ -1348,18 +1599,22 @@ bool Session::FinishDecode(const DecodeRequest& request,
   if (gpu_verification && !gpu_greedy) {
     // Accepting the anchor may activate a tool grammar, reasoning budget,
     // or exceed the bounded penalty workspace. Keep the complete-row path.
+    // An anchor-only gated cycle (every draft below the floor) needs the
+    // full anchor row: the compact path samples top-k candidates, which
+    // would bias the free next-token draw.
     if (!rocm::Executor::CanCompactMtpVerification(sampler) ||
-        (k > exec.max_speculative() &&
-         !rocm::Executor::CanCompactWideVerification(sampler, k))) {
+        verify_rows == 1 ||
+        (verify_rows > exec.max_speculative() &&
+         !rocm::Executor::CanCompactWideVerification(sampler, verify_rows))) {
       if (!download_remaining(0))
         return false;
-    } else if (!exec.SampledMtpCandidates(std::span(candidates).first(k - 1),
-                                          sampler, std::span(chain).subspan(1),
-                                          error_msg)) {
+    } else if (!exec.SampledMtpCandidates(
+                   std::span(candidates).first(verify_rows - 1), sampler,
+                   std::span(chain).subspan(1, verify_rows - 1), error_msg)) {
       return false;
     }
   }
-  while (keep < k) {
+  while (keep < verify_rows) {
     if (gpu_greedy && !cpu_rows) {
       const auto& prediction = greedy[keep - 1];
       if (!std::isfinite(prediction.value)) {
@@ -1457,8 +1712,21 @@ bool Session::FinishDecode(const DecodeRequest& request,
   result->tokens.assign(chain.begin(), chain.begin() + keep);
   stats_.cycles += 1;
   stats_.drafted += k - 1;
+  stats_.verified += verify_rows - 1;
   stats_.accepted += keep - 1;
   stats_.small_head_cycles += pending.draft_subset;
+  if (pending.speculative) {
+    const auto demand = exec.TakeSpeculativeDemandTotals(keep);
+    stats_.prefix_cold_experts += demand.prefix_cold_experts;
+    stats_.prefix_cold_bytes += demand.prefix_cold_bytes;
+    stats_.prefix_stall_nanoseconds += demand.prefix_stall_nanoseconds;
+    stats_.tail_cold_experts += demand.tail_cold_experts;
+    stats_.tail_cold_bytes += demand.tail_cold_bytes;
+    stats_.tail_stall_nanoseconds += demand.tail_stall_nanoseconds;
+    model_->RecordVerifyTailWaste(demand.tail_cold_experts,
+                                  demand.tail_cold_bytes,
+                                  demand.tail_stall_nanoseconds);
+  }
   // Copied proposals trail the MTP drafts. After a fully accepted MTP part,
   // the length controller also counts the accepted copied tokens as accepted
   // drafts: a copy that ended drafting early would otherwise make a perfect
@@ -1488,12 +1756,18 @@ bool Session::FinishDecode(const DecodeRequest& request,
   }
   const bool mtp_all = mtp_accepted == mtp_drafts;
   const std::uint32_t observed = mtp_all ? keep - 1 : mtp_accepted;
+  // Stage 1: a gated cycle that accepted every verified draft censored the
+  // tail; it did not fail it. Observing the verified depth as a fully
+  // accepted chain keeps the controller's probe ladder raising the drafting
+  // and prefetch budget back to the configured width. A true rejection
+  // inside the verified prefix shrinks the budget as usual.
+  const bool censored = verify_rows < k && keep == verify_rows;
   // A target stop ends the request; it does not classify the remaining
   // proposals as failed predictions.
-  draft_length_.Observe(observed,
-                        result->stop || mtp_all ? observed : mtp_drafts, base,
-                        pending.policy_concurrency, pending.sampled_subset_cost,
-                        pending.planned_greedy);
+  draft_length_.Observe(
+      observed, result->stop || mtp_all || censored ? observed : mtp_drafts,
+      base, pending.policy_concurrency, pending.sampled_subset_cost,
+      pending.planned_greedy);
 
   // The next call knows the next sampled anchor. Defer draft catch-up until
   // then, retaining this session's target hidden rows across interleaving.
@@ -1545,7 +1819,11 @@ bool Session::DecodeStep(std::size_t max_tokens,
                   : pending.gpu_verification ? nullptr
                                              : verify_logits_.data();
   auto& exec = *model_->executor_;
-  if (pending.chain.size() > exec.max_speculative()) {
+  const auto verify_rows =
+      pending.verify_rows != 0 && pending.verify_rows < pending.chain.size()
+          ? pending.verify_rows
+          : static_cast<std::uint32_t>(pending.chain.size());
+  if (verify_rows > exec.max_speculative()) {
     // A wide copy (PrepareDecode).
     if (!pending.gpu_verification)
       verify_logits_.resize(std::max(
@@ -1557,7 +1835,8 @@ bool Session::DecodeStep(std::size_t max_tokens,
             error_msg))
       return false;
   } else if (!exec.Forward(
-                 *session_, pending.chain, pending.chain.size(), logits,
+                 *session_, std::span(pending.chain).first(verify_rows),
+                 verify_rows, logits,
                  pending.speculative ? rocm::Executor::ForwardMode::kVerify
                                      : rocm::Executor::ForwardMode::kDecode,
                  error_msg)) {
@@ -1806,6 +2085,20 @@ bool Session::DecodeBatchImpl(std::span<const DecodeRequest> requests,
     }
     if (!bodies.empty() && !exec.MtpForwardBatch(bodies, error_msg))
       return false;
+  }
+  std::vector<std::int32_t> candidate_tokens;
+  for (std::size_t i = 0; i < requests.size(); ++i) {
+    if (!requests[i].session->session_->Cancelled() && pending[i].speculative)
+      candidate_tokens.insert(candidate_tokens.end(), pending[i].chain.begin(),
+                              pending[i].chain.end());
+  }
+  if (!candidate_tokens.empty()) {
+    std::string prefetch_error;
+    if (!exec.PrefetchCandidates(candidate_tokens, &prefetch_error) &&
+        !prefetch_error.empty()) {
+      std::clog << "expert_prefetch_skipped layer=0 reason=" << prefetch_error
+                << '\n';
+    }
   }
   // In an all-greedy cohort, full copies can widen verification far beyond
   // the neural planner's chosen shape and delay peers producing new text.
