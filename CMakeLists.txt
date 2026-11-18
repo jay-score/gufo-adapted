@@ -366,6 +366,25 @@ target_link_libraries(gufo_core PUBLIC gufo_platform gufo_npu ICU::uc ICU::i18n
   Threads::Threads gufo_rust JPEG::JPEG PkgConfig::WEBP CURL::libcurl
   OpenSSL::Crypto)
 
+add_library(gufo_storage STATIC
+  src/storage/memory_budget_planner.cpp
+  src/storage/ssd_stats.cpp
+  src/storage/ssd_batch_reader.cpp)
+target_include_directories(gufo_storage PUBLIC ${CMAKE_SOURCE_DIR})
+target_compile_features(gufo_storage PUBLIC cxx_std_20)
+target_link_libraries(gufo_storage PUBLIC Threads::Threads)
+if (WIN32)
+  target_link_libraries(gufo_storage PUBLIC Psapi)
+endif()
+target_link_libraries(gufo_core PUBLIC gufo_storage)
+if (ENGINE_ENABLE_HIP)
+  add_library(gufo_expert_cache STATIC src/storage/expert_cache_manager.cpp)
+  target_include_directories(gufo_expert_cache PUBLIC ${CMAKE_SOURCE_DIR})
+  target_compile_features(gufo_expert_cache PUBLIC cxx_std_20)
+  target_link_libraries(gufo_expert_cache PUBLIC gufo_storage hip::host)
+  target_link_libraries(gufo_core PUBLIC gufo_expert_cache)
+endif()
+
 # Family libraries come before the model that needs them; they may depend on
 # gufo_core and on each other, never on a model directory.
 add_subdirectory(src/families/qwen)
@@ -778,6 +797,44 @@ function(gufo_qwen_image_21_register_tests)
       hip::host roc::hipblas OpenSSL::Crypto)
   endif()
 endfunction()
+
+  add_executable(memory_budget_planner_test
+    tests/storage/memory_budget_planner_test.cpp)
+  target_link_libraries(memory_budget_planner_test PRIVATE gufo_storage)
+  add_test(NAME memory_budget_planner_test COMMAND memory_budget_planner_test)
+  set_tests_properties(memory_budget_planner_test PROPERTIES LABELS "cpu;storage")
+
+  add_executable(ssd_stats_test tests/storage/ssd_stats_test.cpp)
+  target_link_libraries(ssd_stats_test PRIVATE gufo_storage)
+  add_test(NAME ssd_stats_test COMMAND ssd_stats_test)
+  set_tests_properties(ssd_stats_test PROPERTIES LABELS "cpu;storage")
+
+  if (ENGINE_ENABLE_HIP)
+    add_executable(expert_cache_manager_test
+      tests/storage/expert_cache_manager_test.cpp)
+    set_source_files_properties(tests/storage/expert_cache_manager_test.cpp
+      PROPERTIES LANGUAGE HIP)
+    set_target_properties(expert_cache_manager_test PROPERTIES
+      HIP_STANDARD 20
+      HIP_STANDARD_REQUIRED ON)
+    target_link_libraries(expert_cache_manager_test PRIVATE
+      gufo_expert_cache hip::host)
+    add_test(NAME expert_cache_manager_test COMMAND expert_cache_manager_test)
+    set_tests_properties(expert_cache_manager_test PROPERTIES
+      LABELS "hip;gpu;gfx1151;storage;experts")
+
+    add_executable(ssd_batch_reader_test
+      tests/storage/ssd_batch_reader_test.cpp)
+    set_source_files_properties(tests/storage/ssd_batch_reader_test.cpp
+      PROPERTIES LANGUAGE HIP)
+    set_target_properties(ssd_batch_reader_test PROPERTIES
+      HIP_STANDARD 20
+      HIP_STANDARD_REQUIRED ON)
+    target_link_libraries(ssd_batch_reader_test PRIVATE gufo_storage hip::host)
+    add_test(NAME ssd_batch_reader_test COMMAND ssd_batch_reader_test)
+    set_tests_properties(ssd_batch_reader_test PROPERTIES
+      LABELS "hip;gpu;gfx1151;storage;ssd")
+  endif()
 
   add_subdirectory(tests/families/qwen)
   add_subdirectory(tests/models/qwen)

@@ -100,6 +100,8 @@ public:
   [[nodiscard]] std::string build_info() const override;
   [[nodiscard]] SamplingDefaults sampling_defaults() const override;
   [[nodiscard]] std::uint32_t max_context() const override;
+  /// Expert-cache, SSD and process-memory telemetry of the loaded model.
+  [[nodiscard]] std::string ssd_stats_report() const;
   [[nodiscard]] std::vector<SessionState> session_states() const override;
   [[nodiscard]] std::optional<PromptAdmissionBudget> prompt_admission_budget()
       const override;

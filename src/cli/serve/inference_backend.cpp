@@ -389,6 +389,16 @@ std::uint32_t InferenceBackend::max_context() const {
 #endif
 }
 
+std::string InferenceBackend::ssd_stats_report() const {
+#if defined(ENGINE_ENABLE_HIP)
+  const auto state = impl_->Snapshot();
+  return state != nullptr ? state->scheduler->runner().SsdStatsReport()
+                          : std::string{};
+#else
+  return {};
+#endif
+}
+
 std::vector<InferenceBackend::SessionState> InferenceBackend::session_states()
     const {
 #if defined(ENGINE_ENABLE_HIP)

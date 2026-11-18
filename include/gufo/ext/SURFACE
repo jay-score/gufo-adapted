@@ -24,6 +24,7 @@ include/gufo/ext/experimental/hipblaslt_plan_database.hpp
 include/gufo/ext/experimental/host_allocations.hpp
 include/gufo/ext/experimental/lora_adapter.hpp
 include/gufo/ext/experimental/managed_alloc.hpp
+include/gufo/ext/experimental/moe_streaming.hpp
 include/gufo/ext/experimental/npu.hpp
 include/gufo/ext/experimental/snapshot_transfer.hpp
 include/gufo/ext/experimental/weight_upload.hpp
@@ -139,3 +140,9 @@ src/ext/text_contracts.hpp
 src/ext/tts.hpp
 src/ext/video.hpp
 src/sched/profile.hpp
+src/storage/cache_policy.hpp
+src/storage/expert_cache_manager.hpp
+src/storage/memory_budget_planner.hpp
+src/storage/ssd_batch_reader.hpp
+src/storage/ssd_stats.hpp
+src/storage/streamed_moe_policy.hpp

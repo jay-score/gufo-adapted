@@ -1919,6 +1919,11 @@ int RunServe(std::span<const char* const> args) {
     throw;
   }
   exit_if_device_lost();
+  if (backend != nullptr) {
+    const auto report = backend->ssd_stats_report();
+    if (!report.empty())
+      std::cerr << report;
+  }
   return 0;
 }
 
