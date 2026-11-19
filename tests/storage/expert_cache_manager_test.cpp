@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include "src/models/qwen38_flash_next/slot_profile.hpp"
+
 namespace {
 
 constexpr std::uint32_t kExperts = 4;
@@ -118,8 +120,126 @@ void CheckSlotProfileScaling() {
   }
 }
 
+void CheckMarginalSlotAllocation() {
+  using gufo::storage::ExpertCacheManager;
+  using gufo::storage::SlotMarginalCurve;
+
+  constexpr std::uint32_t kFloor = 128;
+  constexpr std::uint32_t kCap = 512;
+  constexpr std::uint64_t kActive = 48;
+  constexpr std::uint64_t kFloorTotal = kFloor * kActive;
+  constexpr std::uint64_t kCeilingTotal = kCap * kActive;
+
+  const auto& base = kSkewedSlotProfile;
+  const auto& curves = gufo::models::qwen38_flash_next::kSlotMarginalCurves;
+  const std::span<const std::uint32_t> profile_span(base);
+  const std::span<const SlotMarginalCurve> curve_span(curves);
+
+  const auto allocate = [&](std::uint64_t total) {
+    return ExpertCacheManager::ScaleSlotProfile(
+        profile_span, static_cast<std::uint32_t>(total), kFloor, kCap,
+        curve_span);
+  };
+  const auto sum_of = [](const std::vector<std::uint32_t>& slots) {
+    return std::accumulate(slots.begin(), slots.end(), std::uint64_t{0});
+  };
+
+  // Exact sum and bounds across the feasible budget range.
+  for (std::uint64_t total = kFloorTotal; total <= kCeilingTotal;
+       total += 137) {
+    const auto slots = allocate(total);
+    if (slots.size() != base.size() || sum_of(slots) != total) {
+      throw std::runtime_error(
+          "marginal allocation did not exhaust the slot budget");
+    }
+    const auto [minimum, maximum] =
+        std::minmax_element(slots.begin(), slots.end());
+    if (*minimum < kFloor || *maximum > kCap) {
+      throw std::runtime_error("marginal allocation left the floor/cap range");
+    }
+  }
+
+  // Elementwise monotonicity: a larger budget never takes slots away.
+  for (std::uint64_t total = kFloorTotal; total + 251 <= kCeilingTotal;
+       total += 251) {
+    const auto lower = allocate(total);
+    const auto higher = allocate(total + 251);
+    for (std::size_t layer = 0; layer < lower.size(); ++layer) {
+      if (higher[layer] < lower[layer]) {
+        throw std::runtime_error(
+            "marginal allocation is not monotone in the slot budget");
+      }
+    }
+  }
+
+  // Saturation spillover: once measured curves flatten, residual slots must
+  // still be assigned without exceeding `num_experts`.
+  for (const std::uint64_t total : {std::uint64_t{24000}, kCeilingTotal}) {
+    const auto slots = allocate(total);
+    if (sum_of(slots) != total) {
+      throw std::runtime_error("saturated allocation left slots unassigned");
+    }
+    const auto [minimum, maximum] =
+        std::minmax_element(slots.begin(), slots.end());
+    if (*minimum < kFloor || *maximum > kCap) {
+      throw std::runtime_error("saturated allocation exceeded the cap");
+    }
+  }
+
+  // An infeasible budget must fall back to the uniform allocation.
+  if (!allocate(kFloorTotal - 1).empty())
+    throw std::runtime_error("infeasible marginal budget did not fall back");
+
+  // Dense layers stay zero and take no floor.
+  auto with_dense = base;
+  with_dense[3] = 0;
+  with_dense[31] = 0;
+  const auto dense_slots = ExpertCacheManager::ScaleSlotProfile(
+      std::span<const std::uint32_t>(with_dense), 12000, kFloor, kCap,
+      curve_span);
+  if (dense_slots.size() != with_dense.size() || dense_slots[3] != 0 ||
+      dense_slots[31] != 0 || sum_of(dense_slots) != 12000) {
+    throw std::runtime_error("dense layers did not stay out of the allocator");
+  }
+  for (std::size_t layer = 0; layer < dense_slots.size(); ++layer) {
+    if (with_dense[layer] != 0 &&
+        (dense_slots[layer] < kFloor || dense_slots[layer] > kCap)) {
+      throw std::runtime_error("marginal allocation violated a layer bound");
+    }
+  }
+
+  // Regression fixtures at the three calibration anchors.
+  const std::array<std::vector<std::uint32_t>, 3> expected = {{
+      {233, 225, 231, 171, 186, 200, 207, 210, 192, 166, 186, 158,
+       178, 183, 171, 137, 146, 181, 195, 163, 173, 202, 216, 175,
+       180, 167, 173, 170, 177, 172, 177, 146, 157, 176, 178, 163,
+       166, 182, 202, 159, 157, 170, 165, 175, 175, 178, 164, 178},
+      {380, 362, 377, 231, 268, 301, 319, 325, 283, 219, 377, 303,
+       357, 379, 310, 149, 171, 256, 289, 213, 237, 307, 341, 175,
+       253, 222, 237, 228, 246, 344, 246, 146, 157, 243, 330, 213,
+       166, 209, 307, 159, 157, 170, 216, 175, 175, 178, 164, 178},
+      {380, 362, 377, 231, 268, 301, 394, 402, 283, 309, 377, 304,
+       358, 380, 311, 149, 171, 256, 399, 309, 237, 307, 409, 175,
+       354, 309, 353, 304, 352, 344, 325, 146, 198, 243, 330, 213,
+       219, 289, 307, 159, 157, 228, 263, 175, 175, 178, 216, 250},
+  }};
+  const std::array<std::uint64_t, 3> anchors = {8592, 12048, 13536};
+  for (std::size_t index = 0; index < anchors.size(); ++index) {
+    const auto slots = allocate(anchors[index]);
+    if (slots != expected[index]) {
+      throw std::runtime_error(
+          "marginal allocation changed at a calibration anchor");
+    }
+  }
+
+  // Determinism: identical inputs produce identical vectors.
+  if (allocate(13536) != allocate(13536))
+    throw std::runtime_error("marginal allocation is not deterministic");
+}
+
 void Run() {
   CheckSlotProfileScaling();
+  CheckMarginalSlotAllocation();
   const auto file_bytes =
       static_cast<std::size_t>(kTensorOffsets.back() + kExperts * kExpertBytes);
   std::vector<std::uint8_t> contents(file_bytes);

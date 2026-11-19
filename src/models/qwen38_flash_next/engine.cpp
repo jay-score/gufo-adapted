@@ -321,7 +321,8 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
             plan.expert_cache_bytes, m->ssd_stats_.get(),
             options.cache_prior_bias, *cache_policy, error_msg,
             std::span<const std::uint32_t>(exec.cache_slot_profile),
-            options.cache_slot_profile == "skewed"))
+            options.cache_slot_profile == "skewed",
+            std::span<const storage::SlotMarginalCurve>(kSlotMarginalCurves)))
       return nullptr;
   }
   if (m->ssd_stats_ != nullptr) {

@@ -381,9 +381,69 @@ ExpertCacheManager::~ExpertCacheManager() {
     impl_->DrainPrefetch();
 }
 
+namespace {
+
+/// Exact rational miss rate in milli-percent, clamped at zero.
+struct SlotRateRatio {
+  std::int64_t numerator;
+  std::int64_t denominator;
+};
+
+SlotRateRatio SlotRateAt(const SlotMarginalCurve& curve, std::uint32_t slots) {
+  const SlotMarginalPoint* lo = &curve.first;
+  const SlotMarginalPoint* hi = &curve.second;
+  if (slots >= curve.second.slots) {
+    lo = &curve.second;
+    hi = &curve.third;
+  }
+  const std::int64_t span = static_cast<std::int64_t>(hi->slots) - lo->slots;
+  if (span <= 0)
+    return {0, 1};
+  const std::int64_t numerator =
+      static_cast<std::int64_t>(lo->rate_milli_percent) * span +
+      (static_cast<std::int64_t>(hi->rate_milli_percent) -
+       static_cast<std::int64_t>(lo->rate_milli_percent)) *
+          (static_cast<std::int64_t>(slots) - lo->slots);
+  if (numerator <= 0)
+    return {0, 1};
+  return {numerator, span};
+}
+
+/// Cold-miss reduction from adding one slot, as an exact ratio. Slots below a
+/// curve's first measured point carry a priority tier so that no layer is left
+/// under-calibrated while another layer is given slots inside its measured
+/// range; this keeps allocations monotone in the budget and avoids
+/// extrapolating a shallow segment into a region the data never covered.
+struct SlotGain {
+  bool below_first;
+  std::int64_t numerator;
+  std::int64_t denominator;
+};
+
+SlotGain SlotMarginalGain(const SlotMarginalCurve& curve, std::uint32_t slots) {
+  const bool below_first = slots < curve.first.slots;
+  const SlotRateRatio before = SlotRateAt(curve, slots);
+  const SlotRateRatio after = SlotRateAt(curve, slots + 1);
+  const std::int64_t numerator = before.numerator * after.denominator -
+                                 after.numerator * before.denominator;
+  if (numerator <= 0)
+    return {below_first, below_first ? 1 : 0, 1};
+  return {below_first, numerator, before.denominator * after.denominator};
+}
+
+bool SlotCurveValid(const SlotMarginalCurve& curve) {
+  return curve.first.slots > 0 && curve.first.slots < curve.second.slots &&
+         curve.second.slots < curve.third.slots &&
+         curve.first.rate_milli_percent >= curve.second.rate_milli_percent &&
+         curve.second.rate_milli_percent >= curve.third.rate_milli_percent;
+}
+
+}  // namespace
+
 std::vector<std::uint32_t> ExpertCacheManager::ScaleSlotProfile(
     std::span<const std::uint32_t> slot_profile, std::uint32_t total_slots,
-    std::uint32_t floor, std::uint32_t cap) {
+    std::uint32_t floor, std::uint32_t cap,
+    std::span<const SlotMarginalCurve> demand_curves) {
   if (slot_profile.empty() || floor == 0 || cap < floor || total_slots == 0)
     return {};
   std::vector<std::uint32_t> scaled(slot_profile.size(), 0);
@@ -401,7 +461,7 @@ std::vector<std::uint32_t> ExpertCacheManager::ScaleSlotProfile(
   }
   if (active == 0)
     return {};
-  if (base_sum == total_slots)
+  if (base_sum == total_slots && demand_curves.empty())
     return scaled;
 
   const std::uint64_t floor_total = static_cast<std::uint64_t>(floor) * active;
@@ -410,6 +470,62 @@ std::vector<std::uint32_t> ExpertCacheManager::ScaleSlotProfile(
     return {};
   }
   const std::uint64_t target = total_slots;
+  bool use_curves = demand_curves.size() == slot_profile.size();
+  if (use_curves) {
+    for (std::size_t layer = 0; layer < slot_profile.size(); ++layer) {
+      if (scaled[layer] != 0 && !SlotCurveValid(demand_curves[layer])) {
+        use_curves = false;
+        break;
+      }
+    }
+  }
+  if (use_curves) {
+    for (std::size_t layer = 0; layer < slot_profile.size(); ++layer) {
+      if (scaled[layer] != 0)
+        scaled[layer] = floor;
+    }
+    std::uint64_t assigned = floor_total;
+    while (assigned < target) {
+      std::size_t best = slot_profile.size();
+      SlotGain best_gain{false, 0, 1};
+      for (std::size_t layer = 0; layer < slot_profile.size(); ++layer) {
+        if (scaled[layer] == 0 || scaled[layer] >= cap)
+          continue;
+        const SlotGain gain =
+            SlotMarginalGain(demand_curves[layer], scaled[layer]);
+        const bool better = best == slot_profile.size() ||
+                            (gain.below_first != best_gain.below_first
+                                 ? gain.below_first
+                                 : gain.numerator * best_gain.denominator >
+                                       best_gain.numerator * gain.denominator);
+        if (better) {
+          best = layer;
+          best_gain = gain;
+        }
+      }
+      if (best != slot_profile.size() &&
+          (best_gain.below_first || best_gain.numerator > 0)) {
+        ++scaled[best];
+        ++assigned;
+        continue;
+      }
+      // Every remaining layer is saturated or has no measured gain left:
+      // spill the residual round-robin by layer index up to `cap`.
+      bool progressed = false;
+      for (std::size_t layer = 0;
+           layer < slot_profile.size() && assigned < target; ++layer) {
+        if (scaled[layer] == 0 || scaled[layer] >= cap)
+          continue;
+        ++scaled[layer];
+        ++assigned;
+        progressed = true;
+      }
+      if (!progressed)
+        return {};
+    }
+    return scaled;
+  }
+
   const std::uint64_t weight_sum = base_sum - floor_total;
   std::vector<std::uint64_t> remainders(slot_profile.size(), 0);
   std::uint64_t assigned = floor_total;
@@ -513,7 +629,8 @@ std::unique_ptr<ExpertCacheManager> ExpertCacheManager::Create(
     std::span<std::int32_t> expert_id_to_slot, std::string* error_msg,
     SsdStats* stats, float cache_prior_bias, VictimPolicy victim_policy,
     std::uint32_t hotness_decay_tokens,
-    std::span<const std::uint32_t> slot_profile, bool scale_slot_profile) {
+    std::span<const std::uint32_t> slot_profile, bool scale_slot_profile,
+    std::span<const SlotMarginalCurve> demand_curves) {
   auto manager = std::unique_ptr<ExpertCacheManager>(new ExpertCacheManager());
   auto& impl = *manager->impl_;
   impl.views.resize(layers.size());
@@ -601,8 +718,9 @@ std::unique_ptr<ExpertCacheManager> ExpertCacheManager::Create(
   if (scale_slot_profile && !slot_profile.empty()) {
     const std::uint64_t target_slots =
         static_cast<std::uint64_t>(uniform_slots) * streamed_layers;
-    scaled_profile = ScaleSlotProfile(slot_profile, target_slots,
-                                      kAdaptiveSlotFloor, num_experts);
+    scaled_profile =
+        ScaleSlotProfile(slot_profile, target_slots, kAdaptiveSlotFloor,
+                         num_experts, demand_curves);
     if (scaled_profile.empty()) {
       std::clog << "expert_cache_profile_fallback reason=floor_exceeds_budget"
                 << " target_slots=" << target_slots << " floor_slots="

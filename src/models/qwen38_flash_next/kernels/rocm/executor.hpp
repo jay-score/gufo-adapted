@@ -310,7 +310,8 @@ public:
       float cache_prior_bias,
       gufo::storage::ExpertCacheManager::VictimPolicy victim_policy,
       std::string* error_msg, std::span<const std::uint32_t> slot_profile = {},
-      bool scale_slot_profile = false);
+      bool scale_slot_profile = false,
+      std::span<const gufo::storage::SlotMarginalCurve> demand_curves = {});
   /// Stage 0 wasted-tail telemetry. Active only for a kVerify forward; the
   /// engine arms it at forward entry and takes the prefix/tail split once the
   /// accepted prefix length is known. Rows index the verify chain

@@ -97,16 +97,25 @@ public:
       VictimPolicy victim_policy = VictimPolicy::kLru,
       std::uint32_t hotness_decay_tokens = 1024,
       std::span<const std::uint32_t> slot_profile = {},
-      bool scale_slot_profile = false);
+      bool scale_slot_profile = false,
+      std::span<const SlotMarginalCurve> demand_curves = {});
 
   /// Scales a non-uniform slot profile to exactly `total_slots` while keeping
-  /// its relative shape above `floor` and respecting `cap`. A zero entry is a
-  /// dense layer and stays zero. Returns an empty vector when the profile is
-  /// invalid or `total_slots` cannot fit the requested floor/cap; callers then
-  /// fall back to the uniform allocation.
+  /// the floor and `cap`. With a per-layer `demand_curves` table the allocation
+  /// is a deterministic greedy marginal water-filling: each extra slot goes to
+  /// the layer with the largest measured cold-miss reduction, tie-broken by
+  /// layer index. Slots below a curve's first measured point are filled first,
+  /// keeping the allocation monotone in the budget and inside the calibrated
+  /// range; residual slots spill round-robin toward `cap` once every curve
+  /// saturates. Without curves the historical linear scaling above
+  /// `floor` is retained. A zero entry is a dense layer and stays zero.
+  /// Returns an empty vector when the profile is invalid or `total_slots`
+  /// cannot fit the requested floor/cap; callers then fall back to the uniform
+  /// allocation.
   [[nodiscard]] static std::vector<std::uint32_t> ScaleSlotProfile(
       std::span<const std::uint32_t> slot_profile, std::uint32_t total_slots,
-      std::uint32_t floor, std::uint32_t cap);
+      std::uint32_t floor, std::uint32_t cap,
+      std::span<const SlotMarginalCurve> demand_curves = {});
 
   /// Resolves a slot profile name (`""` or `"uniform"`, `"skewed"`, or a JSON
   /// profile path containing a `"slots"` array) for `layers` streamed layers.
