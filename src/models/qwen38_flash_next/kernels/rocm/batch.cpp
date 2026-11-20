@@ -807,9 +807,16 @@ bool Executor::MoeBatch(const DeviceLayer& l, const float* x, float* out,
       l.layer_index >= options_.cache_router_bonus_skip_layers)
     residency = expert_id_to_slot_device_ +
                 static_cast<std::size_t>(l.layer_index) * c.num_experts;
+  std::int32_t* raw_ids_device =
+      (shadow_raw_ids_enabled_ && residency != nullptr &&
+       static_cast<std::size_t>(rows) * c.num_experts_used <=
+           expert_ids_capacity_)
+          ? (base.ids + static_cast<std::size_t>(rows) * c.num_experts_used)
+          : nullptr;
   RouterTopK(base.router, c.num_experts + 1, base.ids, base.weights, rows,
              c.num_experts, c.num_experts_used, stream_, residency,
-             options_.cache_router_bonus, options_.cache_router_bonus_core);
+             options_.cache_router_bonus, options_.cache_router_bonus_core,
+             raw_ids_device);
   std::vector<LookaheadPrediction> lookahead;
   if (!PredictLookahead(
           l, lookahead_residual != nullptr ? lookahead_residual : base.res,

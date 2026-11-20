@@ -293,6 +293,11 @@ public:
     std::uint32_t cache_router_bonus_core{0};
     /// Skip the residency bonus for this many leading layers.
     std::uint32_t cache_router_bonus_skip_layers{0};
+    /// Shadow-prefetch suppressed experts recurring in this many MTP rows.
+    /// Zero disables the shadow path.
+    std::uint32_t shadow_prefetch_streak{0};
+    /// Highest unbiased raw-router rank eligible for shadow prefetch.
+    std::uint32_t shadow_prefetch_max_rank{1};
     /// Per-layer slot counts; empty keeps the uniform cache.
     std::vector<std::uint32_t> cache_slot_profile;
   };
@@ -339,6 +344,8 @@ public:
   void FinishAllExpertPrefetch() const noexcept;
   [[nodiscard]] std::size_t ExpertCacheBytes() const noexcept;
   [[nodiscard]] std::uint32_t ExpertCacheSlots() const noexcept;
+  [[nodiscard]] std::string ShadowProbeReport() const;
+  [[nodiscard]] std::string ShadowPrefetchReport() const;
 
   [[nodiscard]] std::unique_ptr<Session> CreateSession(
       core::SessionMode mode, std::uint32_t max_context,
@@ -999,6 +1006,89 @@ private:
   std::int32_t* expert_id_to_slot_device_{nullptr};
   std::size_t expert_ids_capacity_{0};
   hipEvent_t expert_ids_ready_{nullptr};
+  bool shadow_raw_ids_enabled_{false};
+  bool shadow_probe_enabled_{false};
+  struct ShadowProbeLayer {
+    std::uint64_t decode_passes{0};
+    std::uint64_t multirow_passes{0};
+    std::uint64_t row0_selections{0};
+    std::uint64_t all_rows_selections{0};
+    std::uint64_t row0_overridden_any{0};
+    std::uint64_t row0_overridden_nonres{0};
+    std::uint64_t all_rows_overridden_nonres{0};
+    std::uint64_t row0_sync_misses{0};
+    std::uint64_t all_rows_sync_misses{0};
+    std::uint64_t s1{0};
+    std::uint64_t s2{0};
+    std::uint64_t s3{0};
+    std::uint64_t s4_plus{0};
+    std::uint64_t w4_repeats{0};
+    std::uint64_t w4_nonconsec_repeats{0};
+    std::uint64_t override_to_sync_miss_w4_row0{0};
+    std::uint64_t override_to_sync_miss_w4_anyrow{0};
+    std::uint64_t q_early2_events{0};
+    std::uint64_t q_all2_events{0};
+    std::uint64_t q_all3_events{0};
+    std::uint64_t q_early2_conv_override{0};
+    std::uint64_t q_early2_conv_miss{0};
+    std::uint64_t q_early2_conv_either{0};
+    std::uint64_t q_all2_conv_override{0};
+    std::uint64_t q_all2_conv_miss{0};
+    std::uint64_t q_all2_conv_either{0};
+    std::uint64_t q_all3_conv_override{0};
+    std::uint64_t q_all3_conv_miss{0};
+    std::uint64_t q_all3_conv_either{0};
+    std::array<std::uint16_t, 512> streak{};
+    std::array<std::uint64_t, 512> last_override_pass_row0{};
+    std::array<std::uint64_t, 512> last_override_pass_anyrow{};
+    std::array<std::uint64_t, 512> pending_q_early2_pass{};
+    std::array<std::uint8_t, 512> pending_q_early2_mask{};
+    std::array<std::uint64_t, 512> pending_q_all2_pass{};
+    std::array<std::uint8_t, 512> pending_q_all2_mask{};
+    std::array<std::uint64_t, 512> pending_q_all3_pass{};
+    std::array<std::uint8_t, 512> pending_q_all3_mask{};
+    // Precision/recall grid for candidate shadow-prefetch trigger rules.
+    // Cells are [raw_rank_index][recurrence_rule]; see RecordShadowProbe.
+    static constexpr std::uint32_t kTriggerRanks = 5;
+    static constexpr std::uint32_t kTriggerRules = 4;
+    static constexpr std::uint32_t kTriggerCells =
+        kTriggerRanks * kTriggerRules;
+    struct TriggerCell {
+      std::uint64_t triggers{0};
+      std::uint64_t miss_hits{0};
+      std::uint64_t next_pass_repeat{0};
+    };
+    std::array<std::array<TriggerCell, kTriggerRules>, kTriggerRanks>
+        trigger_cells{};
+    std::array<std::array<std::uint64_t, 512>, kTriggerCells> trigger_last{};
+    std::array<std::uint32_t, 512> trigger_prev_mask{};
+  };
+  mutable std::vector<ShadowProbeLayer> shadow_probe_layers_;
+  void RecordShadowProbe(std::uint32_t layer, std::uint32_t rows,
+                         std::uint32_t used) const noexcept;
+  /// Shadow prefetch: suppressed non-resident experts recurring across MTP
+  /// rows. Each layer queues at most kShadowCandidateCap experts, injected one
+  /// pass later through PredictLookahead (Option B).
+  static constexpr std::uint32_t kShadowCandidateCap = 2;
+  /// Duplicate weight that lifts a shadow id above resident-heavy lookahead
+  /// hits in Prefetch's frequency ordering (it still issues one read).
+  static constexpr std::uint32_t kShadowPrefetchCopies = 8;
+  struct ShadowCandidates {
+    std::array<std::int32_t, kShadowCandidateCap> experts{};
+    std::uint8_t count{0};
+  };
+  mutable std::vector<ShadowCandidates> shadow_candidates_;
+  mutable std::vector<std::array<std::uint64_t, 512>> shadow_last_pass_;
+  mutable std::uint64_t shadow_pass_{0};
+  mutable std::uint64_t shadow_queued_{0};
+  mutable std::uint64_t shadow_submitted_{0};
+  mutable std::uint64_t shadow_skipped_cooldown_{0};
+  mutable std::uint64_t shadow_skipped_rank_{0};
+  void RecordShadowCandidates(std::uint32_t layer, std::uint32_t rows,
+                              std::uint32_t used) const noexcept;
+  void AppendShadowPrediction(std::uint32_t target,
+                              std::vector<LookaheadPrediction>* predictions,
+                              bool consume) const;
   mutable std::vector<hipEvent_t> layer_release_events_;
   mutable std::vector<std::uint8_t> layer_release_pending_;
   mutable std::vector<std::uint32_t> pending_layer_releases_;

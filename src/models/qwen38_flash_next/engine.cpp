@@ -101,6 +101,14 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
     AssignError(error_msg, "cache prior bias must be finite and non-negative");
     return nullptr;
   }
+  if (options.shadow_prefetch_streak > 32) {
+    AssignError(error_msg, "shadow prefetch streak must be at most 32");
+    return nullptr;
+  }
+  if (options.shadow_prefetch_max_rank > 31) {
+    AssignError(error_msg, "shadow prefetch max rank must be at most 31");
+    return nullptr;
+  }
   if (!std::isfinite(options.mtp_verify_acceptance_floor) ||
       options.mtp_verify_acceptance_floor < 0.0F ||
       options.mtp_verify_acceptance_floor > 1.0F) {
@@ -229,6 +237,8 @@ std::shared_ptr<Model> Model::Load(const std::string& model_path,
   exec.cache_router_bonus = options.cache_router_bonus;
   exec.cache_router_bonus_core = options.cache_router_bonus_core;
   exec.cache_router_bonus_skip_layers = options.cache_router_bonus_skip_layers;
+  exec.shadow_prefetch_streak = options.shadow_prefetch_streak;
+  exec.shadow_prefetch_max_rank = options.shadow_prefetch_max_rank;
   if (!options.cache_slot_profile.empty() &&
       options.cache_slot_profile != "uniform") {
     std::string profile_error;
@@ -487,6 +497,10 @@ std::string Model::SsdStatsReport() const {
     out << static_cast<double>(total_bytes) / kGiB << '\n';
   else
     out << "not reported\n";
+  if (executor_ != nullptr) {
+    out << executor_->ShadowProbeReport();
+    out << executor_->ShadowPrefetchReport();
+  }
   return report + out.str();
 }
 

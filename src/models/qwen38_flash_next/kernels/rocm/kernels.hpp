@@ -618,7 +618,7 @@ void RouterTopK(const float* logits, std::uint32_t stride, std::int32_t* ids,
                 float* weights, std::uint32_t n_tokens, std::uint32_t n_experts,
                 std::uint32_t k, hipStream_t stream,
                 const std::int32_t* residency = nullptr, float bonus = 0.0F,
-                std::uint32_t core = 0);
+                std::uint32_t core = 0, std::int32_t* raw_ids = nullptr);
 
 /// out[t][i] = sum_s weights[t][s] * expert_out[t*k + s][i]
 ///           + sigmoid(gate[t * gate_stride]) * shared[t][i].

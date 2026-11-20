@@ -981,6 +981,21 @@ std::shared_ptr<ext::TextModelRunner> CreateQwenFlashNextTextRunner(
       *error = "--cache-router-bonus-skip-layers must be non-negative";
     return nullptr;
   }
+  const auto* shadow_streak_opt =
+      ext::FindOption<std::int64_t>(po, "--shadow-prefetch-streak");
+  const auto* shadow_rank_opt =
+      ext::FindOption<std::int64_t>(po, "--shadow-prefetch-max-rank");
+  if (shadow_streak_opt &&
+      (*shadow_streak_opt < 0 || *shadow_streak_opt > 32)) {
+    if (error)
+      *error = "--shadow-prefetch-streak must be between 0 and 32";
+    return nullptr;
+  }
+  if (shadow_rank_opt && (*shadow_rank_opt < 0 || *shadow_rank_opt > 31)) {
+    if (error)
+      *error = "--shadow-prefetch-max-rank must be between 0 and 31";
+    return nullptr;
+  }
 
   std::string load_error;
   auto model = Model::Load(
@@ -997,6 +1012,12 @@ std::shared_ptr<ext::TextModelRunner> CreateQwenFlashNextTextRunner(
               core_opt ? static_cast<std::uint32_t>(*core_opt) : 0U,
           .cache_router_bonus_skip_layers =
               skip_opt ? static_cast<std::uint32_t>(*skip_opt) : 0U,
+          .shadow_prefetch_streak =
+              shadow_streak_opt ? static_cast<std::uint32_t>(*shadow_streak_opt)
+                                : 0U,
+          .shadow_prefetch_max_rank =
+              shadow_rank_opt ? static_cast<std::uint32_t>(*shadow_rank_opt)
+                              : 1U,
           .mtp_verify_acceptance_floor = mtp_verify_acceptance_floor,
           .ple_shelf_bytes = ple_shelf_bytes,
           .mtp_model_path =

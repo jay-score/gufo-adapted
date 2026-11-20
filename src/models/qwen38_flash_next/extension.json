@@ -249,6 +249,34 @@
       "help": "Skip the residency bonus for the first N layers (default: 0)"
     },
     {
+      "name": "--shadow-prefetch-streak",
+      "type": "integer",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Prefetch experts overridden by the residency bonus after appearing in this many MTP rows (0 disables; default: 0)"
+    },
+    {
+      "name": "--shadow-prefetch-max-rank",
+      "type": "integer",
+      "commands": [
+        "serve",
+        "bench",
+        "prompt",
+        "chat"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Highest unbiased raw-router rank eligible for shadow prefetch (default: 1)"
+    },
+    {
       "name": "--mtp-verify-acceptance-floor",
       "type": "number",
       "commands": [

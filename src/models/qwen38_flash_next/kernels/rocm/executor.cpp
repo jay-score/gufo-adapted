@@ -16,9 +16,11 @@
 #include <gufo/ext/experimental/moe_streaming.hpp>
 #include <gufo/ext/experimental/snapshot_transfer.hpp>
 #include <gufo/ext/platform/pages.hpp>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1033,6 +1035,10 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
   e->model_ = &model;
   e->ngram_ = ngram;
   e->options_ = options;
+  if (const char* env = std::getenv("GUFO_SHADOW_PROBE"))
+    e->shadow_probe_enabled_ = env[0] != '\0' && std::string_view(env) != "0";
+  e->shadow_raw_ids_enabled_ =
+      e->shadow_probe_enabled_ || options.shadow_prefetch_streak > 0;
   e->options_.max_batch = std::max<std::uint32_t>(1, options.max_batch);
   e->options_.max_logit_rows = std::clamp<std::uint32_t>(
       options.max_logit_rows, 1, e->options_.max_batch);
@@ -1286,7 +1292,8 @@ std::unique_ptr<Executor> Executor::Create(const DeviceModel& model,
       ngram->ReserveGather(T * c.ple_heads);
   }
   s.router = f32(T * (c.num_experts + 1));
-  s.ids = alloc.template operator()<std::int32_t>(slots);
+  s.ids = alloc.template operator()<std::int32_t>(
+      (e->shadow_raw_ids_enabled_ ? 2 : 1) * slots);
   s.expert_counts = alloc.template operator()<std::uint32_t>(c.num_experts);
   {
     const std::size_t compact = RoutedCompactRows(slots, c.num_experts);
@@ -1544,17 +1551,18 @@ bool Executor::EnableExpertCache(
   expert_ids_capacity_ =
       static_cast<std::size_t>(options_.max_batch) * config().num_experts_used;
   const std::size_t map_count = layers.size() * num_experts;
-  if (expert_ids_capacity_ >
-          std::numeric_limits<std::size_t>::max() / sizeof(std::int32_t) ||
+  const std::size_t staging_factor = shadow_raw_ids_enabled_ ? 2 : 1;
+  if (expert_ids_capacity_ > std::numeric_limits<std::size_t>::max() /
+                                 (staging_factor * sizeof(std::int32_t)) ||
       map_count >
           std::numeric_limits<std::size_t>::max() / sizeof(std::int32_t)) {
     AssignError(error_msg, "expert cache pinned buffer size overflows");
     return false;
   }
-  if (!Check(
-          host_allocations_.Allocate(
-              &expert_ids_host_, expert_ids_capacity_ * sizeof(std::int32_t)),
-          "pinned router IDs", error_msg) ||
+  if (!Check(host_allocations_.Allocate(
+                 &expert_ids_host_,
+                 staging_factor * expert_ids_capacity_ * sizeof(std::int32_t)),
+             "pinned router IDs", error_msg) ||
       !Check(host_allocations_.Allocate(
                  &expert_slot_ids_host_,
                  expert_ids_capacity_ * sizeof(std::int32_t)),
@@ -1595,6 +1603,18 @@ bool Executor::EnableExpertCache(
   }
   if (!CreateLayerReleaseEvents(layers.size(), error_msg))
     return false;
+  if (shadow_probe_enabled_)
+    shadow_probe_layers_.resize(layers.size());
+  if (const char* env = std::getenv("GUFO_SHADOW_MAX_RANK")) {
+    char* end = nullptr;
+    const long value = std::strtol(env, &end, 10);
+    if (end != env && *end == '\0' && value >= 0 && value <= 31)
+      options_.shadow_prefetch_max_rank = static_cast<std::uint32_t>(value);
+  }
+  if (options_.shadow_prefetch_streak > 0) {
+    shadow_candidates_.resize(layers.size());
+    shadow_last_pass_.resize(layers.size());
+  }
   gufo::storage::ExpertCacheManager::WarmupResult warmup;
   if (!expert_cache_->Prewarm(&warmup, error_msg))
     return false;
@@ -1659,6 +1679,518 @@ std::size_t Executor::ExpertCacheBytes() const noexcept {
 
 std::uint32_t Executor::ExpertCacheSlots() const noexcept {
   return expert_cache_ != nullptr ? expert_cache_->slots_per_layer() : 0;
+}
+
+void Executor::RecordShadowProbe(std::uint32_t layer, std::uint32_t rows,
+                                 std::uint32_t used) const noexcept {
+  if (!shadow_probe_enabled_ || layer >= shadow_probe_layers_.size() ||
+      rows == 0 || used == 0 || expert_ids_host_ == nullptr ||
+      expert_id_to_slot_host_ == nullptr) {
+    return;
+  }
+  const std::uint32_t num_experts = config().num_experts;
+  if (num_experts == 0 || num_experts > 512)
+    return;
+  auto& st = shadow_probe_layers_[layer];
+  const std::uint64_t pass = ++st.decode_passes;
+  if (rows >= 2)
+    ++st.multirow_passes;
+  st.row0_selections += used;
+  st.all_rows_selections += static_cast<std::uint64_t>(rows) * used;
+
+  const std::size_t id_count = static_cast<std::size_t>(rows) * used;
+  const std::int32_t* biased_base = expert_ids_host_;
+  const std::int32_t* raw_base = expert_ids_host_ + id_count;
+  const std::int32_t* slot_map =
+      expert_id_to_slot_host_ + static_cast<std::size_t>(layer) * num_experts;
+
+  std::array<std::uint8_t, 512> row0_overridden_nonres_set{};
+  std::array<std::uint8_t, 512> anyrow_overridden_nonres_set{};
+  std::array<std::uint8_t, 512> row0_sync_miss_set{};
+  std::array<std::uint8_t, 512> anyrow_sync_miss_set{};
+  std::array<std::uint8_t, 512> early_override_rows{};
+  std::array<std::uint8_t, 512> all_override_rows{};
+  // Best (lowest) unbiased raw-router rank at which the expert appeared while
+  // suppressed by the residency bonus. `raw_ids` is written in descending
+  // probability order, so slot 0 is the #1 raw expert.
+  std::array<std::uint8_t, 512> raw_rank_best;
+  raw_rank_best.fill(0xFF);
+
+  for (std::uint32_t r = 0; r < rows; ++r) {
+    const std::int32_t* b_row =
+        biased_base + static_cast<std::size_t>(r) * used;
+    const std::int32_t* u_row = raw_base + static_cast<std::size_t>(r) * used;
+    for (std::uint32_t s = 0; s < used; ++s) {
+      const std::int32_t be = b_row[s];
+      if (be >= 0 && static_cast<std::uint32_t>(be) < num_experts) {
+        if (slot_map[be] < 0) {
+          anyrow_sync_miss_set[static_cast<std::size_t>(be)] = 1;
+          if (r == 0)
+            row0_sync_miss_set[static_cast<std::size_t>(be)] = 1;
+        }
+      }
+    }
+    for (std::uint32_t s = 0; s < used; ++s) {
+      const std::int32_t ue = u_row[s];
+      if (ue < 0 || static_cast<std::uint32_t>(ue) >= num_experts)
+        continue;
+      bool in_biased = false;
+      for (std::uint32_t bs = 0; bs < used; ++bs) {
+        if (b_row[bs] == ue) {
+          in_biased = true;
+          break;
+        }
+      }
+      if (in_biased)
+        continue;
+      if (s < raw_rank_best[static_cast<std::size_t>(ue)])
+        raw_rank_best[static_cast<std::size_t>(ue)] =
+            static_cast<std::uint8_t>(s);
+      if (r == 0)
+        ++st.row0_overridden_any;
+      if (slot_map[ue] < 0) {
+        ++st.all_rows_overridden_nonres;
+        anyrow_overridden_nonres_set[static_cast<std::size_t>(ue)] = 1;
+        ++all_override_rows[static_cast<std::size_t>(ue)];
+        if (r <= 2)
+          ++early_override_rows[static_cast<std::size_t>(ue)];
+        if (r == 0) {
+          ++st.row0_overridden_nonres;
+          row0_overridden_nonres_set[static_cast<std::size_t>(ue)] = 1;
+        }
+      }
+    }
+  }
+
+  for (std::uint32_t e = 0; e < num_experts; ++e) {
+    const bool ov_any = anyrow_overridden_nonres_set[e] != 0;
+    const bool miss_any = anyrow_sync_miss_set[e] != 0;
+    const bool ov_r0 = row0_overridden_nonres_set[e] != 0;
+    const bool miss_r0 = row0_sync_miss_set[e] != 0;
+
+    // 1. Evaluate pending MTP quorum conversions from pass T-2 or T-1.
+    const bool q_early2 = early_override_rows[e] >= 2;
+    const bool q_all2 = all_override_rows[e] >= 2;
+    const bool q_all3 = all_override_rows[e] >= 3;
+    const std::uint64_t prior_any = st.last_override_pass_anyrow[e];
+    const bool w4_any = ov_any && prior_any != 0 && pass - prior_any <= 4;
+    const bool rule_ok[ShadowProbeLayer::kTriggerRules] = {
+        w4_any, q_early2 && w4_any, q_all3, q_all2 && w4_any};
+    const auto trigger_cell =
+        [&](std::uint32_t c) -> ShadowProbeLayer::TriggerCell& {
+      return st.trigger_cells[c / ShadowProbeLayer::kTriggerRules]
+                             [c % ShadowProbeLayer::kTriggerRules];
+    };
+    const auto check_quorum_conv =
+        [&](std::uint64_t& pending_pass, std::uint8_t& mask,
+            std::uint64_t& conv_ov, std::uint64_t& conv_miss,
+            std::uint64_t& conv_either) {
+          if (pending_pass == 0)
+            return;
+          if (pass - pending_pass > 2) {
+            pending_pass = 0;
+            mask = 0;
+            return;
+          }
+          if (ov_any && (mask & 1u) == 0) {
+            ++conv_ov;
+            if (mask == 0)
+              ++conv_either;
+            mask |= 1u;
+          }
+          if (miss_any && (mask & 2u) == 0) {
+            ++conv_miss;
+            if (mask == 0)
+              ++conv_either;
+            mask |= 2u;
+          }
+        };
+    check_quorum_conv(st.pending_q_early2_pass[e], st.pending_q_early2_mask[e],
+                      st.q_early2_conv_override, st.q_early2_conv_miss,
+                      st.q_early2_conv_either);
+    check_quorum_conv(st.pending_q_all2_pass[e], st.pending_q_all2_mask[e],
+                      st.q_all2_conv_override, st.q_all2_conv_miss,
+                      st.q_all2_conv_either);
+    check_quorum_conv(st.pending_q_all3_pass[e], st.pending_q_all3_mask[e],
+                      st.q_all3_conv_override, st.q_all3_conv_miss,
+                      st.q_all3_conv_either);
+
+    // 2. Check override -> sync cold miss within 4 decode passes.
+    if (miss_r0) {
+      ++st.row0_sync_misses;
+      if (st.last_override_pass_row0[e] != 0 &&
+          pass - st.last_override_pass_row0[e] <= 4) {
+        ++st.override_to_sync_miss_w4_row0;
+      }
+    }
+    if (miss_any) {
+      ++st.all_rows_sync_misses;
+      if (st.last_override_pass_anyrow[e] != 0 &&
+          pass - st.last_override_pass_anyrow[e] <= 4) {
+        ++st.override_to_sync_miss_w4_anyrow;
+      }
+      // Attribute telegraphed misses to trigger cells that fired in the
+      // previous 4 passes. Consuming the timestamp keeps each miss counted
+      // once per cell so `miss_hits / triggers` stays a true precision.
+      for (std::uint32_t c = 0; c < ShadowProbeLayer::kTriggerCells; ++c) {
+        const std::uint64_t last = st.trigger_last[c][e];
+        if (last != 0 && pass - last <= 4) {
+          ++trigger_cell(c).miss_hits;
+          st.trigger_last[c][e] = 0;
+        }
+      }
+    }
+
+    // 3. Cross-step streak and window-4 repeat on row 0.
+    if (ov_r0) {
+      const std::uint64_t prev = st.last_override_pass_row0[e];
+      if (prev != 0 && pass - prev <= 4) {
+        ++st.w4_repeats;
+        if (pass - prev > 1)
+          ++st.w4_nonconsec_repeats;
+      }
+      st.last_override_pass_row0[e] = pass;
+      const std::uint16_t cur = ++st.streak[e];
+      ++st.s1;
+      if (cur == 2)
+        ++st.s2;
+      else if (cur == 3)
+        ++st.s3;
+      else if (cur >= 4)
+        ++st.s4_plus;
+    } else {
+      st.streak[e] = 0;
+    }
+
+    if (ov_any)
+      st.last_override_pass_anyrow[e] = pass;
+
+    // 4. Arm new intra-batch MTP quorum events on this pass.
+    if (early_override_rows[e] >= 2) {
+      ++st.q_early2_events;
+      st.pending_q_early2_pass[e] = pass;
+      st.pending_q_early2_mask[e] = 0;
+    }
+    if (all_override_rows[e] >= 2) {
+      ++st.q_all2_events;
+      st.pending_q_all2_pass[e] = pass;
+      st.pending_q_all2_mask[e] = 0;
+    }
+    if (all_override_rows[e] >= 3) {
+      ++st.q_all3_events;
+      st.pending_q_all3_pass[e] = pass;
+      st.pending_q_all3_mask[e] = 0;
+    }
+
+    // 5. Score candidate shadow-prefetch trigger rules. Rank index `ri`
+    // admits unbiased raw slots `0..kTriggerRanks[ri]`.
+    if (ov_any && (st.trigger_prev_mask[e] & 0xFFFFFu) != 0) {
+      for (std::uint32_t c = 0; c < ShadowProbeLayer::kTriggerCells; ++c) {
+        if ((st.trigger_prev_mask[e] & (1u << c)) != 0)
+          ++trigger_cell(c).next_pass_repeat;
+      }
+    }
+    std::uint32_t mask = 0;
+    if (ov_any && raw_rank_best[e] != 0xFF) {
+      constexpr std::uint32_t kRanks[ShadowProbeLayer::kTriggerRanks] = {
+          1, 2, 3, 4, 9};
+      const std::uint8_t rank = raw_rank_best[e];
+      for (std::uint32_t ri = 0; ri < ShadowProbeLayer::kTriggerRanks; ++ri) {
+        if (rank > kRanks[ri])
+          continue;
+        for (std::uint32_t rule = 0; rule < ShadowProbeLayer::kTriggerRules;
+             ++rule) {
+          if (!rule_ok[rule])
+            continue;
+          const std::uint32_t c = ri * ShadowProbeLayer::kTriggerRules + rule;
+          ++trigger_cell(c).triggers;
+          st.trigger_last[c][e] = pass;
+          mask |= 1u << c;
+        }
+      }
+    }
+    st.trigger_prev_mask[e] = mask;
+  }
+}
+
+void Executor::RecordShadowCandidates(std::uint32_t layer, std::uint32_t rows,
+                                      std::uint32_t used) const noexcept {
+  if (options_.shadow_prefetch_streak == 0 || prefill_phase ||
+      layer >= shadow_candidates_.size() || rows == 0 || used == 0 ||
+      expert_ids_host_ == nullptr || expert_id_to_slot_host_ == nullptr)
+    return;
+  const std::uint32_t num_experts = config().num_experts;
+  if (num_experts == 0 || num_experts > 512)
+    return;
+  if (layer == 0)
+    ++shadow_pass_;
+  const std::uint64_t pass = shadow_pass_;
+  if (pass == 0)
+    return;
+  const std::size_t id_count = static_cast<std::size_t>(rows) * used;
+  const std::int32_t* biased_base = expert_ids_host_;
+  const std::int32_t* raw_base = expert_ids_host_ + id_count;
+  const std::int32_t* slot_map =
+      expert_id_to_slot_host_ + static_cast<std::size_t>(layer) * num_experts;
+
+  std::array<std::uint8_t, 512> row_hits{};
+  std::array<std::uint8_t, 512> rank_best;
+  rank_best.fill(0xFF);
+  for (std::uint32_t r = 0; r < rows; ++r) {
+    const std::int32_t* b_row =
+        biased_base + static_cast<std::size_t>(r) * used;
+    const std::int32_t* u_row = raw_base + static_cast<std::size_t>(r) * used;
+    for (std::uint32_t s = 0; s < used; ++s) {
+      const std::int32_t ue = u_row[s];
+      if (ue < 0 || static_cast<std::uint32_t>(ue) >= num_experts)
+        continue;
+      bool in_biased = false;
+      for (std::uint32_t bs = 0; bs < used; ++bs) {
+        if (b_row[bs] == ue) {
+          in_biased = true;
+          break;
+        }
+      }
+      if (in_biased)
+        continue;
+      const auto expert = static_cast<std::size_t>(ue);
+      if (row_hits[expert] != 0xFF)
+        ++row_hits[expert];
+      if (s < rank_best[expert])
+        rank_best[expert] = static_cast<std::uint8_t>(s);
+    }
+  }
+
+  const std::uint32_t streak = options_.shadow_prefetch_streak;
+  const std::uint32_t max_rank = options_.shadow_prefetch_max_rank;
+  auto& out = shadow_candidates_[layer];
+  out.count = 0;
+  // Queue at most kShadowCandidateCap experts, best unbiased rank first.
+  for (std::uint32_t rank = 0;
+       rank <= max_rank && out.count < kShadowCandidateCap; ++rank) {
+    std::int32_t chosen = -1;
+    for (std::uint32_t e = 0; e < num_experts; ++e) {
+      const auto expert = static_cast<std::size_t>(e);
+      if (row_hits[expert] < streak || rank_best[expert] != rank)
+        continue;
+      if (slot_map[expert] >= 0)
+        continue;
+      chosen = static_cast<std::int32_t>(e);
+      break;
+    }
+    if (chosen < 0)
+      continue;
+    auto& last = shadow_last_pass_[layer][static_cast<std::size_t>(chosen)];
+    if (last != 0 && pass - last < 2) {
+      ++shadow_skipped_cooldown_;
+      continue;
+    }
+    out.experts[out.count++] = chosen;
+    last = pass;
+    ++shadow_queued_;
+  }
+  for (std::uint32_t e = 0; e < num_experts; ++e) {
+    const auto expert = static_cast<std::size_t>(e);
+    if (row_hits[expert] >= streak && rank_best[expert] > max_rank &&
+        slot_map[expert] < 0)
+      ++shadow_skipped_rank_;
+  }
+}
+
+void Executor::AppendShadowPrediction(
+    std::uint32_t target, std::vector<LookaheadPrediction>* predictions,
+    bool consume) const {
+  if (predictions == nullptr || target >= shadow_candidates_.size() ||
+      expert_cache_ == nullptr || prefill_phase)
+    return;
+  auto& candidates = shadow_candidates_[target];
+  if (candidates.count == 0)
+    return;
+  LookaheadPrediction* prediction = nullptr;
+  for (auto& existing : *predictions) {
+    if (existing.layer == target) {
+      prediction = &existing;
+      break;
+    }
+  }
+  if (prediction == nullptr) {
+    LookaheadPrediction fresh;
+    fresh.layer = target;
+    fresh.max_slots =
+        std::min<std::size_t>(16, expert_cache_->slots_for_layer(target) / 3);
+    predictions->push_back(std::move(fresh));
+    prediction = &predictions->back();
+  }
+  for (std::uint32_t i = 0; i < candidates.count; ++i) {
+    const std::int32_t expert = candidates.experts[i];
+    if (expert < 0)
+      continue;
+    if (std::find(prediction->expert_ids.begin(), prediction->expert_ids.end(),
+                  expert) != prediction->expert_ids.end())
+      continue;
+    // Repeat the id so Prefetch's frequency ordering ranks the shadow
+    // candidate ahead of resident-heavy lookahead hits, while its frequency
+    // map still issues at most one read.
+    prediction->expert_ids.insert(prediction->expert_ids.end(),
+                                  kShadowPrefetchCopies, expert);
+    ++shadow_submitted_;
+  }
+  if (consume)
+    candidates.count = 0;
+}
+
+std::string Executor::ShadowPrefetchReport() const {
+  if (options_.shadow_prefetch_streak == 0)
+    return {};
+  std::ostringstream out;
+  out << "shadow_prefetch\n"
+      << "  streak:                  " << options_.shadow_prefetch_streak
+      << '\n'
+      << "  max_rank:                " << options_.shadow_prefetch_max_rank
+      << '\n'
+      << "  shadow_queued:           " << shadow_queued_ << '\n'
+      << "  shadow_submitted:        " << shadow_submitted_ << '\n'
+      << "  shadow_skipped_cooldown: " << shadow_skipped_cooldown_ << '\n'
+      << "  shadow_skipped_rank:     " << shadow_skipped_rank_ << '\n';
+  return out.str();
+}
+
+std::string Executor::ShadowProbeReport() const {
+  if (!shadow_probe_enabled_ || shadow_probe_layers_.empty())
+    return {};
+  ShadowProbeLayer tot{};
+  for (const auto& l : shadow_probe_layers_) {
+    tot.decode_passes = std::max(tot.decode_passes, l.decode_passes);
+    tot.multirow_passes = std::max(tot.multirow_passes, l.multirow_passes);
+    tot.row0_selections += l.row0_selections;
+    tot.all_rows_selections += l.all_rows_selections;
+    tot.row0_overridden_any += l.row0_overridden_any;
+    tot.row0_overridden_nonres += l.row0_overridden_nonres;
+    tot.all_rows_overridden_nonres += l.all_rows_overridden_nonres;
+    tot.row0_sync_misses += l.row0_sync_misses;
+    tot.all_rows_sync_misses += l.all_rows_sync_misses;
+    tot.s1 += l.s1;
+    tot.s2 += l.s2;
+    tot.s3 += l.s3;
+    tot.s4_plus += l.s4_plus;
+    tot.w4_repeats += l.w4_repeats;
+    tot.w4_nonconsec_repeats += l.w4_nonconsec_repeats;
+    tot.override_to_sync_miss_w4_row0 += l.override_to_sync_miss_w4_row0;
+    tot.override_to_sync_miss_w4_anyrow += l.override_to_sync_miss_w4_anyrow;
+    tot.q_early2_events += l.q_early2_events;
+    tot.q_all2_events += l.q_all2_events;
+    tot.q_all3_events += l.q_all3_events;
+    tot.q_early2_conv_override += l.q_early2_conv_override;
+    tot.q_early2_conv_miss += l.q_early2_conv_miss;
+    tot.q_early2_conv_either += l.q_early2_conv_either;
+    tot.q_all2_conv_override += l.q_all2_conv_override;
+    tot.q_all2_conv_miss += l.q_all2_conv_miss;
+    tot.q_all2_conv_either += l.q_all2_conv_either;
+    tot.q_all3_conv_override += l.q_all3_conv_override;
+    tot.q_all3_conv_miss += l.q_all3_conv_miss;
+    tot.q_all3_conv_either += l.q_all3_conv_either;
+    for (std::uint32_t ri = 0; ri < ShadowProbeLayer::kTriggerRanks; ++ri) {
+      for (std::uint32_t rule = 0; rule < ShadowProbeLayer::kTriggerRules;
+           ++rule) {
+        const auto& src = l.trigger_cells[ri][rule];
+        auto& dst = tot.trigger_cells[ri][rule];
+        dst.triggers += src.triggers;
+        dst.miss_hits += src.miss_hits;
+        dst.next_pass_repeat += src.next_pass_repeat;
+      }
+    }
+  }
+  const auto pct = [](std::uint64_t num, std::uint64_t den) -> double {
+    return den != 0
+               ? (100.0 * static_cast<double>(num) / static_cast<double>(den))
+               : 0.0;
+  };
+  std::ostringstream out;
+  out << std::fixed << std::setprecision(2) << "shadow_override_probe\n"
+      << "  decode_passes_per_layer:        " << tot.decode_passes
+      << " (multirow=" << tot.multirow_passes << ")\n"
+      << "  row0_selections:                " << tot.row0_selections << '\n'
+      << "  all_rows_selections:            " << tot.all_rows_selections << '\n'
+      << "  row0_overridden_nonres:         " << tot.row0_overridden_nonres
+      << " (" << pct(tot.row0_overridden_nonres, tot.row0_selections) << "%)\n"
+      << "  all_rows_overridden_nonres:     " << tot.all_rows_overridden_nonres
+      << " (" << pct(tot.all_rows_overridden_nonres, tot.all_rows_selections)
+      << "%)\n"
+      << "  cross_step_streaks_row0:        s1=" << tot.s1 << " s2=" << tot.s2
+      << " (" << pct(tot.s2, tot.s1) << "%) s3=" << tot.s3 << " ("
+      << pct(tot.s3, tot.s1) << "%) s4+=" << tot.s4_plus << " ("
+      << pct(tot.s4_plus, tot.s1) << "%)\n"
+      << "  cross_step_window4_row0:        total=" << tot.w4_repeats << " ("
+      << pct(tot.w4_repeats, tot.s1)
+      << "%) non_consec=" << tot.w4_nonconsec_repeats << " ("
+      << pct(tot.w4_nonconsec_repeats, tot.s1) << "%)\n"
+      << "  override_to_sync_miss_w4_row0:  "
+      << tot.override_to_sync_miss_w4_row0 << " / " << tot.row0_sync_misses
+      << " (" << pct(tot.override_to_sync_miss_w4_row0, tot.row0_sync_misses)
+      << "%)\n"
+      << "  override_to_sync_miss_w4_any:   "
+      << tot.override_to_sync_miss_w4_anyrow << " / "
+      << tot.all_rows_sync_misses << " ("
+      << pct(tot.override_to_sync_miss_w4_anyrow, tot.all_rows_sync_misses)
+      << "%)\n"
+      << "  mtp_quorum_early_r0_2_ge2:      events=" << tot.q_early2_events
+      << " next2_override=" << tot.q_early2_conv_override << " ("
+      << pct(tot.q_early2_conv_override, tot.q_early2_events)
+      << "%) next2_sync_miss=" << tot.q_early2_conv_miss << " ("
+      << pct(tot.q_early2_conv_miss, tot.q_early2_events)
+      << "%) next2_either=" << tot.q_early2_conv_either << " ("
+      << pct(tot.q_early2_conv_either, tot.q_early2_events) << "%)\n"
+      << "  mtp_quorum_all_rows_ge2:        events=" << tot.q_all2_events
+      << " next2_override=" << tot.q_all2_conv_override << " ("
+      << pct(tot.q_all2_conv_override, tot.q_all2_events)
+      << "%) next2_sync_miss=" << tot.q_all2_conv_miss << " ("
+      << pct(tot.q_all2_conv_miss, tot.q_all2_events)
+      << "%) next2_either=" << tot.q_all2_conv_either << " ("
+      << pct(tot.q_all2_conv_either, tot.q_all2_events) << "%)\n"
+      << "  mtp_quorum_all_rows_ge3:        events=" << tot.q_all3_events
+      << " next2_override=" << tot.q_all3_conv_override << " ("
+      << pct(tot.q_all3_conv_override, tot.q_all3_events)
+      << "%) next2_sync_miss=" << tot.q_all3_conv_miss << " ("
+      << pct(tot.q_all3_conv_miss, tot.q_all3_events)
+      << "%) next2_either=" << tot.q_all3_conv_either << " ("
+      << pct(tot.q_all3_conv_either, tot.q_all3_events) << "%)\n"
+      << "  shadow_trigger_grid (per-cell recall vs tele_any="
+      << tot.override_to_sync_miss_w4_anyrow
+      << "; trig/pass counts events per decode pass over all layers):\n";
+  {
+    constexpr const char* kRuleNames[ShadowProbeLayer::kTriggerRules] = {
+        "w4_any", "q_e2&w4", "q_all3", "q_all2&w4"};
+    constexpr std::uint32_t kRanks[ShadowProbeLayer::kTriggerRanks] = {1, 2, 3,
+                                                                       4, 9};
+    for (std::uint32_t rule = 0; rule < ShadowProbeLayer::kTriggerRules;
+         ++rule) {
+      out << "    rule=" << kRuleNames[rule] << '\n';
+      for (std::uint32_t ri = 0; ri < ShadowProbeLayer::kTriggerRanks; ++ri) {
+        const auto& cell = tot.trigger_cells[ri][rule];
+        out << "      R<=" << kRanks[ri] << "  triggers=" << cell.triggers
+            << " ("
+            << (tot.decode_passes != 0
+                    ? static_cast<double>(cell.triggers) /
+                          static_cast<double>(tot.decode_passes)
+                    : 0.0)
+            << "/pass) recall="
+            << pct(cell.miss_hits, tot.override_to_sync_miss_w4_anyrow)
+            << "% precision=" << pct(cell.miss_hits, cell.triggers)
+            << "% next_pass_repeat="
+            << pct(cell.next_pass_repeat, cell.triggers) << "%\n";
+      }
+    }
+  }
+  out << "  per_layer (s1/s2/w4/q_e2/q_a2/q_a3/miss_w4_any/misses_any):";
+  for (std::size_t i = 0; i < shadow_probe_layers_.size(); ++i) {
+    const auto& l = shadow_probe_layers_[i];
+    out << " L" << i << '=' << l.s1 << '/' << l.s2 << '/' << l.w4_repeats << '/'
+        << l.q_early2_events << '/' << l.q_all2_events << '/' << l.q_all3_events
+        << '/' << l.override_to_sync_miss_w4_anyrow << '/'
+        << l.all_rows_sync_misses;
+  }
+  out << '\n';
+  return out.str();
 }
 
 bool Executor::PrefetchCandidates(
@@ -1734,7 +2266,9 @@ const DeviceLayer& Executor::Layer(std::uint32_t index) const noexcept {
 
 bool Executor::CaptureExpertIds(const std::int32_t* ids, std::size_t count,
                                 std::string* error_msg) const {
-  if (ids == nullptr || count == 0 || count > expert_ids_capacity_ ||
+  const std::size_t staging_capacity =
+      (shadow_raw_ids_enabled_ ? 2 : 1) * expert_ids_capacity_;
+  if (ids == nullptr || count == 0 || count > staging_capacity ||
       expert_ids_host_ == nullptr || expert_ids_ready_ == nullptr) {
     AssignError(error_msg, "router ID capture exceeds pinned staging capacity");
     return false;
@@ -2064,12 +2598,25 @@ bool Executor::StreamedMoeRows(
     return false;
   }
   const std::size_t id_count = static_cast<std::size_t>(rows) * used;
+  const bool capture_shadow_raw =
+      shadow_raw_ids_enabled_ && !prefill_phase &&
+      options_.cache_router_bonus != 0.0F &&
+      expert_id_to_slot_device_ != nullptr &&
+      layer.layer_index >= options_.cache_router_bonus_skip_layers;
+  const std::size_t capture_count =
+      capture_shadow_raw ? (2 * id_count) : id_count;
   if (used == 0 || id_count > expert_ids_capacity_ ||
-      !CaptureExpertIds(s_.ids, id_count, error_msg)) {
+      !CaptureExpertIds(s_.ids, capture_count, error_msg)) {
     if (error_msg != nullptr && error_msg->empty())
       AssignError(error_msg,
                   "router ID window exceeds pinned staging capacity");
     return false;
+  }
+  if (capture_shadow_raw) {
+    if (shadow_probe_enabled_)
+      RecordShadowProbe(layer.layer_index, rows, used);
+    if (options_.shadow_prefetch_streak > 0)
+      RecordShadowCandidates(layer.layer_index, rows, used);
   }
 
   const Scratch base = s_;
@@ -2594,11 +3141,22 @@ bool Executor::PredictLookahead(const DeviceLayer& layer, const float* residual,
     return false;
   }
   predictions->clear();
-  predictions->reserve(2);
+  predictions->reserve(3);
   const Config& c = config();
   const std::uint32_t first = layer.layer_index + 1;
-  if (first >= c.num_layers)
+  // Layers 0 and 1 have no preceding layer in the same pass; warm them from
+  // the tail of the current pass for the next one.
+  const std::uint32_t wrap_target =
+      c.num_layers >= 2 && layer.layer_index == c.num_layers - 2
+          ? 0
+          : (c.num_layers >= 2 && layer.layer_index == c.num_layers - 1
+                 ? 1
+                 : c.num_layers);
+  if (first >= c.num_layers) {
+    if (wrap_target < c.num_layers)
+      AppendShadowPrediction(wrap_target, predictions, true);
     return true;
+  }
   const std::size_t prefetch_limit =
       std::min<std::size_t>(16, expert_cache_->slots_for_layer(first) / 3);
   if (prefetch_limit == 0)
@@ -2663,7 +3221,10 @@ bool Executor::PredictLookahead(const DeviceLayer& layer, const float* residual,
         16, expert_cache_->slots_for_layer(target_index) / 3);
     prediction.expert_ids.assign(expert_ids_host_, expert_ids_host_ + id_count);
     predictions->push_back(std::move(prediction));
+    AppendShadowPrediction(target_index, predictions, distance == 1);
   }
+  if (wrap_target < c.num_layers)
+    AppendShadowPrediction(wrap_target, predictions, true);
   restore_scratch();
   return true;
 }
@@ -4471,9 +5032,15 @@ bool Executor::Moe(const DeviceLayer& l, const float* x, float* out,
       l.layer_index >= options_.cache_router_bonus_skip_layers)
     residency = expert_id_to_slot_device_ +
                 static_cast<std::size_t>(l.layer_index) * c.num_experts;
+  std::int32_t* raw_ids_device =
+      (shadow_raw_ids_enabled_ && !prefill_phase && residency != nullptr &&
+       static_cast<std::size_t>(n_tokens) * used <= expert_ids_capacity_)
+          ? (s_.ids + static_cast<std::size_t>(n_tokens) * used)
+          : nullptr;
   RouterTopK(s_.router, c.num_experts + 1, s_.ids, s_.weights, n_tokens,
              c.num_experts, used, stream_, residency,
-             options_.cache_router_bonus, options_.cache_router_bonus_core);
+             options_.cache_router_bonus, options_.cache_router_bonus_core,
+             raw_ids_device);
   std::vector<LookaheadPrediction> lookahead;
   if (!PredictLookahead(
           l, lookahead_residual != nullptr ? lookahead_residual : s_.res,

@@ -3579,7 +3579,7 @@ __global__ void RouterTopKKernel(const float* logits, std::uint32_t stride,
                                  std::int32_t* ids, float* weights,
                                  std::uint32_t n_experts, std::uint32_t k,
                                  const std::int32_t* residency, float bonus,
-                                 std::uint32_t core) {
+                                 std::uint32_t core, std::int32_t* raw_ids) {
   __shared__ float probs[1024];
   __shared__ float shared[32];
   __shared__ std::uint32_t chosen[32];
@@ -3684,6 +3684,49 @@ __global__ void RouterTopKKernel(const float* logits, std::uint32_t stride,
       for (std::uint32_t slot = 0; slot < k; ++slot) {
         ids[t * k + slot] = static_cast<std::int32_t>(chosen[slot]);
         weights[t * k + slot] = chosen_p[slot] / sum;
+      }
+    }
+  }
+  if (raw_ids != nullptr) {
+    if (biased) {
+#pragma unroll
+      for (unsigned j = 0; j < Items; ++j) {
+        unsigned e = threadIdx.x + j * 32;
+        values[j] = e < n_experts ? __expf(src[e] - max_logit) : -1.0f;
+      }
+      for (unsigned slot = 0; slot < k; ++slot) {
+        float best = -1.0f;
+        unsigned index = 0xffffffffu;
+#pragma unroll
+        for (unsigned j = 0; j < Items; ++j) {
+          unsigned e = threadIdx.x + j * 32;
+          float value = values[j];
+          if (value > best) {
+            best = value;
+            index = e;
+          }
+        }
+#pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+          float other = XorLane(best, offset);
+          unsigned oi = XorLane(index, offset);
+          if (other > best || (other == best && oi < index)) {
+            best = other;
+            index = oi;
+          }
+        }
+        if (threadIdx.x == 0) {
+          raw_ids[t * k + slot] = static_cast<std::int32_t>(index);
+        }
+#pragma unroll
+        for (unsigned j = 0; j < Items; ++j) {
+          if (threadIdx.x + j * 32 == index)
+            values[j] = -1.0f;
+        }
+      }
+    } else if (threadIdx.x == 0) {
+      for (std::uint32_t slot = 0; slot < k; ++slot) {
+        raw_ids[t * k + slot] = static_cast<std::int32_t>(chosen[slot]);
       }
     }
   }
@@ -9071,17 +9114,17 @@ __global__ void ExpertCountsKernel(const std::int32_t* ids,
 void RouterTopK(const float* logits, std::uint32_t stride, std::int32_t* ids,
                 float* weights, std::uint32_t n_tokens, std::uint32_t n_experts,
                 std::uint32_t k, hipStream_t stream,
-                const std::int32_t* residency, float bonus,
-                std::uint32_t core) {
+                const std::int32_t* residency, float bonus, std::uint32_t core,
+                std::int32_t* raw_ids) {
   core = std::min(core, k);
   if (n_experts <= 512) {
     hipLaunchKernelGGL((RouterTopKKernel<512>), dim3(n_tokens), dim3(kThreads),
                        0, stream, logits, stride, ids, weights, n_experts, k,
-                       residency, bonus, core);
+                       residency, bonus, core, raw_ids);
   } else {
     hipLaunchKernelGGL((RouterTopKKernel<1024>), dim3(n_tokens), dim3(kThreads),
                        0, stream, logits, stride, ids, weights, n_experts, k,
-                       residency, bonus, core);
+                       residency, bonus, core, raw_ids);
   }
 }
 

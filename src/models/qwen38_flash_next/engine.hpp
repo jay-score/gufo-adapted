@@ -63,6 +63,11 @@ struct ModelOptions {
   std::uint32_t cache_router_bonus_core{0};
   /// Skip the residency bonus for this many leading layers.
   std::uint32_t cache_router_bonus_skip_layers{0};
+  /// Prefetch suppressed non-resident experts that recur across at least this
+  /// many MTP verify rows in one decode pass. Zero disables shadow prefetch.
+  std::uint32_t shadow_prefetch_streak{0};
+  /// Highest unbiased raw-router rank eligible for shadow prefetch.
+  std::uint32_t shadow_prefetch_max_rank{1};
   /// Truncate MTP verification to the longest draft prefix whose live
   /// per-draft acceptance confidence reaches this floor. Zero (default)
   /// keeps the full chain verified.
